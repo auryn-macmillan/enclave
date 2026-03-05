@@ -25,11 +25,11 @@ fn main(
         verify_honk_proof_non_zk(verification_key, proofs[i], public_inputs[i], key_hash);
     }
 
-    let mut aggregated_public_inputs = Vec::new();
+    let mut aggregated_public_inputs: [Field] = [].as_vector();
 
     for i in 0..N_PROOFS {
         for j in 0..N_PUBLIC_INPUTS {
-            aggregated_public_inputs.push(public_inputs[i][j]);
+            aggregated_public_inputs = aggregated_public_inputs.push_back(public_inputs[i][j]);
         }
     }
 
