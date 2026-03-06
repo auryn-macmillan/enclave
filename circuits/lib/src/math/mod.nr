@@ -5,7 +5,7 @@
 // or FITNESS FOR A PARTICULAR PURPOSE.
 
 pub mod polynomial;
-pub mod safe;
+// pub mod safe; // Disabled: SAFE sponge replaced by raw Poseidon2 + std::phase::challenge
 pub mod helpers;
 pub mod modulo;
 pub mod commitments;

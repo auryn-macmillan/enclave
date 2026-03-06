@@ -7,11 +7,14 @@
 // Domain separation is achieved by encoding the domain separator string as a
 // Field element prefix, costing only 1 extra field absorption (~33 constraints).
 //
+// All functions use fixed-size arrays (no dynamic vectors) to avoid pathological
+// compilation times in the Noir SSA pipeline.
+//
 // IMPORTANT: These functions produce DIFFERENT outputs from the SAFE sponge
 // variants in commitments.nr. All producers and consumers of a commitment value
 // must be updated together.
 
-use crate::math::helpers::flatten;
+use crate::math::helpers::flatten_arr;
 use crate::math::polynomial::Polynomial;
 
 // Re-export domain separators from commitments.nr for convenience.
@@ -35,16 +38,16 @@ fn domain_separator_to_field(ds: [u8; 64]) -> Field {
     result
 }
 
-/// Raw Poseidon2 sponge hash over a variable-length vector of Fields.
+/// Raw Poseidon2 sponge hash over a fixed-size array of Fields.
 ///
 /// Uses the standard Poseidon2 sponge construction (rate=3, capacity=1)
 /// with IV = message_length * 2^64 (matching noir_stdlib's Poseidon2).
 ///
 /// Domain separation is achieved by prepending the domain separator as
 /// the first absorbed element, which is included in the message length.
-pub fn poseidon2_hash(inputs: [Field], domain_separator: [u8; 64]) -> Field {
+pub fn poseidon2_hash<let N: u32>(inputs: [Field; N], domain_separator: [u8; 64]) -> Field {
     let ds_field = domain_separator_to_field(domain_separator);
-    let total_len = inputs.len() + 1; // +1 for domain separator prefix
+    let total_len: u32 = N + 1; // +1 for domain separator prefix
 
     // IV encodes the message length (matches noir_stdlib Poseidon2 convention)
     let two_pow_64: Field = 18446744073709551616;
@@ -60,7 +63,7 @@ pub fn poseidon2_hash(inputs: [Field], domain_separator: [u8; 64]) -> Field {
     cache_size = 1;
 
     // Absorb all input elements
-    for i in 0..inputs.len() {
+    for i in 0..N {
         if cache_size == 3 {
             // Cache full - add to state and permute
             state[0] += cache[0];
@@ -91,9 +94,8 @@ pub fn poseidon2_hash(inputs: [Field], domain_separator: [u8; 64]) -> Field {
 // Drop-in replacement commitment functions
 // ============================================================================
 
-/// Generic commitment: hash a vector of Fields with a domain separator.
-/// Replaces `compute_commitment()` from commitments.nr.
-pub fn compute_commitment(inputs: [Field], domain_separator: [u8; 64]) -> Field {
+/// Generic commitment: hash a fixed-size array of Fields with a domain separator.
+pub fn compute_commitment<let N: u32>(inputs: [Field; N], domain_separator: [u8; 64]) -> Field {
     poseidon2_hash(inputs, domain_separator)
 }
 
@@ -102,7 +104,7 @@ pub fn compute_single_polynomial_commitment<let N: u32, let BIT: u32>(
     polynomial: Polynomial<N>,
     domain_separator: [u8; 64],
 ) -> Field {
-    let payload = flatten::<_, _, BIT>([].as_vector(), [polynomial]);
+    let payload = flatten_arr::<N, 1, BIT>([polynomial]);
     compute_commitment(payload, domain_separator)
 }
 
@@ -111,20 +113,27 @@ pub fn compute_multiple_polynomial_commitment<let N: u32, let L: u32, let BIT: u
     polynomials: [Polynomial<N>; L],
     domain_separator: [u8; 64],
 ) -> Field {
-    let payload = flatten::<_, _, BIT>([].as_vector(), polynomials);
+    let payload = flatten_arr::<N, L, BIT>(polynomials);
     compute_commitment(payload, domain_separator)
 }
 
 // ============================================================================
-// Domain-specific commitment functions (same signatures as commitments.nr)
+// Domain-specific commitment functions
 // ============================================================================
 
 pub fn compute_dkg_pk_commitment<let N: u32, let L: u32, let BIT_PK: u32>(
     pk0: [Polynomial<N>; L],
     pk1: [Polynomial<N>; L],
 ) -> Field {
-    let mut payload = flatten::<_, _, BIT_PK>([].as_vector(), pk0);
-    payload = flatten::<_, _, BIT_PK>(payload, pk1);
+    let flat0 = flatten_arr::<N, L, BIT_PK>(pk0);
+    let flat1 = flatten_arr::<N, L, BIT_PK>(pk1);
+    // Concatenate into a single array: [flat0..., flat1...]
+    let packed_len = L * ((N + 254 / (((BIT_PK + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_PK + 3) / 4) * 4 + 4)));
+    let mut payload = [0; 2 * L * ((N + 254 / (((BIT_PK + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_PK + 3) / 4) * 4 + 4)))];
+    for i in 0..packed_len {
+        payload[i] = flat0[i];
+        payload[packed_len + i] = flat1[i];
+    }
     compute_commitment(payload, DS_PK)
 }
 
@@ -132,29 +141,35 @@ pub fn compute_threshold_pk_commitment<let N: u32, let L: u32, let BIT_PK: u32>(
     pk0: [Polynomial<N>; L],
     pk1: [Polynomial<N>; L],
 ) -> Field {
-    let mut payload = flatten::<_, _, BIT_PK>([].as_vector(), pk0);
-    payload = flatten::<_, _, BIT_PK>(payload, pk1);
+    let flat0 = flatten_arr::<N, L, BIT_PK>(pk0);
+    let flat1 = flatten_arr::<N, L, BIT_PK>(pk1);
+    let packed_len = L * ((N + 254 / (((BIT_PK + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_PK + 3) / 4) * 4 + 4)));
+    let mut payload = [0; 2 * L * ((N + 254 / (((BIT_PK + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_PK + 3) / 4) * 4 + 4)))];
+    for i in 0..packed_len {
+        payload[i] = flat0[i];
+        payload[packed_len + i] = flat1[i];
+    }
     compute_commitment(payload, DS_PK_GENERATION)
 }
 
 pub fn compute_share_computation_sk_commitment<let N: u32, let BIT_SK: u32>(
     sk: Polynomial<N>,
 ) -> Field {
-    let payload = flatten::<_, _, BIT_SK>([].as_vector(), [sk]);
+    let payload = flatten_arr::<N, 1, BIT_SK>([sk]);
     compute_commitment(payload, DS_SHARE_COMPUTATION)
 }
 
 pub fn compute_share_computation_e_sm_commitment<let N: u32, let L: u32, let BIT_E_SM: u32>(
     e_sm: [Polynomial<N>; L],
 ) -> Field {
-    let payload = flatten::<_, _, BIT_E_SM>([].as_vector(), e_sm);
+    let payload = flatten_arr::<N, L, BIT_E_SM>(e_sm);
     compute_commitment(payload, DS_SHARE_COMPUTATION)
 }
 
 pub fn compute_share_encryption_commitment_from_message<let N: u32, let BIT_MSG: u32>(
     message: Polynomial<N>,
 ) -> Field {
-    let payload = flatten::<_, _, BIT_MSG>([].as_vector(), [message]);
+    let payload = flatten_arr::<N, 1, BIT_MSG>([message]);
     compute_commitment(payload, DS_SHARE_ENCRYPTION)
 }
 
@@ -163,19 +178,19 @@ pub fn compute_share_encryption_commitment_from_shares<let N: u32, let L: u32, l
     party_idx: u32,
     mod_idx: u32,
 ) -> Field {
-    let mut payload: [Field] = [].as_vector();
+    let mut payload: [Field; N + 2] = [0; N + 2];
     for coeff_idx in 0..N {
-        payload = payload.push_back(y[coeff_idx][mod_idx][party_idx + 1]);
+        payload[coeff_idx] = y[coeff_idx][mod_idx][party_idx + 1];
     }
-    payload = payload.push_back(party_idx as Field);
-    payload = payload.push_back(mod_idx as Field);
+    payload[N] = party_idx as Field;
+    payload[N + 1] = mod_idx as Field;
     compute_commitment(payload, DS_SHARE_ENCRYPTION)
 }
 
 pub fn compute_aggregated_shares_commitment<let N: u32, let L: u32, let BIT_MSG: u32>(
     agg_shares: [Polynomial<N>; L],
 ) -> Field {
-    let payload = flatten::<_, _, BIT_MSG>([].as_vector(), agg_shares);
+    let payload = flatten_arr::<N, L, BIT_MSG>(agg_shares);
     compute_commitment(payload, DS_AGGREGATED_SHARES)
 }
 
@@ -185,16 +200,14 @@ pub fn compute_pk_aggregation_commitment<let N: u32, let L: u32, let BIT_PK: u32
 ) -> Field {
     let commit_pk0 = compute_multiple_polynomial_commitment::<N, L, BIT_PK>(pk0, DS_PK_AGGREGATION);
     let commit_pk1 = compute_multiple_polynomial_commitment::<N, L, BIT_PK>(pk1, DS_PK_AGGREGATION);
-
-    let inputs = [commit_pk0, commit_pk1].as_vector();
-    compute_commitment(inputs, DS_PK_AGGREGATION)
+    compute_commitment([commit_pk0, commit_pk1], DS_PK_AGGREGATION)
 }
 
-pub fn compute_recursive_aggregation_commitment(payload: [Field]) -> Field {
+pub fn compute_recursive_aggregation_commitment<let N: u32>(payload: [Field; N]) -> Field {
     compute_commitment(payload, DS_RECURSIVE_AGGREGATION)
 }
 
-pub fn compute_vk_hash(vk_hashes: [Field]) -> Field {
+pub fn compute_vk_hash<let N: u32>(vk_hashes: [Field; N]) -> Field {
     compute_commitment(vk_hashes, DS_VK_HASH)
 }
 
@@ -204,7 +217,5 @@ pub fn compute_ciphertext_commitment<let N: u32, let L: u32, let BIT_CT: u32>(
 ) -> Field {
     let commit_ct0 = compute_multiple_polynomial_commitment::<N, L, BIT_CT>(ct0, DS_CIPHERTEXT);
     let commit_ct1 = compute_multiple_polynomial_commitment::<N, L, BIT_CT>(ct1, DS_CIPHERTEXT);
-
-    let inputs = [commit_ct0, commit_ct1].as_vector();
-    compute_commitment(inputs, DS_CIPHERTEXT)
+    compute_commitment([commit_ct0, commit_ct1], DS_CIPHERTEXT)
 }

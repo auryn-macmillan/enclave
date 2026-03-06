@@ -36,16 +36,16 @@ fn main(
     assert(ct0_public_inputs[3] == ct1_public_inputs[2]);
 
     // Compute the ct commitment.
-    let mut ct_inputs: [Field] = [].as_vector();
-    ct_inputs = ct_inputs.push_back(ct0_public_inputs[1]);
-    ct_inputs = ct_inputs.push_back(ct1_public_inputs[1]);
-    let ct_commitment = compute_commitment(ct_inputs, DS_CIPHERTEXT);
+    let ct_commitment = compute_commitment(
+        [ct0_public_inputs[1], ct1_public_inputs[1]],
+        DS_CIPHERTEXT,
+    );
 
     // Computes the public key aggregation commitment.
-    let mut pk_inputs: [Field] = [].as_vector();
-    pk_inputs = pk_inputs.push_back(ct0_public_inputs[0]);
-    pk_inputs = pk_inputs.push_back(ct1_public_inputs[0]);
-    let pk_commitment = compute_commitment(pk_inputs, DS_PK_AGGREGATION);
+    let pk_commitment = compute_commitment(
+        [ct0_public_inputs[0], ct1_public_inputs[0]],
+        DS_PK_AGGREGATION,
+    );
 
     let k1_commitment = ct0_public_inputs[2];
 

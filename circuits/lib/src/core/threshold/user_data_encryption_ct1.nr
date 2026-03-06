@@ -12,7 +12,7 @@ use crate::math::poseidon2_commitment::DS_PK_AGGREGATION;
 use crate::math::poseidon2_commitment::DS_USER_DATA_ENCRYPTION_COMMITMENT;
 use crate::math::helpers::flatten_arr;
 use crate::math::polynomial::Polynomial;
-use std::phase::challenge_multi;
+use std::phase::challenge_multi_slice;
 
 pub struct Configs<let N: u32, let L: u32> {
     pub qis: [Field; L],
@@ -89,6 +89,9 @@ impl<let N: u32, let L: u32, let BIT_PK: u32, let BIT_CT: u32, let BIT_U: u32, l
     /// Derives Fiat-Shamir challenges via the proving backend's KZG commitment
     /// and Poseidon2 transcript, replacing the in-circuit SAFE sponge.
     ///
+    /// Uses challenge_multi_slice to accept a dynamically-built payload vector,
+    /// avoiding massive compile-time type expressions that cause compiler hangs.
+    ///
     /// Payload order: [pk1_commit, ct1_commit, u_commit,
     ///                 packed(e1), packed(p1is), packed(p2is)]
     fn generate_challenge(
@@ -101,7 +104,7 @@ impl<let N: u32, let L: u32, let BIT_PK: u32, let BIT_CT: u32, let BIT_U: u32, l
         let packed_p1 = flatten_arr::<_, _, BIT_P1>(self.p1is);
         let packed_p2 = flatten_arr::<_, _, BIT_P2>(self.p2is);
 
-        let mut payload: [Field] = [].as_vector();
+        let mut payload: [Field] = &[];
         payload = payload.push_back(pk1_commitment);
         payload = payload.push_back(ct1_commitment);
         payload = payload.push_back(u_commitment);
@@ -115,9 +118,7 @@ impl<let N: u32, let L: u32, let BIT_PK: u32, let BIT_CT: u32, let BIT_U: u32, l
             payload = payload.push_back(packed_p2[i]);
         }
 
-        // Total = 3 + PL(N,1,BIT_E1) + PL(2N-1,L,BIT_P1) + PL(N-1,L,BIT_P2)
-        let arr: [Field; 3 + 1 * ((N + 254 / (((BIT_E1 + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_E1 + 3) / 4) * 4 + 4))) + L * ((2 * N - 1 + 254 / (((BIT_P1 + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_P1 + 3) / 4) * 4 + 4))) + L * ((N - 1 + 254 / (((BIT_P2 + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_P2 + 3) / 4) * 4 + 4)))] = payload.as_array();
-        challenge_multi(arr)
+        challenge_multi_slice(payload)
     }
 
     fn verify_evaluations(self, gammas: [Field; 2 * L]) -> bool {

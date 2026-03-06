@@ -7,7 +7,7 @@
 use crate::math::poseidon2_commitment::compute_aggregated_shares_commitment;
 use crate::math::helpers::flatten_arr;
 use crate::math::polynomial::Polynomial;
-use std::phase::challenge;
+use std::phase::challenge_slice;
 
 /// Cryptographic parameters for Threshold decryption share circuit.
 pub struct Configs<let L: u32> {
@@ -147,6 +147,9 @@ impl<let N: u32, let L: u32, let BIT_CT: u32, let BIT_SK: u32, let BIT_E_SM: u32
     /// Derives the Fiat-Shamir challenge via the proving backend's KZG commitment
     /// and Poseidon2 transcript, replacing the in-circuit SAFE sponge.
     ///
+    /// Uses challenge_slice to accept a dynamically-built payload vector,
+    /// avoiding massive compile-time type expressions that cause compiler hangs.
+    ///
     /// Payload order: [sk_commit, e_sm_commit, packed(ct0), packed(ct1),
     ///                 packed(r1), packed(r2), packed(d)]
     fn generate_challenge(self) -> Field {
@@ -156,7 +159,7 @@ impl<let N: u32, let L: u32, let BIT_CT: u32, let BIT_SK: u32, let BIT_E_SM: u32
         let packed_r2 = flatten_arr::<_, _, BIT_R2>(self.r2);
         let packed_d = flatten_arr::<_, _, BIT_D>(self.d);
 
-        let mut payload: [Field] = [].as_vector();
+        let mut payload: [Field] = &[];
         payload = payload.push_back(self.expected_sk_commitment);
         payload = payload.push_back(self.expected_e_sm_commitment);
         for i in 0..packed_ct0.len() {
@@ -175,9 +178,7 @@ impl<let N: u32, let L: u32, let BIT_CT: u32, let BIT_SK: u32, let BIT_E_SM: u32
             payload = payload.push_back(packed_d[i]);
         }
 
-        // Total = 2 + 2*PL(N,L,BIT_CT) + PL(2N-1,L,BIT_R1) + PL(N-1,L,BIT_R2) + PL(N,L,BIT_D)
-        let arr: [Field; 2 + 2 * L * ((N + 254 / (((BIT_CT + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_CT + 3) / 4) * 4 + 4))) + L * ((2 * N - 1 + 254 / (((BIT_R1 + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_R1 + 3) / 4) * 4 + 4))) + L * ((N - 1 + 254 / (((BIT_R2 + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_R2 + 3) / 4) * 4 + 4))) + L * ((N + 254 / (((BIT_D + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_D + 3) / 4) * 4 + 4)))] = payload.as_array();
-        challenge(arr)
+        challenge_slice(payload)
     }
 
     /// Verifies the lifted decryption share computation formula for a specific CRT basis.

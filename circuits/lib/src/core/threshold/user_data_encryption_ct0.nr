@@ -15,7 +15,7 @@ use crate::math::poseidon2_commitment::DS_PK_AGGREGATION;
 use crate::math::poseidon2_commitment::DS_USER_DATA_ENCRYPTION_COMMITMENT;
 use crate::math::helpers::flatten_arr;
 use crate::math::polynomial::Polynomial;
-use std::phase::challenge_multi;
+use std::phase::challenge_multi_slice;
 
 pub struct Configs<let N: u32, let L: u32> {
     pub qis: [Field; L],
@@ -132,8 +132,11 @@ impl<let N: u32, let L: u32, let BIT_PK: u32, let BIT_CT: u32, let BIT_U: u32, l
         (pk0_commitment, ct0_commitment, k1_commitment, u_commitment)
     }
 
-    /// Derives Fiat-Shamir challenges via the proving backend's KGG commitment
+    /// Derives Fiat-Shamir challenges via the proving backend's KZG commitment
     /// and Poseidon2 transcript, replacing the in-circuit SAFE sponge.
+    ///
+    /// Uses challenge_multi_slice to accept a dynamically-built payload vector,
+    /// avoiding massive compile-time type expressions that cause compiler hangs.
     ///
     /// Payload order: [pk0_commit, ct0_commit, k1_commit, u_commit,
     ///                 packed(e0), packed(r1is), packed(r2is)]
@@ -148,7 +151,7 @@ impl<let N: u32, let L: u32, let BIT_PK: u32, let BIT_CT: u32, let BIT_U: u32, l
         let packed_r1 = flatten_arr::<_, _, BIT_R1>(self.r1is);
         let packed_r2 = flatten_arr::<_, _, BIT_R2>(self.r2is);
 
-        let mut payload: [Field] = [].as_vector();
+        let mut payload: [Field] = &[];
         payload = payload.push_back(pk0_commitment);
         payload = payload.push_back(ct0_commitment);
         payload = payload.push_back(k1_commitment);
@@ -163,9 +166,7 @@ impl<let N: u32, let L: u32, let BIT_PK: u32, let BIT_CT: u32, let BIT_U: u32, l
             payload = payload.push_back(packed_r2[i]);
         }
 
-        // Total = 4 + PL(N,1,BIT_E0) + PL(2N-1,L,BIT_R1) + PL(N-1,L,BIT_R2)
-        let arr: [Field; 4 + 1 * ((N + 254 / (((BIT_E0 + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_E0 + 3) / 4) * 4 + 4))) + L * ((2 * N - 1 + 254 / (((BIT_R1 + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_R1 + 3) / 4) * 4 + 4))) + L * ((N - 1 + 254 / (((BIT_R2 + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_R2 + 3) / 4) * 4 + 4)))] = payload.as_array();
-        challenge_multi(arr)
+        challenge_multi_slice(payload)
     }
 
     fn verify_evaluations(self, gammas: [Field; 2 * L]) -> bool {

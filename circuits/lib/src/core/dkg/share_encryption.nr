@@ -9,7 +9,7 @@ use crate::math::poseidon2_commitment::compute_share_encryption_commitment_from_
 use crate::math::helpers::flatten_arr;
 use crate::math::modulo::U128::ModU128;
 use crate::math::polynomial::Polynomial;
-use std::phase::challenge_multi;
+use std::phase::challenge_multi_slice;
 
 /// Cryptographic parameters for DKG share encryption circuit.
 pub struct Configs<let L: u32> {
@@ -219,6 +219,9 @@ impl<let N: u32, let L: u32, let BIT_PK: u32, let BIT_CT: u32, let BIT_U: u32, l
     /// Derives Fiat-Shamir challenges via the proving backend's KZG commitment
     /// and Poseidon2 transcript, replacing the in-circuit SAFE sponge.
     ///
+    /// Uses challenge_multi_slice to accept a dynamically-built payload vector,
+    /// avoiding massive compile-time type expressions that cause compiler hangs.
+    ///
     /// Payload order matches the original SAFE sponge absorption:
     /// [pk_commit, packed(ct0is), packed(ct1is), packed(e0), packed(e1),
     ///  packed(u), msg_commit, k1_raw_coeffs, packed(r1is), packed(r2is),
@@ -234,7 +237,7 @@ impl<let N: u32, let L: u32, let BIT_PK: u32, let BIT_CT: u32, let BIT_U: u32, l
         let packed_p1 = flatten_arr::<_, _, BIT_P1>(self.p1is);
         let packed_p2 = flatten_arr::<_, _, BIT_P2>(self.p2is);
 
-        let mut payload: [Field] = [].as_vector();
+        let mut payload: [Field] = &[];
         payload = payload.push_back(self.expected_pk_commitment);
         for i in 0..packed_ct0.len() {
             payload = payload.push_back(packed_ct0[i]);
@@ -268,10 +271,7 @@ impl<let N: u32, let L: u32, let BIT_PK: u32, let BIT_CT: u32, let BIT_U: u32, l
             payload = payload.push_back(packed_p2[i]);
         }
 
-        // Total = 1 + 2*PL(N,L,BIT_CT) + PL(N,1,BIT_E0) + PL(N,1,BIT_E1) + PL(N,1,BIT_U)
-        //       + 1 + N + PL(2N-1,L,BIT_R1) + PL(N-1,L,BIT_R2) + PL(2N-1,L,BIT_P1) + PL(N-1,L,BIT_P2)
-        let arr: [Field; 1 + 2 * L * ((N + 254 / (((BIT_CT + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_CT + 3) / 4) * 4 + 4))) + 1 * ((N + 254 / (((BIT_E0 + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_E0 + 3) / 4) * 4 + 4))) + 1 * ((N + 254 / (((BIT_E1 + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_E1 + 3) / 4) * 4 + 4))) + 1 * ((N + 254 / (((BIT_U + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_U + 3) / 4) * 4 + 4))) + 1 + N + L * ((2 * N - 1 + 254 / (((BIT_R1 + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_R1 + 3) / 4) * 4 + 4))) + L * ((N - 1 + 254 / (((BIT_R2 + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_R2 + 3) / 4) * 4 + 4))) + L * ((2 * N - 1 + 254 / (((BIT_P1 + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_P1 + 3) / 4) * 4 + 4))) + L * ((N - 1 + 254 / (((BIT_P2 + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_P2 + 3) / 4) * 4 + 4)))] = payload.as_array();
-        challenge_multi(arr)
+        challenge_multi_slice(payload)
     }
 
     /// Performs coefficient-wise CRT consistency check for the e0 error polynomial

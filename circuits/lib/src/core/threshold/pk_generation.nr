@@ -10,7 +10,7 @@ use crate::math::poseidon2_commitment::{
 };
 use crate::math::helpers::flatten_arr;
 use crate::math::polynomial::Polynomial;
-use std::phase::challenge;
+use std::phase::challenge_slice;
 
 /// Cryptographic parameters for threshold public key generation circuit.
 pub struct Configs<let N: u32, let L: u32> {
@@ -119,7 +119,10 @@ impl<let N: u32, let L: u32, let BIT_EEK: u32, let BIT_SK: u32, let BIT_E_SM: u3
     /// Derives the Fiat-Shamir challenge via the proving backend's KZG commitment
     /// and Poseidon2 transcript, replacing the in-circuit SAFE sponge.
     ///
-    /// The payload matches the original SAFE sponge absorption order:
+    /// Uses challenge_slice to accept a dynamically-built payload vector,
+    /// avoiding massive compile-time type expressions that cause compiler hangs.
+    ///
+    /// Payload order matches the original SAFE sponge absorption:
     /// [packed(a), packed(eek), sk_commitment, pk_commitment, packed(r1), packed(r2)]
     fn generate_challenge(self, sk_commitment: Field, pk_commitment: Field) -> Field {
         let packed_a = flatten_arr::<_, _, BIT_PK>(self.a);
@@ -127,7 +130,7 @@ impl<let N: u32, let L: u32, let BIT_EEK: u32, let BIT_SK: u32, let BIT_E_SM: u3
         let packed_r1 = flatten_arr::<_, _, BIT_R1>(self.r1);
         let packed_r2 = flatten_arr::<_, _, BIT_R2>(self.r2);
 
-        let mut payload: [Field] = [].as_vector();
+        let mut payload: [Field] = &[];
         for i in 0..packed_a.len() {
             payload = payload.push_back(packed_a[i]);
         }
@@ -143,9 +146,7 @@ impl<let N: u32, let L: u32, let BIT_EEK: u32, let BIT_SK: u32, let BIT_E_SM: u3
             payload = payload.push_back(packed_r2[i]);
         }
 
-        // Total = PL(N,L,BIT_PK) + PL(N,1,BIT_EEK) + 2 + PL(2N-1,L,BIT_R1) + PL(N-1,L,BIT_R2)
-        let arr: [Field; L * ((N + 254 / (((BIT_PK + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_PK + 3) / 4) * 4 + 4))) + 1 * ((N + 254 / (((BIT_EEK + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_EEK + 3) / 4) * 4 + 4))) + 2 + L * ((2 * N - 1 + 254 / (((BIT_R1 + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_R1 + 3) / 4) * 4 + 4))) + L * ((N - 1 + 254 / (((BIT_R2 + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_R2 + 3) / 4) * 4 + 4)))] = payload.as_array();
-        challenge(arr)
+        challenge_slice(payload)
     }
 
     /// Performs range checks on all secret witness values
