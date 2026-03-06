@@ -7,12 +7,12 @@
 //user data encryption for ct1- the second part of the ciphertext
 use crate::math::commitments::compute_multiple_polynomial_commitment;
 use crate::math::commitments::compute_single_polynomial_commitment;
-use crate::math::commitments::compute_user_data_encryption_ct1_challenge;
 use crate::math::commitments::DS_CIPHERTEXT;
 use crate::math::commitments::DS_PK_AGGREGATION;
 use crate::math::commitments::DS_USER_DATA_ENCRYPTION_COMMITMENT;
-use crate::math::helpers::flatten;
+use crate::math::helpers::flatten_arr;
 use crate::math::polynomial::Polynomial;
+use std::phase::challenge_multi;
 
 pub struct Configs<let N: u32, let L: u32> {
     pub qis: [Field; L],
@@ -86,26 +86,41 @@ impl<let N: u32, let L: u32, let BIT_PK: u32, let BIT_CT: u32, let BIT_U: u32, l
         (pk1_commitment, ct1_commitment, u_commitment)
     }
 
+    /// Derives Fiat-Shamir challenges via the proving backend's KZG commitment
+    /// and Poseidon2 transcript, replacing the in-circuit SAFE sponge.
+    ///
+    /// Payload order: [pk1_commit, ct1_commit, u_commit,
+    ///                 packed(e1), packed(p1is), packed(p2is)]
     fn generate_challenge(
         self,
         pk1_commitment: Field,
         ct1_commitment: Field,
         u_commitment: Field,
-    ) -> [Field] {
-        let mut payload: [Field] = [].as_vector();
+    ) -> [Field; 2 * L] {
+        let packed_e1 = flatten_arr::<_, _, BIT_E1>([self.e1]);
+        let packed_p1 = flatten_arr::<_, _, BIT_P1>(self.p1is);
+        let packed_p2 = flatten_arr::<_, _, BIT_P2>(self.p2is);
 
+        let mut payload: [Field] = [].as_vector();
         payload = payload.push_back(pk1_commitment);
         payload = payload.push_back(ct1_commitment);
         payload = payload.push_back(u_commitment);
+        for i in 0..packed_e1.len() {
+            payload = payload.push_back(packed_e1[i]);
+        }
+        for i in 0..packed_p1.len() {
+            payload = payload.push_back(packed_p1[i]);
+        }
+        for i in 0..packed_p2.len() {
+            payload = payload.push_back(packed_p2[i]);
+        }
 
-        payload = flatten::<_, _, BIT_E1>(payload, [self.e1]);
-        payload = flatten::<_, _, BIT_P1>(payload, self.p1is);
-        payload = flatten::<_, _, BIT_P2>(payload, self.p2is);
-
-        compute_user_data_encryption_ct1_challenge::<L>(payload)
+        // Total = 3 + PL(N,1,BIT_E1) + PL(2N-1,L,BIT_P1) + PL(N-1,L,BIT_P2)
+        let arr: [Field; 3 + 1 * ((N + 254 / (((BIT_E1 + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_E1 + 3) / 4) * 4 + 4))) + L * ((2 * N - 1 + 254 / (((BIT_P1 + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_P1 + 3) / 4) * 4 + 4))) + L * ((N - 1 + 254 / (((BIT_P2 + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_P2 + 3) / 4) * 4 + 4)))] = payload.as_array();
+        challenge_multi(arr)
     }
 
-    fn verify_evaluations(self, gammas: [Field]) -> bool {
+    fn verify_evaluations(self, gammas: [Field; 2 * L]) -> bool {
         let gamma = gammas[0];
         let cyclo_at_gamma = gamma.pow_32(N as Field) + 1;
         let u_at_gamma = self.u.eval(gamma);

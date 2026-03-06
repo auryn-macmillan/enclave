@@ -5,12 +5,11 @@
 // or FITNESS FOR A PARTICULAR PURPOSE.
 
 use crate::math::commitments::compute_dkg_pk_commitment;
-use crate::math::commitments::{
-    compute_share_encryption_challenge, compute_share_encryption_commitment_from_message,
-};
-use crate::math::helpers::flatten;
+use crate::math::commitments::compute_share_encryption_commitment_from_message;
+use crate::math::helpers::flatten_arr;
 use crate::math::modulo::U128::ModU128;
 use crate::math::polynomial::Polynomial;
+use std::phase::challenge_multi;
 
 /// Cryptographic parameters for DKG share encryption circuit.
 pub struct Configs<let L: u32> {
@@ -217,34 +216,62 @@ impl<let N: u32, let L: u32, let BIT_PK: u32, let BIT_CT: u32, let BIT_U: u32, l
         Polynomial { coefficients: k1_coeffs }
     }
 
-    /// Flattens all polynomial coefficients into a single array for Fiat-Shamir challenge generation
-    fn payload(self, k1: Polynomial<N>) -> [Field] {
-        let mut inputs: [Field] = [].as_vector();
+    /// Derives Fiat-Shamir challenges via the proving backend's KZG commitment
+    /// and Poseidon2 transcript, replacing the in-circuit SAFE sponge.
+    ///
+    /// Payload order matches the original SAFE sponge absorption:
+    /// [pk_commit, packed(ct0is), packed(ct1is), packed(e0), packed(e1),
+    ///  packed(u), msg_commit, k1_raw_coeffs, packed(r1is), packed(r2is),
+    ///  packed(p1is), packed(p2is)]
+    fn generate_challenge(self, k1: Polynomial<N>) -> [Field; 2 * L] {
+        let packed_ct0 = flatten_arr::<_, _, BIT_CT>(self.ct0is);
+        let packed_ct1 = flatten_arr::<_, _, BIT_CT>(self.ct1is);
+        let packed_e0 = flatten_arr::<_, _, BIT_E0>([self.e0]);
+        let packed_e1 = flatten_arr::<_, _, BIT_E1>([self.e1]);
+        let packed_u = flatten_arr::<_, _, BIT_U>([self.u]);
+        let packed_r1 = flatten_arr::<_, _, BIT_R1>(self.r1is);
+        let packed_r2 = flatten_arr::<_, _, BIT_R2>(self.r2is);
+        let packed_p1 = flatten_arr::<_, _, BIT_P1>(self.p1is);
+        let packed_p2 = flatten_arr::<_, _, BIT_P2>(self.p2is);
 
-        // Use pk commitment instead of full pk polynomials
-        inputs = inputs.push_back(self.expected_pk_commitment);
-
-        inputs = flatten::<_, _, BIT_CT>(inputs, self.ct0is);
-        inputs = flatten::<_, _, BIT_CT>(inputs, self.ct1is);
-
-        inputs = flatten::<_, _, BIT_E0>(inputs, [self.e0]);
-        inputs = flatten::<_, _, BIT_E1>(inputs, [self.e1]);
-        inputs = flatten::<_, _, BIT_U>(inputs, [self.u]);
-
-        // Use message commitment instead of full message
-        inputs = inputs.push_back(self.expected_message_commitment);
-
-        // Include computed k1 in payload
+        let mut payload: [Field] = [].as_vector();
+        payload = payload.push_back(self.expected_pk_commitment);
+        for i in 0..packed_ct0.len() {
+            payload = payload.push_back(packed_ct0[i]);
+        }
+        for i in 0..packed_ct1.len() {
+            payload = payload.push_back(packed_ct1[i]);
+        }
+        for i in 0..packed_e0.len() {
+            payload = payload.push_back(packed_e0[i]);
+        }
+        for i in 0..packed_e1.len() {
+            payload = payload.push_back(packed_e1[i]);
+        }
+        for i in 0..packed_u.len() {
+            payload = payload.push_back(packed_u[i]);
+        }
+        payload = payload.push_back(self.expected_message_commitment);
         for i in 0..N {
-            inputs = inputs.push_back(k1.coefficients[i]);
+            payload = payload.push_back(k1.coefficients[i]);
+        }
+        for i in 0..packed_r1.len() {
+            payload = payload.push_back(packed_r1[i]);
+        }
+        for i in 0..packed_r2.len() {
+            payload = payload.push_back(packed_r2[i]);
+        }
+        for i in 0..packed_p1.len() {
+            payload = payload.push_back(packed_p1[i]);
+        }
+        for i in 0..packed_p2.len() {
+            payload = payload.push_back(packed_p2[i]);
         }
 
-        inputs = flatten::<_, _, BIT_R1>(inputs, self.r1is);
-        inputs = flatten::<_, _, BIT_R2>(inputs, self.r2is);
-        inputs = flatten::<_, _, BIT_P1>(inputs, self.p1is);
-        inputs = flatten::<_, _, BIT_P2>(inputs, self.p2is);
-
-        inputs
+        // Total = 1 + 2*PL(N,L,BIT_CT) + PL(N,1,BIT_E0) + PL(N,1,BIT_E1) + PL(N,1,BIT_U)
+        //       + 1 + N + PL(2N-1,L,BIT_R1) + PL(N-1,L,BIT_R2) + PL(2N-1,L,BIT_P1) + PL(N-1,L,BIT_P2)
+        let arr: [Field; 1 + 2 * L * ((N + 254 / (((BIT_CT + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_CT + 3) / 4) * 4 + 4))) + 1 * ((N + 254 / (((BIT_E0 + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_E0 + 3) / 4) * 4 + 4))) + 1 * ((N + 254 / (((BIT_E1 + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_E1 + 3) / 4) * 4 + 4))) + 1 * ((N + 254 / (((BIT_U + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_U + 3) / 4) * 4 + 4))) + 1 + N + L * ((2 * N - 1 + 254 / (((BIT_R1 + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_R1 + 3) / 4) * 4 + 4))) + L * ((N - 1 + 254 / (((BIT_R2 + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_R2 + 3) / 4) * 4 + 4))) + L * ((2 * N - 1 + 254 / (((BIT_P1 + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_P1 + 3) / 4) * 4 + 4))) + L * ((N - 1 + 254 / (((BIT_P2 + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_P2 + 3) / 4) * 4 + 4)))] = payload.as_array();
+        challenge_multi(arr)
     }
 
     /// Performs coefficient-wise CRT consistency check for the e0 error polynomial
@@ -323,15 +350,8 @@ impl<let N: u32, let L: u32, let BIT_PK: u32, let BIT_CT: u32, let BIT_U: u32, l
         }
     }
 
-    /// Generates Fiat-Shamir challenge values using the SAFE cryptographic sponge
-    fn generate_challenge(self, k1: Polynomial<N>) -> [Field] {
-        let inputs = self.payload(k1);
-
-        compute_share_encryption_challenge::<L>(inputs)
-    }
-
     /// Verifies DKG encryption constraints using Fiat-Shamir challenges and the Schwartz-Zippel lemma
-    fn verify_evaluations(self, gammas: [Field], k1: Polynomial<N>) {
+    fn verify_evaluations(self, gammas: [Field; 2 * L], k1: Polynomial<N>) {
         let gamma = gammas[0];
         let cyclo_at_gamma = gamma.pow_32(N as Field) + 1;
         let u_at_gamma = self.u.eval(gamma);

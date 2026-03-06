@@ -6,10 +6,11 @@
 
 use crate::math::commitments::{
     compute_share_computation_e_sm_commitment, compute_share_computation_sk_commitment,
-    compute_threshold_pk_challenge, compute_threshold_pk_commitment,
+    compute_threshold_pk_commitment,
 };
-use crate::math::helpers::flatten;
+use crate::math::helpers::flatten_arr;
 use crate::math::polynomial::Polynomial;
+use std::phase::challenge;
 
 /// Cryptographic parameters for threshold public key generation circuit.
 pub struct Configs<let N: u32, let L: u32> {
@@ -99,27 +100,6 @@ impl<let N: u32, let L: u32, let BIT_EEK: u32, let BIT_SK: u32, let BIT_E_SM: u3
         PkGeneration { configs, a, eek, sk, e_sm, r1, r2, pk0, pk1 }
     }
 
-    /// Flattens all witness data into a single array for Fiat-Shamir challenge generation
-    fn payload(self, sk_commitment: Field, pk_commitment: Field) -> [Field] {
-        let mut inputs: [Field] = [].as_vector();
-
-        // Flatten CRS polynomials a (L polynomials of degree N)
-        inputs = flatten::<_, _, BIT_PK>(inputs, self.a);
-
-        // Flatten error polynomial eek (1 polynomial of degree N)
-        inputs = flatten::<_, _, BIT_EEK>(inputs, [self.eek]);
-
-        // Use commitments instead of full polynomials
-        inputs = inputs.push_back(sk_commitment);
-        inputs = inputs.push_back(pk_commitment);
-
-        // Flatten quotient polynomials (L polynomials each)
-        inputs = flatten::<_, _, BIT_R1>(inputs, self.r1);
-        inputs = flatten::<_, _, BIT_R2>(inputs, self.r2);
-
-        inputs
-    }
-
     /// Main execution function
     /// Returns (commit(threshold_sk), commit(threshold_pk), commit(e_sm))
     pub fn execute(self) -> (Field, Field, Field) {
@@ -136,11 +116,36 @@ impl<let N: u32, let L: u32, let BIT_EEK: u32, let BIT_SK: u32, let BIT_E_SM: u3
         (sk_commitment, pk_commitment, e_sm_commitment)
     }
 
-    /// Generates Fiat-Shamir challenge values using the SAFE cryptographic sponge
+    /// Derives the Fiat-Shamir challenge via the proving backend's KZG commitment
+    /// and Poseidon2 transcript, replacing the in-circuit SAFE sponge.
+    ///
+    /// The payload matches the original SAFE sponge absorption order:
+    /// [packed(a), packed(eek), sk_commitment, pk_commitment, packed(r1), packed(r2)]
     fn generate_challenge(self, sk_commitment: Field, pk_commitment: Field) -> Field {
-        let inputs = self.payload(sk_commitment, pk_commitment);
+        let packed_a = flatten_arr::<_, _, BIT_PK>(self.a);
+        let packed_eek = flatten_arr::<_, _, BIT_EEK>([self.eek]);
+        let packed_r1 = flatten_arr::<_, _, BIT_R1>(self.r1);
+        let packed_r2 = flatten_arr::<_, _, BIT_R2>(self.r2);
 
-        compute_threshold_pk_challenge(inputs)
+        let mut payload: [Field] = [].as_vector();
+        for i in 0..packed_a.len() {
+            payload = payload.push_back(packed_a[i]);
+        }
+        for i in 0..packed_eek.len() {
+            payload = payload.push_back(packed_eek[i]);
+        }
+        payload = payload.push_back(sk_commitment);
+        payload = payload.push_back(pk_commitment);
+        for i in 0..packed_r1.len() {
+            payload = payload.push_back(packed_r1[i]);
+        }
+        for i in 0..packed_r2.len() {
+            payload = payload.push_back(packed_r2[i]);
+        }
+
+        // Total = PL(N,L,BIT_PK) + PL(N,1,BIT_EEK) + 2 + PL(2N-1,L,BIT_R1) + PL(N-1,L,BIT_R2)
+        let arr: [Field; L * ((N + 254 / (((BIT_PK + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_PK + 3) / 4) * 4 + 4))) + 1 * ((N + 254 / (((BIT_EEK + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_EEK + 3) / 4) * 4 + 4))) + 2 + L * ((2 * N - 1 + 254 / (((BIT_R1 + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_R1 + 3) / 4) * 4 + 4))) + L * ((N - 1 + 254 / (((BIT_R2 + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_R2 + 3) / 4) * 4 + 4)))] = payload.as_array();
+        challenge(arr)
     }
 
     /// Performs range checks on all secret witness values

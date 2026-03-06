@@ -8,6 +8,31 @@
 use crate::math::polynomial::Polynomial;
 use crate::math::safe::SafeSponge;
 
+/// Inline expression that computes packed_len at the type level.
+///
+/// Noir does not support comptime function calls in type positions, so
+/// the packed-length formula must be written inline wherever a fixed array
+/// size is needed:
+///
+///   PACKED_LEN(A, L, BIT) =
+///     L * ((A + 254 / (((BIT + 3) / 4) * 4 + 4) - 1)
+///          / (254 / (((BIT + 3) / 4) * 4 + 4)))
+///
+/// This is equivalent to:
+///   nibble_bits = ceil(BIT / 4) * 4
+///   group = floor(254 / (nibble_bits + 4))
+///   num_chunks = ceil(A / group)
+///   result = L * num_chunks
+///
+/// The comptime function below is still useful for readability in
+/// non-type contexts (e.g., assertions, debug).
+pub comptime fn packed_len<let A: u32, let L: u32, let BIT: u32>() -> u32 {
+    let nibble_bits = ((BIT + 3) / 4) * 4;
+    let group = 254 / (nibble_bits + 4);
+    let num_chunks = (A + group - 1) / group;
+    L * num_chunks
+}
+
 /// Compute hex-aligned packing parameters for a given `BIT`.
 ///
 /// # Purpose
@@ -136,6 +161,64 @@ pub fn pack<let A: u32, let BIT: u32>(values: [Field; A]) -> [Field] {
         }
 
         out = out.push_back(acc);
+    }
+    out
+}
+
+/// Pack `A` values into a fixed-size array of carriers.
+///
+/// Identical packing logic to `pack()`, but returns a fixed-size array instead
+/// of a vector. The array length is `PACKED_LEN(A, 1, BIT)` = `ceil(A / group)`.
+///
+/// Use this instead of `pack()` when building a fixed-size payload for
+/// `std::phase::challenge()`.
+pub fn pack_arr<let A: u32, let BIT: u32>(
+    values: [Field; A],
+) -> [Field; (A + 254 / (((BIT + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT + 3) / 4) * 4 + 4))] {
+    let (nibble_bits, group) = packing_layout::<BIT>();
+    let base = 2.pow_32(nibble_bits as Field);
+    let radix = 2.pow_32((nibble_bits + 4) as Field);
+    let num_chunks = (A + group - 1) / group;
+
+    let mut out = [0; (A + 254 / (((BIT + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT + 3) / 4) * 4 + 4))];
+
+    for chunk in 0..num_chunks {
+        let remain = A - (chunk * group);
+        let take = if remain < group { remain } else { group };
+
+        let mut acc = 0;
+        for i in 0..take {
+            let v = values[chunk * group + i];
+            acc = acc * radix + (v + base);
+        }
+        for _ in 0..(group - take) {
+            acc = acc * radix + base;
+        }
+
+        out[chunk] = acc;
+    }
+    out
+}
+
+/// Flatten `L` polynomials into a fixed-size array of packed `Field` carriers.
+///
+/// Identical packing logic to `flatten()`, but returns a fixed-size array instead
+/// of a vector. The array length is `PACKED_LEN(A, L, BIT)`.
+///
+/// Use this instead of `flatten()` when building a fixed-size payload for
+/// `std::phase::challenge()`.
+pub fn flatten_arr<let A: u32, let L: u32, let BIT: u32>(
+    poly: [Polynomial<A>; L],
+) -> [Field; L * ((A + 254 / (((BIT + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT + 3) / 4) * 4 + 4)))] {
+    let num_chunks = (A + 254 / (((BIT + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT + 3) / 4) * 4 + 4));
+
+    let mut out = [0; L * ((A + 254 / (((BIT + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT + 3) / 4) * 4 + 4)))];
+
+    for j in 0..L {
+        let packed = pack_arr::<A, BIT>(poly[j].coefficients);
+        for i in 0..num_chunks {
+            out[j * num_chunks + i] = packed[i];
+        }
     }
     out
 }
