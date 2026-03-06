@@ -5,7 +5,7 @@
 // or FITNESS FOR A PARTICULAR PURPOSE.
 
 use bb_proof_verification::{UltraHonkProof, UltraHonkVerificationKey, verify_honk_proof_non_zk};
-use lib::math::commitments::{compute_commitment, DS_CIPHERTEXT, DS_PK_AGGREGATION};
+use lib::math::poseidon2_commitment::{compute_commitment, DS_CIPHERTEXT, DS_PK_AGGREGATION};
 
 fn main(
     // User Data Encryption ct0 Section.

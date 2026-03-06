@@ -7,7 +7,7 @@
 use bb_proof_verification::{UltraHonkProof, UltraHonkVerificationKey, verify_honk_proof_non_zk};
 use lib::{
     configs::default::dkg::{L, N},
-    math::commitments::compute_recursive_aggregation_commitment,
+    math::poseidon2_commitment::compute_recursive_aggregation_commitment,
 };
 
 // Number of proofs.

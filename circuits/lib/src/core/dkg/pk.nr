@@ -4,7 +4,7 @@
 // without even the implied warranty of MERCHANTABILITY
 // or FITNESS FOR A PARTICULAR PURPOSE.
 
-use crate::math::commitments::compute_dkg_pk_commitment;
+use crate::math::poseidon2_commitment::compute_dkg_pk_commitment;
 use crate::math::polynomial::Polynomial;
 
 /// Correct DKG Public Key Circuit (Circuit 0).

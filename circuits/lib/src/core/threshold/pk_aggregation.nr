@@ -4,7 +4,7 @@
 // without even the implied warranty of MERCHANTABILITY
 // or FITNESS FOR A PARTICULAR PURPOSE.
 
-use crate::math::commitments::{compute_pk_aggregation_commitment, compute_threshold_pk_commitment};
+use crate::math::poseidon2_commitment::{compute_pk_aggregation_commitment, compute_threshold_pk_commitment};
 use crate::math::modulo::U128::ModU128;
 use crate::math::polynomial::Polynomial;
 

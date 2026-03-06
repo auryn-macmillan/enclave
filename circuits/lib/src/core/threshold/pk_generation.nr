@@ -4,7 +4,7 @@
 // without even the implied warranty of MERCHANTABILITY
 // or FITNESS FOR A PARTICULAR PURPOSE.
 
-use crate::math::commitments::{
+use crate::math::poseidon2_commitment::{
     compute_share_computation_e_sm_commitment, compute_share_computation_sk_commitment,
     compute_threshold_pk_commitment,
 };

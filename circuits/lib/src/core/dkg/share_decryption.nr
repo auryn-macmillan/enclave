@@ -4,7 +4,7 @@
 // without even the implied warranty of MERCHANTABILITY
 // or FITNESS FOR A PARTICULAR PURPOSE.
 
-use crate::math::commitments::{
+use crate::math::poseidon2_commitment::{
     compute_aggregated_shares_commitment, compute_share_encryption_commitment_from_message,
 };
 use crate::math::polynomial::Polynomial;

@@ -14,8 +14,10 @@
 use crate::math::helpers::flatten;
 use crate::math::polynomial::Polynomial;
 
-// Re-export domain separators from commitments.nr for convenience
-use crate::math::commitments::{
+// Re-export domain separators from commitments.nr for convenience.
+// All circuit files should import from poseidon2_commitment instead of commitments
+// to ensure they use the lightweight raw Poseidon2 functions.
+pub use crate::math::commitments::{
     DS_PK, DS_PK_GENERATION, DS_SHARE_COMPUTATION, DS_SHARE_ENCRYPTION,
     DS_PK_AGGREGATION, DS_CIPHERTEXT, DS_AGGREGATED_SHARES,
     DS_VK_HASH, DS_RECURSIVE_AGGREGATION, DS_USER_DATA_ENCRYPTION_COMMITMENT,

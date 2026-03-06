@@ -4,8 +4,16 @@
 // without even the implied warranty of MERCHANTABILITY
 // or FITNESS FOR A PARTICULAR PURPOSE.
 
-use crate::math::helpers::{compute_safe, flatten};
-use crate::math::polynomial::Polynomial;
+// Domain separator constants for cross-circuit commitment binding.
+//
+// These constants are the canonical domain separators used throughout the
+// Enclave circuit suite. They are re-exported by poseidon2_commitment.nr
+// which provides the actual commitment functions.
+//
+// NOTE: The commitment and challenge *functions* that previously lived here
+// have been removed. Cross-circuit commitments now use raw Poseidon2
+// (poseidon2_commitment.nr), and Fiat-Shamir challenges use
+// std::phase::challenge() (backend-derived via KZG).
 
 /// DOMAIN SEPARATORS
 
@@ -72,35 +80,6 @@ pub global DS_RECURSIVE_AGGREGATION: [u8; 64] = [
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
-// Domain separator - "CLG_PK_GENERATION"
-pub global DS_CLG_PK_GENERATION: [u8; 64] = [
-    0x43, 0x4c, 0x47, 0x5f, 0x50, 0x4b, 0x5f, 0x47, 0x45, 0x4e, 0x45, 0x52, 0x41, 0x54, 0x49, 0x4f,
-    0x4e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-];
-// Domain separator - "CLG_SHARE_ENCRYPTION"
-pub global DS_CLG_SHARE_ENCRYPTION: [u8; 64] = [
-    0x43, 0x4c, 0x47, 0x5f, 0x53, 0x48, 0x41, 0x52, 0x45, 0x5f, 0x45, 0x4e, 0x43, 0x52, 0x59, 0x50,
-    0x54, 0x49, 0x4f, 0x4e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-];
-// Domain separator - "CLG_USER_DATA_ENCRYPTION"
-pub global DS_CLG_USER_DATA_ENCRYPTION: [u8; 64] = [
-    0x43, 0x4c, 0x47, 0x5f, 0x55, 0x53, 0x45, 0x52, 0x5f, 0x44, 0x41, 0x54, 0x41, 0x5f, 0x45, 0x4e,
-    0x43, 0x52, 0x59, 0x50, 0x54, 0x49, 0x4f, 0x4e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-];
-// Domain separator - "CLG_SHARE_DECRYPTION"
-pub global DS_CLG_SHARE_DECRYPTION: [u8; 64] = [
-    0x43, 0x4c, 0x47, 0x5f, 0x53, 0x48, 0x41, 0x52, 0x45, 0x5f, 0x44, 0x45, 0x43, 0x52, 0x59, 0x50,
-    0x54, 0x49, 0x4f, 0x4e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-];
-
 // Domain separator - "USER_DATA_ENCRYPTION_COMMITMENT"
 pub global DS_USER_DATA_ENCRYPTION_COMMITMENT: [u8; 64] = [
     0x55, 0x53, 0x45, 0x52, 0x5f, 0x44, 0x41, 0x54, 0x41, 0x5f, 0x45, 0x4e, 0x43, 0x52, 0x59, 0x50,
@@ -108,165 +87,3 @@ pub global DS_USER_DATA_ENCRYPTION_COMMITMENT: [u8; 64] = [
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
-
-/// WRAPPERS
-
-pub fn compute_commitment(inputs: [Field], domain_separator: [u8; 64]) -> Field {
-    compute_safe(domain_separator, inputs, [0x80000000 | inputs.len(), 1])[0]
-}
-
-pub fn compute_single_polynomial_commitment<let N: u32, let BIT: u32>(
-    polynomial: Polynomial<N>,
-    domain_separator: [u8; 64],
-) -> Field {
-    let mut payload = single_polynomial_payload::<N, BIT>([].as_vector(), polynomial);
-    compute_commitment(payload, domain_separator)
-}
-
-pub fn compute_multiple_polynomial_commitment<let N: u32, let L: u32, let BIT: u32>(
-    polynomials: [Polynomial<N>; L],
-    domain_separator: [u8; 64],
-) -> Field {
-    let mut payload = multiple_polynomial_payload::<N, L, BIT>([].as_vector(), polynomials);
-    compute_commitment(payload, domain_separator)
-}
-
-pub fn compute_challenge<let L: u32>(inputs: [Field], domain_separator: [u8; 64]) -> [Field] {
-    compute_safe(domain_separator, inputs, [0x80000000 | inputs.len(), 2 * L])
-}
-
-pub fn single_polynomial_payload<let N: u32, let BIT_POLY: u32>(
-    payload: [Field],
-    input: Polynomial<N>,
-) -> [Field] {
-    flatten::<_, _, BIT_POLY>(payload, [input])
-}
-
-pub fn multiple_polynomial_payload<let N: u32, let L: u32, let BIT_POLY: u32>(
-    payload: [Field],
-    inputs: [Polynomial<N>; L],
-) -> [Field] {
-    flatten::<_, _, BIT_POLY>(payload, inputs)
-}
-
-/// COMMITMENTS
-
-pub fn compute_dkg_pk_commitment<let N: u32, let L: u32, let BIT_PK: u32>(
-    pk0: [Polynomial<N>; L],
-    pk1: [Polynomial<N>; L],
-) -> Field {
-    let mut payload = multiple_polynomial_payload::<N, L, BIT_PK>([].as_vector(), pk0);
-    payload = multiple_polynomial_payload::<N, L, BIT_PK>(payload, pk1);
-
-    compute_commitment(payload, DS_PK)
-}
-
-pub fn compute_threshold_pk_commitment<let N: u32, let L: u32, let BIT_PK: u32>(
-    pk0: [Polynomial<N>; L],
-    pk1: [Polynomial<N>; L],
-) -> Field {
-    let mut payload = multiple_polynomial_payload::<N, L, BIT_PK>([].as_vector(), pk0);
-    payload = multiple_polynomial_payload::<N, L, BIT_PK>(payload, pk1);
-
-    compute_commitment(payload, DS_PK_GENERATION)
-}
-
-pub fn compute_share_computation_sk_commitment<let N: u32, let BIT_SK: u32>(
-    sk: Polynomial<N>,
-) -> Field {
-    let mut payload = single_polynomial_payload::<N, BIT_SK>([].as_vector(), sk);
-    compute_commitment(payload, DS_SHARE_COMPUTATION)
-}
-
-pub fn compute_share_computation_e_sm_commitment<let N: u32, let L: u32, let BIT_E_SM: u32>(
-    e_sm: [Polynomial<N>; L],
-) -> Field {
-    let mut payload = multiple_polynomial_payload::<N, L, BIT_E_SM>([].as_vector(), e_sm);
-    compute_commitment(payload, DS_SHARE_COMPUTATION)
-}
-
-pub fn compute_share_encryption_commitment_from_message<let N: u32, let BIT_MSG: u32>(
-    message: Polynomial<N>,
-) -> Field {
-    let mut payload = single_polynomial_payload::<N, BIT_MSG>([].as_vector(), message);
-    compute_commitment(payload, DS_SHARE_ENCRYPTION)
-}
-
-pub fn compute_share_encryption_commitment_from_shares<let N: u32, let L: u32, let N_PARTIES: u32>(
-    y: [[[Field; N_PARTIES + 1]; L]; N],
-    party_idx: u32,
-    mod_idx: u32,
-) -> Field {
-    let mut payload: [Field] = [].as_vector();
-
-    for coeff_idx in 0..N {
-        payload = payload.push_back(y[coeff_idx][mod_idx][party_idx + 1]);
-    }
-
-    // Include party_idx and mod_idx in the hash
-    payload = payload.push_back(party_idx as Field);
-    payload = payload.push_back(mod_idx as Field);
-
-    compute_commitment(payload, DS_SHARE_ENCRYPTION)
-}
-
-pub fn compute_aggregated_shares_commitment<let N: u32, let L: u32, let BIT_MSG: u32>(
-    agg_shares: [Polynomial<N>; L],
-) -> Field {
-    let mut payload = multiple_polynomial_payload::<N, L, BIT_MSG>([].as_vector(), agg_shares);
-    compute_commitment(payload, DS_AGGREGATED_SHARES)
-}
-
-pub fn compute_pk_aggregation_commitment<let N: u32, let L: u32, let BIT_PK: u32>(
-    pk0: [Polynomial<N>; L],
-    pk1: [Polynomial<N>; L],
-) -> Field {
-    let commit_pk0 = compute_multiple_polynomial_commitment::<N, L, BIT_PK>(pk0, DS_PK_AGGREGATION);
-    let commit_pk1 = compute_multiple_polynomial_commitment::<N, L, BIT_PK>(pk1, DS_PK_AGGREGATION);
-
-    let inputs = [commit_pk0, commit_pk1].as_vector();
-
-    compute_commitment(inputs, DS_PK_AGGREGATION)
-}
-
-pub fn compute_recursive_aggregation_commitment(payload: [Field]) -> Field {
-    compute_commitment(payload, DS_RECURSIVE_AGGREGATION)
-}
-
-pub fn compute_vk_hash(vk_hashes: [Field]) -> Field {
-    compute_commitment(vk_hashes, DS_VK_HASH)
-}
-
-pub fn compute_ciphertext_commitment<let N: u32, let L: u32, let BIT_CT: u32>(
-    ct0: [Polynomial<N>; L],
-    ct1: [Polynomial<N>; L],
-) -> Field {
-    let commit_ct0 = compute_multiple_polynomial_commitment::<N, L, BIT_CT>(ct0, DS_CIPHERTEXT);
-    let commit_ct1 = compute_multiple_polynomial_commitment::<N, L, BIT_CT>(ct1, DS_CIPHERTEXT);
-
-    let inputs = [commit_ct0, commit_ct1].as_vector();
-
-    compute_commitment(inputs, DS_CIPHERTEXT)
-}
-
-/// COMMITMENTS FOR CHALLENGES
-
-pub fn compute_threshold_pk_challenge(payload: [Field]) -> Field {
-    compute_commitment(payload, DS_CLG_PK_GENERATION)
-}
-
-pub fn compute_share_encryption_challenge<let L: u32>(payload: [Field]) -> [Field] {
-    compute_challenge::<L>(payload, DS_CLG_SHARE_ENCRYPTION)
-}
-
-pub fn compute_threshold_share_decryption_challenge<let L: u32>(payload: [Field]) -> Field {
-    compute_challenge::<L>(payload, DS_CLG_SHARE_DECRYPTION)[0]
-}
-
-pub fn compute_user_data_encryption_ct0_challenge<let L: u32>(payload: [Field]) -> [Field] {
-    compute_challenge::<L>(payload, DS_CLG_USER_DATA_ENCRYPTION)
-}
-
-pub fn compute_user_data_encryption_ct1_challenge<let L: u32>(payload: [Field]) -> [Field] {
-    compute_challenge::<L>(payload, DS_CLG_USER_DATA_ENCRYPTION)
-}

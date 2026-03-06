@@ -8,11 +8,11 @@
 // and generates commitment for u, which will be used in ct1 to check consistency of u
 // across ct0 and ct1.
 
-use crate::math::commitments::compute_multiple_polynomial_commitment;
-use crate::math::commitments::compute_single_polynomial_commitment;
-use crate::math::commitments::DS_CIPHERTEXT;
-use crate::math::commitments::DS_PK_AGGREGATION;
-use crate::math::commitments::DS_USER_DATA_ENCRYPTION_COMMITMENT;
+use crate::math::poseidon2_commitment::compute_multiple_polynomial_commitment;
+use crate::math::poseidon2_commitment::compute_single_polynomial_commitment;
+use crate::math::poseidon2_commitment::DS_CIPHERTEXT;
+use crate::math::poseidon2_commitment::DS_PK_AGGREGATION;
+use crate::math::poseidon2_commitment::DS_USER_DATA_ENCRYPTION_COMMITMENT;
 use crate::math::helpers::flatten_arr;
 use crate::math::polynomial::Polynomial;
 use std::phase::challenge_multi;

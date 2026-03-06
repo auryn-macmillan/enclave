@@ -4,8 +4,8 @@
 // without even the implied warranty of MERCHANTABILITY
 // or FITNESS FOR A PARTICULAR PURPOSE.
 
-use crate::math::commitments::compute_dkg_pk_commitment;
-use crate::math::commitments::compute_share_encryption_commitment_from_message;
+use crate::math::poseidon2_commitment::compute_dkg_pk_commitment;
+use crate::math::poseidon2_commitment::compute_share_encryption_commitment_from_message;
 use crate::math::helpers::flatten_arr;
 use crate::math::modulo::U128::ModU128;
 use crate::math::polynomial::Polynomial;

@@ -4,7 +4,7 @@
 // without even the implied warranty of MERCHANTABILITY
 // or FITNESS FOR A PARTICULAR PURPOSE.
 
-use crate::math::commitments::compute_aggregated_shares_commitment;
+use crate::math::poseidon2_commitment::compute_aggregated_shares_commitment;
 use crate::math::helpers::flatten_arr;
 use crate::math::polynomial::Polynomial;
 use std::phase::challenge;
