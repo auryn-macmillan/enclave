@@ -3923,7 +3923,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64",
- "bincode",
  "bn254_blackbox_solver",
  "chrono",
  "directories 5.0.1",

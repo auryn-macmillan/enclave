@@ -230,6 +230,7 @@ mod tests {
     use e3_zk_helpers::dkg::share_encryption::{
         ShareEncryptionCircuit, ShareEncryptionCircuitData,
     };
+    use e3_zk_helpers::threshold::pk_generation::{PkGenerationCircuit, PkGenerationCircuitData};
     use e3_zk_helpers::CiphernodesCommitteeSize;
     use std::env;
     use std::path::PathBuf;
@@ -396,6 +397,263 @@ mod tests {
         prover.cleanup(e3_id).unwrap();
     }
 
+    /// Standalone test for the pk_generation wrapper proof.
+    /// The pk_generation wrapper verifies 1 multi-phase inner proof (UltraHonkProof1Phase, 453 fields).
+    /// This test isolates whether multi-phase recursive verification works with a SINGLE proof.
+    #[tokio::test]
+    async fn test_generate_and_verify_pk_generation_wrapper_proof() {
+        let temp = get_tempdir().unwrap();
+        let mut backend = test_backend(temp.path());
+
+        backend.ensure_installed().await.expect("ensure_installed");
+
+        let dist = dist_circuits_path();
+        let wrapper_src = dist
+            .join("recursive_aggregation")
+            .join("wrapper")
+            .join("threshold")
+            .join("pk_generation");
+        if wrapper_src.join("pk_generation.json").exists()
+            && wrapper_src.join("pk_generation.vk_recursive").exists()
+        {
+            backend.circuits_dir = dist.clone();
+        }
+
+        let prover = ZkProver::new(&backend);
+
+        let wrapper_dir = backend
+            .circuits_dir
+            .join("recursive_aggregation")
+            .join("wrapper")
+            .join("threshold")
+            .join("pk_generation");
+        if !wrapper_dir.join("pk_generation.json").exists()
+            || !wrapper_dir.join("pk_generation.vk_recursive").exists()
+        {
+            panic!(
+                "pk_generation wrapper circuit not found at {} — run pnpm build:circuits",
+                wrapper_dir.display()
+            );
+        }
+
+        let preset = BfvPreset::InsecureThreshold512;
+        let committee = CiphernodesCommitteeSize::Small.values();
+
+        let sample = PkGenerationCircuitData::generate_sample(preset, committee)
+            .expect("pk_generation sample generation should succeed");
+
+        let e3_id = "aggregation-test-pk-gen-wrapper";
+        let start = std::time::Instant::now();
+        let wrapper_proof = PkGenerationCircuit
+            .aggregate_proof(&prover, &preset, &[sample], None, e3_id)
+            .expect("pk_generation aggregate_proof (1 input) should succeed");
+        let elapsed = start.elapsed();
+        eprintln!("pk_generation 1-proof wrapper generation: {:?}", elapsed);
+
+        assert!(!wrapper_proof.data.is_empty());
+        assert!(!wrapper_proof.public_signals.is_empty());
+        eprintln!(
+            "pk_generation wrapper proof: data={} bytes, public_signals={} bytes, circuit={:?}",
+            wrapper_proof.data.len(),
+            wrapper_proof.public_signals.len(),
+            wrapper_proof.circuit
+        );
+
+        // Native verification of the wrapper proof
+        let verified = prover
+            .verify_wrapper_proof(&wrapper_proof, e3_id, 0)
+            .expect("verification should not error");
+        eprintln!("pk_generation wrapper proof verified: {}", verified);
+
+        assert!(
+            verified,
+            "pk_generation wrapper proof should verify successfully"
+        );
+
+        prover
+            .cleanup(&format!("{}_inner_0", e3_id))
+            .unwrap();
+        prover.cleanup(e3_id).unwrap();
+    }
+
+    /// Standalone test for the share_encryption wrapper proof.
+    /// Diagnostic test: decompose share_encryption wrapper flow to verify inner proofs individually.
+    /// The share_encryption wrapper verifies 2 multi-phase inner proofs (UltraHonkProof1Phase, 453 fields).
+    /// This test generates inner proofs, verifies them natively, then generates the wrapper proof.
+    #[tokio::test]
+    async fn test_generate_and_verify_share_encryption_wrapper_proof() {
+        use crate::witness::{CompiledCircuit, WitnessGenerator};
+        use crate::traits::Provable;
+        use std::process::Command as StdCommand;
+
+        let temp = get_tempdir().unwrap();
+        let mut backend = test_backend(temp.path());
+
+        backend.ensure_installed().await.expect("ensure_installed");
+
+        let dist = dist_circuits_path();
+        let wrapper_src = dist
+            .join("recursive_aggregation")
+            .join("wrapper")
+            .join("dkg")
+            .join("share_encryption");
+        if wrapper_src.join("share_encryption.json").exists()
+            && wrapper_src.join("share_encryption.vk_recursive").exists()
+        {
+            backend.circuits_dir = dist.clone();
+        }
+
+        let prover = ZkProver::new(&backend);
+
+        let wrapper_dir = backend
+            .circuits_dir
+            .join("recursive_aggregation")
+            .join("wrapper")
+            .join("dkg")
+            .join("share_encryption");
+        if !wrapper_dir.join("share_encryption.json").exists()
+            || !wrapper_dir.join("share_encryption.vk_recursive").exists()
+        {
+            panic!(
+                "share_encryption wrapper circuit not found at {} — run pnpm build:circuits",
+                wrapper_dir.display()
+            );
+        }
+
+        let preset = BfvPreset::InsecureThreshold512;
+        let committee = CiphernodesCommitteeSize::Small.values();
+        let sd = preset.search_defaults().expect("search_defaults");
+
+        let sample_secret = ShareEncryptionCircuitData::generate_sample(
+            preset,
+            committee.clone(),
+            DkgInputType::SecretKey,
+            sd.z,
+            sd.lambda,
+        )
+        .expect("share_encryption sample (secret) generation should succeed");
+        let sample_noise = ShareEncryptionCircuitData::generate_sample(
+            preset,
+            committee,
+            DkgInputType::SmudgingNoise,
+            sd.z,
+            sd.lambda,
+        )
+        .expect("share_encryption sample (noise) generation should succeed");
+
+        let e3_id = "aggregation-test-share-enc-wrapper";
+
+        // ========== STEP 1: Generate inner proofs manually ==========
+        let inputs = [sample_secret, sample_noise];
+        let witness_gen = WitnessGenerator::new();
+        let circuit_name = CircuitName::ShareEncryption;
+        let mut inner_proofs = Vec::new();
+
+        for (i, input) in inputs.iter().enumerate() {
+            let input_map = ShareEncryptionCircuit.build_inputs(&preset, input)
+                .expect("build_inputs should succeed");
+            let circuit_path = prover
+                .circuits_dir()
+                .join(circuit_name.dir_path())
+                .join(format!("{}.json", circuit_name.as_str()));
+            let circuit = CompiledCircuit::from_file(&circuit_path)
+                .expect("circuit load should succeed");
+            let witness = witness_gen.generate_witness(&circuit, input_map)
+                .expect("witness generation should succeed");
+            let inner_e3_id = format!("{}_inner_{}", e3_id, i);
+            let proof = prover.generate_recursive_proof(circuit_name, &witness, &inner_e3_id)
+                .expect("inner proof generation should succeed");
+
+            eprintln!(
+                "Inner proof {}: data={} bytes ({} fields), public_signals={} bytes ({} fields)",
+                i,
+                proof.data.len(),
+                proof.data.len() / 32,
+                proof.public_signals.len(),
+                proof.public_signals.len() / 32,
+            );
+
+            inner_proofs.push(proof);
+        }
+
+        // ========== STEP 2: Verify each inner proof natively ==========
+        for (i, proof) in inner_proofs.iter().enumerate() {
+            let verified = prover
+                .verify_recursive_proof(proof, &format!("{}_verify_inner_{}", e3_id, i), 0)
+                .expect("inner verification should not error");
+            eprintln!("Inner proof {} natively verified: {}", i, verified);
+            assert!(
+                verified,
+                "Inner proof {} should verify natively before wrapping",
+                i
+            );
+        }
+
+        // ========== STEP 3: Save inner proof artifacts for manual inspection ==========
+        let debug_dir = std::path::PathBuf::from("/tmp/se_wrapper_debug");
+        std::fs::create_dir_all(&debug_dir).unwrap();
+        for (i, proof) in inner_proofs.iter().enumerate() {
+            std::fs::write(debug_dir.join(format!("inner_{}_proof", i)), &*proof.data).unwrap();
+            std::fs::write(debug_dir.join(format!("inner_{}_public_inputs", i)), &*proof.public_signals).unwrap();
+        }
+        // Also save the VK artifacts
+        let vk_recursive = std::fs::read(
+            prover.circuits_dir().join(circuit_name.dir_path()).join(format!("{}.vk_recursive", circuit_name.as_str()))
+        ).unwrap();
+        std::fs::write(debug_dir.join("inner_vk_recursive"), &vk_recursive).unwrap();
+        eprintln!("Inner VK recursive size: {} bytes ({} fields)", vk_recursive.len(), vk_recursive.len() / 32);
+
+        // Dump the first few VK fields for debugging
+        let vk_fields = utils::bytes_to_field_strings(&vk_recursive).unwrap();
+        for (j, f) in vk_fields.iter().enumerate().take(6) {
+            eprintln!("  VK field {}: {}", j, f);
+        }
+
+        // ========== STEP 4: Generate wrapper proof ==========
+        let start = std::time::Instant::now();
+        let wrapper_proof = generate_wrapper_proof(&prover, &inner_proofs, e3_id)
+            .expect("wrapper proof generation should succeed");
+        let elapsed = start.elapsed();
+        eprintln!("share_encryption wrapper proof generation: {:?}", elapsed);
+
+        assert!(!wrapper_proof.data.is_empty());
+        assert!(!wrapper_proof.public_signals.is_empty());
+        eprintln!(
+            "Wrapper proof: data={} bytes ({} fields), public_signals={} bytes ({} fields)",
+            wrapper_proof.data.len(),
+            wrapper_proof.data.len() / 32,
+            wrapper_proof.public_signals.len(),
+            wrapper_proof.public_signals.len() / 32,
+        );
+
+        // Save wrapper artifacts
+        std::fs::write(debug_dir.join("wrapper_proof"), &*wrapper_proof.data).unwrap();
+        std::fs::write(debug_dir.join("wrapper_public_inputs"), &*wrapper_proof.public_signals).unwrap();
+
+        // ========== STEP 5: Verify wrapper proof natively ==========
+        let verified = prover
+            .verify_wrapper_proof(&wrapper_proof, e3_id, 0)
+            .expect("verification should not error");
+        eprintln!("share_encryption wrapper proof verified: {}", verified);
+
+        if !verified {
+            eprintln!("WRAPPER PROOF VERIFICATION FAILED");
+            eprintln!("Debug artifacts saved to /tmp/se_wrapper_debug/");
+            eprintln!("work_dir: {:?}", prover.work_dir());
+        }
+
+        assert!(
+            verified,
+            "share_encryption wrapper proof should verify successfully"
+        );
+
+        prover.cleanup(&format!("{}_inner_0", e3_id)).unwrap();
+        prover.cleanup(&format!("{}_inner_1", e3_id)).unwrap();
+        prover.cleanup(&format!("{}_verify_inner_0", e3_id)).unwrap();
+        prover.cleanup(&format!("{}_verify_inner_1", e3_id)).unwrap();
+        prover.cleanup(e3_id).unwrap();
+    }
+
     #[tokio::test]
     async fn test_generate_and_verify_fold_proof() {
         let temp = get_tempdir().unwrap();
@@ -471,33 +729,88 @@ mod tests {
         )
         .expect("share_encryption sample (noise) generation should succeed");
 
-        let e3_id = "aggregation-test-fold";
+        let e3_id_pk = "aggregation-test-fold-pk";
+        let e3_id_se = "aggregation-test-fold-se";
+        let e3_id_fold = "aggregation-test-fold";
 
+        // Generate both wrapper proofs independently (no folding yet)
         let pk_wrapper_proof = PkCircuit
-            .aggregate_proof(&prover, &preset, &[pk_sample], None, e3_id)
+            .aggregate_proof(&prover, &preset, &[pk_sample], None, e3_id_pk)
             .expect("pk aggregate_proof (1 input) should succeed");
 
-        let fold_proof = ShareEncryptionCircuit
+        let share_enc_wrapper_proof = ShareEncryptionCircuit
             .aggregate_proof(
                 &prover,
                 &preset,
                 &[share_enc_sample_secret, share_enc_sample_noise],
-                Some(&pk_wrapper_proof),
-                e3_id,
+                None, // No fold — just generate the wrapper proof
+                e3_id_se,
             )
-            .expect("share_encryption aggregate_proof with fold should succeed");
+            .expect("share_encryption aggregate_proof (2 inputs) should succeed");
+
+        // DIAGNOSTIC: Swap proof order to test if bug is position-dependent.
+        // Original order: proof1=share_enc_wrapper, proof2=pk_wrapper (FAIL on #1)
+        // Swapped order: proof1=pk_wrapper, proof2=share_enc_wrapper
+        // If #1 still fails → position-dependent bug
+        // If share_enc always fails → proof-specific bug
+        eprintln!("SWAP TEST: proof1=pk_wrapper (circuit={:?}), proof2=share_enc_wrapper (circuit={:?})",
+            pk_wrapper_proof.circuit, share_enc_wrapper_proof.circuit);
+        let fold_proof = generate_fold_proof(
+            &prover,
+            &pk_wrapper_proof,        // proof1 (was proof2 in original)
+            &share_enc_wrapper_proof,  // proof2 (was proof1 in original)
+            e3_id_fold,
+        )
+        .expect("fold proof generation should succeed");
+
+        eprintln!("pk_wrapper_proof: data={} bytes, public_signals={} bytes, circuit={:?}",
+            pk_wrapper_proof.data.len(), pk_wrapper_proof.public_signals.len(), pk_wrapper_proof.circuit);
+        eprintln!("share_enc_wrapper_proof: data={} bytes, public_signals={} bytes, circuit={:?}",
+            share_enc_wrapper_proof.data.len(), share_enc_wrapper_proof.public_signals.len(), share_enc_wrapper_proof.circuit);
+        eprintln!("fold_proof: data={} bytes, public_signals={} bytes, circuit={:?}",
+            fold_proof.data.len(), fold_proof.public_signals.len(), fold_proof.circuit);
+
+        // Save fold proof artifacts for manual inspection
+        let debug_dir = std::path::PathBuf::from("/tmp/fold_debug");
+        std::fs::create_dir_all(&debug_dir).unwrap();
+        std::fs::write(debug_dir.join("fold_proof"), &*fold_proof.data).unwrap();
+        std::fs::write(debug_dir.join("fold_public_inputs"), &*fold_proof.public_signals).unwrap();
+        std::fs::write(debug_dir.join("pk_wrapper_proof"), &*pk_wrapper_proof.data).unwrap();
+        std::fs::write(debug_dir.join("pk_wrapper_public_inputs"), &*pk_wrapper_proof.public_signals).unwrap();
+        std::fs::write(debug_dir.join("share_enc_wrapper_proof"), &*share_enc_wrapper_proof.data).unwrap();
+        std::fs::write(debug_dir.join("share_enc_wrapper_public_inputs"), &*share_enc_wrapper_proof.public_signals).unwrap();
+
+        // Also copy work dir contents for manual testing
+        let work_dir = prover.work_dir();
+        let fold_work = work_dir.join(e3_id_fold);
+        if fold_work.exists() {
+            let copy_dest = debug_dir.join("work_aggregation-test-fold");
+            let _ = std::process::Command::new("cp")
+                .args(["-r", &fold_work.to_string_lossy(), &copy_dest.to_string_lossy()])
+                .output();
+        }
+        eprintln!("Saved proof artifacts to /tmp/fold_debug/");
 
         assert!(!fold_proof.data.is_empty());
         assert!(!fold_proof.public_signals.is_empty());
         assert_eq!(fold_proof.circuit, e3_events::CircuitName::Fold);
 
         let verified = prover
-            .verify_fold_proof(&fold_proof, e3_id, 0)
+            .verify_fold_proof(&fold_proof, e3_id_fold, 0)
             .expect("verification should not error");
-        assert!(verified, "fold proof should verify successfully");
+        eprintln!("fold proof verified: {}", verified);
 
-        prover.cleanup(&format!("{}_inner_0", e3_id)).unwrap();
-        prover.cleanup(&format!("{}_inner_1", e3_id)).unwrap();
-        prover.cleanup(e3_id).unwrap();
+        // Don't clean up so we can inspect
+        // prover.cleanup(&format!("{}_inner_0", e3_id_fold)).unwrap();
+        // prover.cleanup(&format!("{}_inner_1", e3_id_fold)).unwrap();
+        // prover.cleanup(e3_id_fold).unwrap();
+
+        // Don't assert so we can see the output
+        if !verified {
+            eprintln!("FOLD PROOF VERIFICATION FAILED - check work dirs");
+            // Print the work dir location
+            eprintln!("work_dir: {:?}", prover.work_dir());
+        }
+        assert!(verified, "fold proof should verify successfully");
     }
 }

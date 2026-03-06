@@ -182,6 +182,18 @@ impl ZkProver {
 
         let output = StdCommand::new(&self.bb_binary).args(&args).output()?;
 
+        // Always print bb prove output for fold circuit to capture DIAG messages
+        {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if stderr.contains("DIAG:") || stderr.contains("DEBUG:") {
+                eprintln!("bb prove [{circuit}] stderr:\n{stderr}");
+            }
+            if stdout.contains("DIAG:") || stdout.contains("DEBUG:") {
+                eprintln!("bb prove [{circuit}] stdout:\n{stdout}");
+            }
+        }
+
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -217,6 +229,24 @@ impl ZkProver {
             e3_id,
             party_id,
             None,
+        )
+    }
+
+    /// Verifies a recursive proof (poseidon2, noir-recursive-no-zk format) using the inner circuit's recursive VK.
+    pub fn verify_recursive_proof(
+        &self,
+        proof: &Proof,
+        e3_id: &str,
+        party_id: u64,
+    ) -> Result<bool, ZkError> {
+        self.verify_proof_impl(
+            proof.circuit,
+            &proof.data,
+            &proof.public_signals,
+            proof.circuit.dir_path(),
+            e3_id,
+            party_id,
+            Some("noir-recursive-no-zk"),
         )
     }
 
@@ -339,6 +369,13 @@ impl ZkProver {
             let stdout = String::from_utf8_lossy(&output.stdout);
             warn!(
                 "bb verification failed for {}:\nVK: {}\nstderr: {}\nstdout: {}",
+                circuit.as_str(),
+                vk_path.display(),
+                stderr,
+                stdout
+            );
+            eprintln!(
+                "DEBUG bb verification failed for {}:\nVK: {}\nstderr: {}\nstdout: {}",
                 circuit.as_str(),
                 vk_path.display(),
                 stderr,
