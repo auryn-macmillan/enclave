@@ -13,11 +13,9 @@
 //! - Bit width calculation from bounds
 //! - ZKP modulus constants
 
-use ark_bn254::Fr as Field;
 use ark_bn254::Fr as FieldElement;
 use ark_ff::PrimeField;
 use e3_polynomial::{CrtPolynomial, Polynomial};
-use e3_safe::SafeSponge;
 use fhe::bfv::BfvParameters;
 use num_bigint::BigInt;
 use num_traits::{ToPrimitive, Zero};
@@ -85,31 +83,6 @@ pub fn join_display<T: Display>(vec: &[T], sep: &str) -> String {
         .map(|x| x.to_string())
         .collect::<Vec<_>>()
         .join(sep)
-}
-
-/// Compute SAFE sponge hash with the given domain separator and inputs.
-///
-/// This is a convenience wrapper around the SAFE sponge API that performs
-/// START, ABSORB, SQUEEZE, and FINISH operations in sequence.
-///
-/// # Arguments
-/// * `domain_separator` - 64-byte domain separator for cross-protocol security
-/// * `inputs` - Vector of field elements to absorb
-/// * `io_pattern` - IO pattern array `[ABSORB(input_size), SQUEEZE(output_size)]`
-///
-/// # Returns
-/// A vector of field elements squeezed from the sponge
-pub fn compute_safe(
-    domain_separator: [u8; 64],
-    inputs: Vec<Field>,
-    io_pattern: [u32; 2],
-) -> Vec<Field> {
-    let mut sponge = SafeSponge::start(io_pattern, domain_separator);
-    sponge.absorb(inputs);
-    let digests = sponge.squeeze();
-    sponge.finish();
-
-    digests
 }
 
 /// Convert BigInt to Field by reducing modulo ZKP modulus.

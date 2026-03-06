@@ -7,17 +7,22 @@
 //! Commitment computation functions for zero-knowledge circuits.
 //!
 //! This module provides functions to compute commitments to various cryptographic objects
-//! (polynomials, public keys, secret keys, shares, etc.) using the SAFE sponge hash function.
-//! All functions match the corresponding Noir circuit implementations exactly.
+//! (polynomials, public keys, secret keys, shares, etc.) using raw Poseidon2 hashing.
+//!
+//! All functions match the corresponding Noir circuit implementations in
+//! `circuits/lib/src/math/poseidon2_commitment.nr` exactly.
+//!
+//! NOTE: Challenge derivation functions have been removed — challenges are now
+//! derived by the proving backend via `std::phase::challenge()` (PhaseBarrier).
 
 use crate::packing::flatten;
-use crate::utils::compute_safe;
 use ark_bn254::Fr as Field;
 use ark_ff::BigInteger;
 use ark_ff::PrimeField;
 use e3_polynomial::{CrtPolynomial, Polynomial};
 use num_bigint::BigInt;
 use std::slice::from_ref;
+use taceo_poseidon2::bn254::t4::permutation as poseidon2_permutation;
 
 // ============================================================================
 // DOMAIN SEPARATORS
@@ -88,60 +93,75 @@ const DS_RECURSIVE_AGGREGATION: [u8; 64] = [
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
 ];
 
-/// String: "CLG_PK_GENERATION"
-const DS_CLG_PK_GENERATION: [u8; 64] = [
-    0x43, 0x4c, 0x47, 0x5f, 0x50, 0x4b, 0x5f, 0x47, 0x45, 0x4e, 0x45, 0x52, 0x41, 0x54, 0x49, 0x4f,
-    0x4e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-];
-
-/// String: "CLG_SHARE_ENCRYPTION"
-const DS_CLG_SHARE_ENCRYPTION: [u8; 64] = [
-    0x43, 0x4c, 0x47, 0x5f, 0x53, 0x48, 0x41, 0x52, 0x45, 0x5f, 0x45, 0x4e, 0x43, 0x52, 0x59, 0x50,
-    0x54, 0x49, 0x4f, 0x4e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-];
-
-/// String: "CLG_USER_DATA_ENCRYPTION"
-const DS_CLG_USER_DATA_ENCRYPTION: [u8; 64] = [
-    0x43, 0x4c, 0x47, 0x5f, 0x55, 0x53, 0x45, 0x52, 0x5f, 0x44, 0x41, 0x54, 0x41, 0x5f, 0x45, 0x4e,
-    0x43, 0x52, 0x59, 0x50, 0x54, 0x49, 0x4f, 0x4e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-];
-
-/// Domain separator for decryption share challenge.
-/// String: "CLG_SHARE_DECRYPTION"
-const DS_CLG_SHARE_DECRYPTION: [u8; 64] = [
-    0x43, 0x4c, 0x47, 0x5f, 0x53, 0x48, 0x41, 0x52, 0x45, 0x5f, 0x44, 0x45, 0x43, 0x52, 0x59, 0x50,
-    0x54, 0x49, 0x4f, 0x4e, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-];
-
 // ============================================================================
-// WRAPPERS
+// RAW POSEIDON2 HASH
 // ============================================================================
 
-/// Compute commitments using SAFE sponge with the given domain separator and payload.
+/// Convert a 64-byte domain separator to a Field element by interpreting
+/// the first 31 bytes as a big-endian integer.
 ///
-/// This matches the Noir `compute_commitments` function exactly.
+/// Matches the Noir `domain_separator_to_field` function exactly.
+fn domain_separator_to_field(ds: &[u8; 64]) -> Field {
+    let mut result = Field::from(0u64);
+    let f256 = Field::from(256u64);
+    for i in 0..31 {
+        result = result * f256 + Field::from(ds[i] as u64);
+    }
+    result
+}
+
+/// Raw Poseidon2 sponge hash over a slice of Fields with domain separation.
 ///
-/// # Arguments
-/// * `payload` - Vector of field elements to hash
-/// * `domain_separator` - Domain separator for cross-protocol security
-/// * `io_pattern` - IO pattern `[ABSORB(input_size), SQUEEZE(output_size)]`
+/// Uses the standard Poseidon2 sponge construction (rate=3, capacity=1)
+/// with IV = message_length * 2^64 (matching noir_stdlib's Poseidon2).
 ///
-/// # Returns
-/// A vector of field elements from the sponge
-pub fn compute_commitments(
-    payload: Vec<Field>,
-    domain_separator: [u8; 64],
-    io_pattern: [u32; 2],
-) -> Vec<Field> {
-    compute_safe(domain_separator, payload, io_pattern)
+/// Domain separation is achieved by prepending the domain separator as
+/// the first absorbed element, which is included in the message length.
+///
+/// This matches the Noir `poseidon2_hash` function in `poseidon2_commitment.nr` exactly.
+pub fn poseidon2_hash(inputs: &[Field], domain_separator: &[u8; 64]) -> Field {
+    let ds_field = domain_separator_to_field(domain_separator);
+    let total_len = inputs.len() + 1; // +1 for domain separator prefix
+
+    // IV encodes the message length (matches noir_stdlib Poseidon2 convention)
+    // 2^64 = 18446744073709551616
+    let two_pow_64 = Field::from(18446744073709551616u128);
+    let iv = Field::from(total_len as u64) * two_pow_64;
+
+    // Initialize sponge state: [0, 0, 0, iv]
+    let mut state = [Field::from(0u64), Field::from(0u64), Field::from(0u64), iv];
+    let mut cache = [Field::from(0u64); 3];
+    let mut cache_size: usize = 1;
+
+    // Absorb domain separator prefix
+    cache[0] = ds_field;
+
+    // Absorb all input elements
+    for input in inputs {
+        if cache_size == 3 {
+            // Cache full — add to state and permute
+            state[0] += cache[0];
+            state[1] += cache[1];
+            state[2] += cache[2];
+            state = poseidon2_permutation(&state);
+            cache[0] = *input;
+            cache_size = 1;
+        } else {
+            cache[cache_size] = *input;
+            cache_size += 1;
+        }
+    }
+
+    // Final squeeze: add remaining cache to state and permute
+    for j in 0..3 {
+        if j < cache_size {
+            state[j] += cache[j];
+        }
+    }
+    state = poseidon2_permutation(&state);
+
+    // Return first element of permuted state
+    state[0]
 }
 
 // ============================================================================
@@ -150,7 +170,7 @@ pub fn compute_commitments(
 
 /// Compute a commitment to the correct DKG public key polynomials by flattening them and hashing.
 ///
-/// This matches the Noir `compute_pk_generation_commitment` function exactly.
+/// Matches the Noir `compute_dkg_pk_commitment` function (raw Poseidon2).
 ///
 /// # Arguments
 /// * `pk0` - First component of the correct DKG public key (one vector per modulus)
@@ -164,21 +184,18 @@ pub fn compute_dkg_pk_commitment(pk0: &CrtPolynomial, pk1: &CrtPolynomial, bit_p
     payload = flatten(payload, &pk0.limbs, bit_pk);
     payload = flatten(payload, &pk1.limbs, bit_pk);
 
-    let input_size = payload.len() as u32;
-    let io_pattern = [0x80000000 | input_size, 1];
-
-    let commitment_field = compute_commitments(payload, DS_PK, io_pattern)[0];
+    let commitment_field = poseidon2_hash(&payload, &DS_PK);
     let commitment_bytes = commitment_field.into_bigint().to_bytes_le();
     BigInt::from_bytes_le(num_bigint::Sign::Plus, &commitment_bytes)
 }
 
 /// Compute a commitment to the threshold public key polynomials by flattening them and hashing.
 ///
-/// This matches the Noir `compute_threshold_pk_commitment` function exactly.
+/// Matches the Noir `compute_threshold_pk_commitment` function (raw Poseidon2).
 ///
 /// # Arguments
-/// * `pk0` - First component of the thershold public key (CRT limbs)
-/// * `pk1` - Second component of the thershold public key (CRT limbs)
+/// * `pk0` - First component of the threshold public key (CRT limbs)
+/// * `pk1` - Second component of the threshold public key (CRT limbs)
 /// * `bit_pk` - The bit width for public key coefficient bounds
 ///
 /// # Returns
@@ -192,17 +209,14 @@ pub fn compute_threshold_pk_commitment(
     payload = flatten(payload, &pk0.limbs, bit_pk);
     payload = flatten(payload, &pk1.limbs, bit_pk);
 
-    let input_size = payload.len() as u32;
-    let io_pattern = [0x80000000 | input_size, 1];
-
-    let commitment_field = compute_commitments(payload, DS_PK_GENERATION, io_pattern)[0];
+    let commitment_field = poseidon2_hash(&payload, &DS_PK_GENERATION);
     let commitment_bytes = commitment_field.into_bigint().to_bytes_le();
     BigInt::from_bytes_le(num_bigint::Sign::Plus, &commitment_bytes)
 }
 
 /// Compute a commitment to the threshold secret key share by flattening it and hashing.
 ///
-/// This matches the Noir `compute_share_computation_sk_commitment` function exactly.
+/// Matches the Noir `compute_share_computation_sk_commitment` function (raw Poseidon2).
 ///
 /// # Arguments
 /// * `sk` - Threshold secret key polynomial
@@ -214,17 +228,14 @@ pub fn compute_share_computation_sk_commitment(sk: &Polynomial, bit_sk: u32) -> 
     let mut payload = Vec::new();
     payload = flatten(payload, from_ref(sk), bit_sk);
 
-    let input_size = payload.len() as u32;
-    let io_pattern = [0x80000000 | input_size, 1];
-
-    let commitment_field = compute_commitments(payload, DS_SHARE_COMPUTATION, io_pattern)[0];
+    let commitment_field = poseidon2_hash(&payload, &DS_SHARE_COMPUTATION);
     let commitment_bytes = commitment_field.into_bigint().to_bytes_le();
     BigInt::from_bytes_le(num_bigint::Sign::Plus, &commitment_bytes)
 }
 
 /// Compute a commitment to the threshold smudging noise share by flattening it and hashing.
 ///
-/// This matches the Noir `compute_share_computation_e_sm_commitment` function exactly.
+/// Matches the Noir `compute_share_computation_e_sm_commitment` function (raw Poseidon2).
 ///
 /// # Arguments
 /// * `e_sm` - Threshold smudging noise polynomial (CRT limbs)
@@ -236,17 +247,14 @@ pub fn compute_share_computation_e_sm_commitment(e_sm: &CrtPolynomial, bit_e_sm:
     let mut payload = Vec::new();
     payload = flatten(payload, &e_sm.limbs, bit_e_sm);
 
-    let input_size = payload.len() as u32;
-    let io_pattern = [0x80000000 | input_size, 1];
-
-    let commitment_field = compute_commitments(payload, DS_SHARE_COMPUTATION, io_pattern)[0];
+    let commitment_field = poseidon2_hash(&payload, &DS_SHARE_COMPUTATION);
     let commitment_bytes = commitment_field.into_bigint().to_bytes_le();
     BigInt::from_bytes_le(num_bigint::Sign::Plus, &commitment_bytes)
 }
 
 /// Compute share encryption commitment from message polynomial.
 ///
-/// This matches the Noir `compute_share_encryption_commitment_from_message` function exactly.
+/// Matches the Noir `compute_share_encryption_commitment_from_message` function (raw Poseidon2).
 ///
 /// # Arguments
 /// * `message` - Message polynomial
@@ -261,18 +269,14 @@ pub fn compute_share_encryption_commitment_from_message(
     let mut payload = Vec::new();
     payload = flatten(payload, from_ref(message), bit_msg);
 
-    let input_size = payload.len() as u32;
-    let io_pattern = [0x80000000 | input_size, 1];
-
-    let commitment_field = compute_commitments(payload, DS_SHARE_ENCRYPTION, io_pattern)[0];
+    let commitment_field = poseidon2_hash(&payload, &DS_SHARE_ENCRYPTION);
     let commitment_bytes = commitment_field.into_bigint().to_bytes_le();
     BigInt::from_bytes_le(num_bigint::Sign::Plus, &commitment_bytes)
 }
 
 /// Compute share encryption commitment from shares.
 ///
-/// This matches the Noir `compute_share_encryption_commitment_from_shares` function exactly.
-/// Used in C2 (verify shares circuit).
+/// Matches the Noir `compute_share_encryption_commitment_from_shares` function (raw Poseidon2).
 ///
 /// # Arguments
 /// * `y` - 3D array of share values: `y[coeff_idx][mod_idx][party_idx]`
@@ -301,17 +305,15 @@ pub fn compute_share_encryption_commitment_from_shares(
     payload.push(Field::from(party_idx as u64));
     payload.push(Field::from(mod_idx as u64));
 
-    let input_size = payload.len() as u32;
-    let io_pattern = [0x80000000 | input_size, 1];
-
-    let commitment_field = compute_commitments(payload, DS_SHARE_ENCRYPTION, io_pattern)[0];
+    let commitment_field = poseidon2_hash(&payload, &DS_SHARE_ENCRYPTION);
     let commitment_bytes = commitment_field.into_bigint().to_bytes_le();
     BigInt::from_bytes_le(num_bigint::Sign::Plus, &commitment_bytes)
 }
 
 /// Compute threshold public key aggregation commitment.
 ///
-/// This matches the Noir `compute_pk_aggregation_commitment` function exactly.
+/// Matches the Noir `compute_pk_aggregation_commitment` function (raw Poseidon2):
+/// commits pk0 and pk1 separately, then hashes the two commitments together.
 ///
 /// # Arguments
 /// * `pk0` - First component of the threshold public key (CRT limbs)
@@ -325,18 +327,13 @@ pub fn compute_pk_aggregation_commitment(
     pk1: &CrtPolynomial,
     bit_pk: u32,
 ) -> BigInt {
-    let mut payload0 = Vec::new();
-    payload0 = flatten(payload0, &pk0.limbs, bit_pk);
-    let io = [0x80000000 | payload0.len() as u32, 1];
-    let commit_pk0 = compute_commitments(payload0, DS_PK_AGGREGATION, io)[0];
+    let payload0 = flatten(Vec::new(), &pk0.limbs, bit_pk);
+    let commit_pk0 = poseidon2_hash(&payload0, &DS_PK_AGGREGATION);
 
-    let mut payload1 = Vec::new();
-    payload1 = flatten(payload1, &pk1.limbs, bit_pk);
-    let commit_pk1 = compute_commitments(payload1, DS_PK_AGGREGATION, io)[0];
+    let payload1 = flatten(Vec::new(), &pk1.limbs, bit_pk);
+    let commit_pk1 = poseidon2_hash(&payload1, &DS_PK_AGGREGATION);
 
-    let inputs = vec![commit_pk0, commit_pk1];
-    let io = [0x80000000 | inputs.len() as u32, 1];
-    let commitment_field = compute_commitments(inputs, DS_PK_AGGREGATION, io)[0];
+    let commitment_field = poseidon2_hash(&[commit_pk0, commit_pk1], &DS_PK_AGGREGATION);
     let commitment_bytes = commitment_field.into_bigint().to_bytes_le();
 
     BigInt::from_bytes_le(num_bigint::Sign::Plus, &commitment_bytes)
@@ -344,7 +341,7 @@ pub fn compute_pk_aggregation_commitment(
 
 /// Compute aggregation commitment.
 ///
-/// This matches the Noir `compute_recursive_aggregation_commitment` function exactly.
+/// Matches the Noir `compute_recursive_aggregation_commitment` function (raw Poseidon2).
 ///
 /// # Arguments
 /// * `payload` - Prepared payload as a vector of field elements
@@ -352,18 +349,15 @@ pub fn compute_pk_aggregation_commitment(
 /// # Returns
 /// A `BigInt` representing the commitment hash value
 pub fn compute_recursive_aggregation_commitment(payload: Vec<Field>) -> BigInt {
-    let input_size = payload.len() as u32;
-    let io_pattern = [0x80000000 | input_size, 1];
-
-    let commitment_field = compute_commitments(payload, DS_RECURSIVE_AGGREGATION, io_pattern)[0];
+    let commitment_field = poseidon2_hash(&payload, &DS_RECURSIVE_AGGREGATION);
     let commitment_bytes = commitment_field.into_bigint().to_bytes_le();
     BigInt::from_bytes_le(num_bigint::Sign::Plus, &commitment_bytes)
 }
 
 /// Compute CRISP ciphertext commitment.
 ///
-/// Matches the Noir `compute_ciphertext_commitment` exactly: commits ct0 and ct1
-/// separately, then hashes the two commitments together.
+/// Matches the Noir `compute_ciphertext_commitment` exactly (raw Poseidon2):
+/// commits ct0 and ct1 separately, then hashes the two commitments together.
 ///
 /// # Arguments
 /// * `ct0` - First component of the ciphertext (CRT limbs)
@@ -378,15 +372,12 @@ pub fn compute_ciphertext_commitment(
     bit_ct: u32,
 ) -> BigInt {
     let payload0 = flatten(Vec::new(), &ct0.limbs, bit_ct);
-    let io = [0x80000000 | payload0.len() as u32, 1];
-    let commit_ct0 = compute_commitments(payload0, DS_CIPHERTEXT, io)[0];
+    let commit_ct0 = poseidon2_hash(&payload0, &DS_CIPHERTEXT);
 
     let payload1 = flatten(Vec::new(), &ct1.limbs, bit_ct);
-    let commit_ct1 = compute_commitments(payload1, DS_CIPHERTEXT, io)[0];
+    let commit_ct1 = poseidon2_hash(&payload1, &DS_CIPHERTEXT);
 
-    let inputs = vec![commit_ct0, commit_ct1];
-    let io = [0x80000000 | inputs.len() as u32, 1];
-    let commitment_field = compute_commitments(inputs, DS_CIPHERTEXT, io)[0];
+    let commitment_field = poseidon2_hash(&[commit_ct0, commit_ct1], &DS_CIPHERTEXT);
     let commitment_bytes = commitment_field.into_bigint().to_bytes_le();
 
     BigInt::from_bytes_le(num_bigint::Sign::Plus, &commitment_bytes)
@@ -394,7 +385,7 @@ pub fn compute_ciphertext_commitment(
 
 /// Compute aggregated shares commitment (either sk_shares or e_sm_shares).
 ///
-/// This matches the Noir `compute_aggregated_shares_commitment` function exactly.
+/// Matches the Noir `compute_aggregated_shares_commitment` function (raw Poseidon2).
 ///
 /// # Arguments
 /// * `agg_shares` - Aggregated share polynomial (CRT limbs)
@@ -406,119 +397,7 @@ pub fn compute_aggregated_shares_commitment(agg_shares: &CrtPolynomial, bit_msg:
     let mut payload = Vec::new();
     payload = flatten(payload, &agg_shares.limbs, bit_msg);
 
-    let input_size = payload.len() as u32;
-    let io_pattern = [0x80000000 | input_size, 1];
-
-    let commitment_field = compute_commitments(payload, DS_AGGREGATED_SHARES, io_pattern)[0];
-    let commitment_bytes = commitment_field.into_bigint().to_bytes_le();
-    BigInt::from_bytes_le(num_bigint::Sign::Plus, &commitment_bytes)
-}
-
-// ============================================================================
-// COMMITMENTS FOR CHALLENGES
-// ============================================================================
-
-/// Compute public key generation challenge.
-///
-/// This matches the Noir `compute_threshold_pk_challenge` function exactly.
-///
-/// # Arguments
-/// * `payload` - Prepared payload as a vector of field elements
-///
-/// # Returns
-/// A `BigInt` representing the commitment hash value
-pub fn compute_threshold_pk_challenge(payload: Vec<Field>) -> BigInt {
-    let input_size = payload.len() as u32;
-    let io_pattern = [0x80000000 | input_size, 1];
-
-    let challenge_field = compute_commitments(payload, DS_CLG_PK_GENERATION, io_pattern)[0];
-    let challenge_bytes = challenge_field.into_bigint().to_bytes_le();
-    BigInt::from_bytes_le(num_bigint::Sign::Plus, &challenge_bytes)
-}
-
-/// Compute share encryption challenge.
-///
-/// This matches the Noir `compute_share_encryption_challenge` function exactly.
-///
-/// # Arguments
-/// * `payload` - Prepared payload as a vector of field elements
-/// * `l` - Number of moduli
-///
-/// # Returns
-/// A vector of `BigInt` challenges (2*L elements)
-pub fn compute_share_encryption_challenge(payload: Vec<Field>, l: usize) -> Vec<BigInt> {
-    let input_size = payload.len() as u32;
-    let io_pattern = [0x80000000 | input_size, (2 * l as u32)];
-
-    compute_commitments(payload, DS_CLG_SHARE_ENCRYPTION, io_pattern)
-        .into_iter()
-        .map(|challenge_field| {
-            let challenge_bytes = challenge_field.into_bigint().to_bytes_le();
-            BigInt::from_bytes_le(num_bigint::Sign::Plus, &challenge_bytes)
-        })
-        .collect()
-}
-
-/// Compute User Data Encryption challenge commitment.
-///
-/// This matches the Noir `compute_user_data_encryption_challenge_commitment` function exactly.
-/// Verifies pk_commitment using pk0is and pk1is, then generates challenges from gammas_payload.
-///
-/// # Arguments
-/// * `pk0is` - First component of public keys (CRT limbs)
-/// * `pk1is` - Second component of public keys (CRT limbs)
-/// * `gammas_payload` - Payload for generating challenges
-/// * `pk_commitment` - Expected public key commitment value
-/// * `bit_pk` - The bit width for public key coefficient bounds
-/// * `l` - Number of moduli
-///
-/// # Returns
-/// A vector of `BigInt` challenges (2*L elements)
-///
-/// # Panics
-/// Panics if the computed public key commitment doesn't match `pk_commitment`
-pub fn compute_user_data_encryption_challenge_commitment(
-    pk0is: &CrtPolynomial,
-    pk1is: &CrtPolynomial,
-    gammas_payload: Vec<Field>,
-    pk_commitment: &BigInt,
-    bit_pk: u32,
-    l: usize,
-) -> Vec<BigInt> {
-    let computed_pk_commitment = compute_pk_aggregation_commitment(pk0is, pk1is, bit_pk);
-    if computed_pk_commitment != *pk_commitment {
-        panic!(
-            "PK commitment mismatch in User Data Encryption circuit: expected {}, got {}",
-            pk_commitment, computed_pk_commitment
-        );
-    }
-
-    let input_size = gammas_payload.len() as u32;
-    let io_pattern = [0x80000000 | input_size, (2 * l as u32)];
-
-    compute_commitments(gammas_payload, DS_CLG_USER_DATA_ENCRYPTION, io_pattern)
-        .into_iter()
-        .map(|challenge_field| {
-            let challenge_bytes = challenge_field.into_bigint().to_bytes_le();
-            BigInt::from_bytes_le(num_bigint::Sign::Plus, &challenge_bytes)
-        })
-        .collect()
-}
-
-/// Compute threshold share decryption challenge.
-///
-/// This matches the Noir `compute_threshold_share_decryption_challenge` function exactly.
-///
-/// # Arguments
-/// * `payload` - Prepared payload as a vector of field elements
-///
-/// # Returns
-/// A `BigInt` representing the commitment hash value
-pub fn compute_threshold_share_decryption_challenge(payload: Vec<Field>) -> BigInt {
-    let input_size = payload.len() as u32;
-    let io_pattern = [0x80000000 | input_size, 1];
-
-    let commitment_field = compute_commitments(payload, DS_CLG_SHARE_DECRYPTION, io_pattern)[0];
+    let commitment_field = poseidon2_hash(&payload, &DS_AGGREGATED_SHARES);
     let commitment_bytes = commitment_field.into_bigint().to_bytes_le();
     BigInt::from_bytes_le(num_bigint::Sign::Plus, &commitment_bytes)
 }
@@ -529,9 +408,55 @@ mod tests {
     use crate::utils::bigint_to_field;
     use e3_polynomial::CrtPolynomial;
 
-    fn field_to_bigint(value: Field) -> BigInt {
-        let bytes = value.into_bigint().to_bytes_le();
-        BigInt::from_bytes_le(num_bigint::Sign::Plus, &bytes)
+    #[test]
+    fn poseidon2_hash_deterministic() {
+        let inputs = vec![Field::from(1u64), Field::from(2u64), Field::from(3u64)];
+        let ds: [u8; 64] = [
+            0x41, 0x42, 0x43, 0x44, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+
+        let h1 = poseidon2_hash(&inputs, &ds);
+        let h2 = poseidon2_hash(&inputs, &ds);
+        assert_eq!(h1, h2);
+        assert_ne!(h1, Field::from(0u64));
+    }
+
+    #[test]
+    fn poseidon2_hash_domain_separation() {
+        let inputs = vec![Field::from(1u64), Field::from(2u64)];
+
+        let h1 = poseidon2_hash(&inputs, &DS_PK);
+        let h2 = poseidon2_hash(&inputs, &DS_PK_GENERATION);
+        assert_ne!(
+            h1, h2,
+            "Different domain separators must produce different outputs"
+        );
+    }
+
+    #[test]
+    fn poseidon2_hash_empty_input() {
+        let inputs: Vec<Field> = vec![];
+        let h = poseidon2_hash(&inputs, &DS_PK);
+        assert_ne!(h, Field::from(0u64));
+    }
+
+    #[test]
+    fn poseidon2_hash_single_input() {
+        let inputs = vec![Field::from(42u64)];
+        let h = poseidon2_hash(&inputs, &DS_PK);
+        assert_ne!(h, Field::from(0u64));
+    }
+
+    #[test]
+    fn poseidon2_hash_large_input() {
+        // Test with more than 3 inputs (triggers multiple permutations)
+        let inputs: Vec<Field> = (0..10).map(|i| Field::from(i as u64)).collect();
+        let h = poseidon2_hash(&inputs, &DS_PK);
+        assert_ne!(h, Field::from(0u64));
     }
 
     #[test]
@@ -540,19 +465,15 @@ mod tests {
         let ct0 = CrtPolynomial::from_bigint_vectors(vec![vec![BigInt::from(1), BigInt::from(2)]]);
         let ct1 = CrtPolynomial::from_bigint_vectors(vec![vec![BigInt::from(3), BigInt::from(4)]]);
 
-        let mut payload0 = Vec::new();
-        payload0 = flatten(payload0, &ct0.limbs, bit_ct);
-        let io = [0x80000000 | payload0.len() as u32, 1];
-        let commit_ct0 = compute_commitments(payload0, DS_CIPHERTEXT, io)[0];
+        let payload0 = flatten(Vec::new(), &ct0.limbs, bit_ct);
+        let commit_ct0 = poseidon2_hash(&payload0, &DS_CIPHERTEXT);
 
-        let mut payload1 = Vec::new();
-        payload1 = flatten(payload1, &ct1.limbs, bit_ct);
-        let io = [0x80000000 | payload1.len() as u32, 1];
-        let commit_ct1 = compute_commitments(payload1, DS_CIPHERTEXT, io)[0];
+        let payload1 = flatten(Vec::new(), &ct1.limbs, bit_ct);
+        let commit_ct1 = poseidon2_hash(&payload1, &DS_CIPHERTEXT);
 
-        let inputs = vec![commit_ct0, commit_ct1];
-        let io = [0x80000000 | inputs.len() as u32, 1];
-        let expected = field_to_bigint(compute_commitments(inputs, DS_CIPHERTEXT, io)[0]);
+        let expected_field = poseidon2_hash(&[commit_ct0, commit_ct1], &DS_CIPHERTEXT);
+        let expected_bytes = expected_field.into_bigint().to_bytes_le();
+        let expected = BigInt::from_bytes_le(num_bigint::Sign::Plus, &expected_bytes);
 
         let actual = compute_ciphertext_commitment(&ct0, &ct1, bit_ct);
         assert_eq!(actual, expected);
@@ -585,62 +506,23 @@ mod tests {
         payload.push(Field::from(party_idx as u64));
         payload.push(Field::from(mod_idx as u64));
 
-        let input_size = payload.len() as u32;
-        let io_pattern = [0x80000000 | input_size, 1];
-        let expected =
-            field_to_bigint(compute_commitments(payload, DS_SHARE_ENCRYPTION, io_pattern)[0]);
+        let expected_field = poseidon2_hash(&payload, &DS_SHARE_ENCRYPTION);
+        let expected_bytes = expected_field.into_bigint().to_bytes_le();
+        let expected = BigInt::from_bytes_le(num_bigint::Sign::Plus, &expected_bytes);
 
         let actual = compute_share_encryption_commitment_from_shares(&y, party_idx, mod_idx);
         assert_eq!(actual, expected);
     }
 
     #[test]
-    fn compute_threshold_pk_challenge_returns_single_bigint() {
-        let payload = vec![Field::from(1u64), Field::from(2u64)];
-        let input_size = payload.len() as u32;
-        let io_pattern = [0x80000000 | input_size, 1];
-        let expected_challenge = field_to_bigint(
-            compute_commitments(payload.clone(), DS_CLG_PK_GENERATION, io_pattern)[0],
-        );
-
-        let challenge = compute_threshold_pk_challenge(payload);
-        assert_eq!(challenge, expected_challenge);
-    }
-
-    #[test]
-    fn compute_share_encryption_challenge_returns_2l_elements() {
-        let payload = vec![Field::from(1u64), Field::from(2u64)];
-        let l = 3;
-
-        let challenges = compute_share_encryption_challenge(payload, l);
-        assert_eq!(challenges.len(), 2 * l);
-    }
-
-    #[test]
     fn compute_recursive_aggregation_commitment_matches_manual_payload() {
         let payload = vec![Field::from(1u64), Field::from(2u64)];
 
-        let input_size = payload.len() as u32;
-        let io_pattern = [0x80000000 | input_size, 1];
-        let expected = field_to_bigint(
-            compute_commitments(payload.clone(), DS_RECURSIVE_AGGREGATION, io_pattern)[0],
-        );
+        let expected_field = poseidon2_hash(&payload, &DS_RECURSIVE_AGGREGATION);
+        let expected_bytes = expected_field.into_bigint().to_bytes_le();
+        let expected = BigInt::from_bytes_le(num_bigint::Sign::Plus, &expected_bytes);
 
         let actual = compute_recursive_aggregation_commitment(payload);
-        assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn compute_threshold_share_decryption_challenge_returns_single_bigint() {
-        let payload = vec![Field::from(1u64), Field::from(2u64)];
-
-        let input_size = payload.len() as u32;
-        let io_pattern = [0x80000000 | input_size, 1];
-        let expected = field_to_bigint(
-            compute_commitments(payload.clone(), DS_CLG_SHARE_DECRYPTION, io_pattern)[0],
-        );
-
-        let actual = compute_threshold_share_decryption_challenge(payload);
         assert_eq!(actual, expected);
     }
 }
