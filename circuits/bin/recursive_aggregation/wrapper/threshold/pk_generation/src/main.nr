@@ -5,13 +5,13 @@
 // or FITNESS FOR A PARTICULAR PURPOSE.
 
 use bb_proof_verification::{UltraHonkProof1Phase, UltraHonkVerificationKey, verify_honk_proof_non_zk_1phase};
-use lib::configs::default::threshold::{L, N};
 use lib::math::poseidon2_commitment::compute_recursive_aggregation_commitment;
 
 // Number of proofs.
 pub global N_PROOFS: u32 = 1;
 /// Number of public inputs/outputs per proof.
-pub global N_PUBLIC_INPUTS: u32 = (L * N) + 3;
+/// pk_generation returns pub (Field, Field, Field) = 3 public outputs, no pub inputs.
+pub global N_PUBLIC_INPUTS: u32 = 3;
 
 fn main(
     verification_key: UltraHonkVerificationKey,

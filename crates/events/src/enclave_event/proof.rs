@@ -97,9 +97,32 @@ impl CircuitName {
         format!("{}/{}", self.group(), self.as_str())
     }
 
-    /// Wrapper circuit path: `recursive_aggregation/wrapper/{group}/{name}`.
+    /// The base name of the wrapper circuit artifacts (JSON, VK files).
+    ///
+    /// For circuits that share a wrapper (e.g., `SkShareComputation` and
+    /// `ESmShareComputation` share `share_computation`), this returns the
+    /// shared wrapper name rather than the inner circuit name.
+    pub fn wrapper_name(&self) -> &'static str {
+        match self {
+            CircuitName::SkShareComputation | CircuitName::ESmShareComputation => {
+                "share_computation"
+            }
+            CircuitName::DecryptedSharesAggregationBn
+            | CircuitName::DecryptedSharesAggregationMod => "decrypted_shares_aggregation",
+            _ => self.as_str(),
+        }
+    }
+
+    /// Wrapper circuit path: `recursive_aggregation/wrapper/{group}/{wrapper_name}`.
+    ///
+    /// For circuits that share a wrapper directory, this returns the shared
+    /// path (e.g., `SkShareComputation` → `.../share_computation`).
     pub fn wrapper_dir_path(&self) -> String {
-        format!("recursive_aggregation/wrapper/{}", self.dir_path())
+        format!(
+            "recursive_aggregation/wrapper/{}/{}",
+            self.group(),
+            self.wrapper_name()
+        )
     }
 }
 

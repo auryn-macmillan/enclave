@@ -106,10 +106,11 @@ pub fn generate_wrapper_proof(
     };
 
     let dir_path = circuit.wrapper_dir_path();
+    let wrapper_name = circuit.wrapper_name();
     let circuit_path = prover
         .circuits_dir()
         .join(&dir_path)
-        .join(format!("{}.json", circuit.as_str()));
+        .join(format!("{}.json", wrapper_name));
     let compiled = CompiledCircuit::from_file(&circuit_path)?;
 
     let json = full_input.to_json()?;
@@ -227,10 +228,21 @@ mod tests {
         ShareDecryptionCircuit, ShareDecryptionCircuitData,
     };
     use e3_zk_helpers::computation::DkgInputType;
+    use e3_zk_helpers::dkg::share_computation::{
+        ShareComputationCircuit, ShareComputationCircuitData,
+    };
     use e3_zk_helpers::dkg::share_encryption::{
         ShareEncryptionCircuit, ShareEncryptionCircuitData,
     };
+    use e3_zk_helpers::threshold::decrypted_shares_aggregation::{
+        DecryptedSharesAggregationCircuit, DecryptedSharesAggregationCircuitData,
+    };
+    use e3_zk_helpers::threshold::pk_aggregation::{
+        PkAggregationCircuit, PkAggregationCircuitData,
+    };
     use e3_zk_helpers::threshold::pk_generation::{PkGenerationCircuit, PkGenerationCircuitData};
+    use e3_zk_helpers::threshold::share_decryption::ShareDecryptionCircuit as ThresholdShareDecryptionCircuit;
+    use e3_zk_helpers::threshold::share_decryption::ShareDecryptionCircuitData as ThresholdShareDecryptionCircuitData;
     use e3_zk_helpers::CiphernodesCommitteeSize;
     use std::env;
     use std::path::PathBuf;
@@ -484,7 +496,6 @@ mod tests {
     async fn test_generate_and_verify_share_encryption_wrapper_proof() {
         use crate::witness::{CompiledCircuit, WitnessGenerator};
         use crate::traits::Provable;
-        use std::process::Command as StdCommand;
 
         let temp = get_tempdir().unwrap();
         let mut backend = test_backend(temp.path());
@@ -812,5 +823,621 @@ mod tests {
             eprintln!("work_dir: {:?}", prover.work_dir());
         }
         assert!(verified, "fold proof should verify successfully");
+    }
+
+    /// Test for threshold/pk_aggregation wrapper (1 standard proof, non-multi-phase).
+    #[tokio::test]
+    async fn test_generate_and_verify_pk_aggregation_wrapper_proof() {
+        let temp = get_tempdir().unwrap();
+        let mut backend = test_backend(temp.path());
+
+        backend.ensure_installed().await.expect("ensure_installed");
+
+        let dist = dist_circuits_path();
+        let wrapper_src = dist
+            .join("recursive_aggregation")
+            .join("wrapper")
+            .join("threshold")
+            .join("pk_aggregation");
+        if wrapper_src.join("pk_aggregation.json").exists()
+            && wrapper_src.join("pk_aggregation.vk_recursive").exists()
+        {
+            backend.circuits_dir = dist.clone();
+        }
+
+        let prover = ZkProver::new(&backend);
+
+        let wrapper_dir = backend
+            .circuits_dir
+            .join("recursive_aggregation")
+            .join("wrapper")
+            .join("threshold")
+            .join("pk_aggregation");
+        if !wrapper_dir.join("pk_aggregation.json").exists()
+            || !wrapper_dir.join("pk_aggregation.vk_recursive").exists()
+        {
+            panic!(
+                "pk_aggregation wrapper circuit not found at {} — run pnpm build:circuits",
+                wrapper_dir.display()
+            );
+        }
+
+        let preset = BfvPreset::InsecureThreshold512;
+        let committee = CiphernodesCommitteeSize::Small.values();
+
+        let sample = PkAggregationCircuitData::generate_sample(preset, committee)
+            .expect("pk_aggregation sample generation should succeed");
+
+        let e3_id = "aggregation-test-pk-agg-wrapper";
+        let start = std::time::Instant::now();
+        let wrapper_proof = PkAggregationCircuit
+            .aggregate_proof(&prover, &preset, &[sample], None, e3_id)
+            .expect("pk_aggregation aggregate_proof (1 input) should succeed");
+        let elapsed = start.elapsed();
+        eprintln!("pk_aggregation 1-proof wrapper generation: {:?}", elapsed);
+
+        assert!(!wrapper_proof.data.is_empty());
+        assert!(!wrapper_proof.public_signals.is_empty());
+
+        let verified = prover
+            .verify_wrapper_proof(&wrapper_proof, e3_id, 0)
+            .expect("verification should not error");
+        assert!(
+            verified,
+            "pk_aggregation wrapper proof should verify successfully"
+        );
+
+        prover.cleanup(&format!("{}_inner_0", e3_id)).unwrap();
+        prover.cleanup(e3_id).unwrap();
+    }
+
+    /// Test for threshold/share_decryption wrapper (1 multi-phase proof).
+    /// Uses newly fixed N_PUBLIC_INPUTS = 2 + 2*L*N = 2050.
+    #[tokio::test]
+    async fn test_generate_and_verify_threshold_share_decryption_wrapper_proof() {
+        let temp = get_tempdir().unwrap();
+        let mut backend = test_backend(temp.path());
+
+        backend.ensure_installed().await.expect("ensure_installed");
+
+        let dist = dist_circuits_path();
+        let wrapper_src = dist
+            .join("recursive_aggregation")
+            .join("wrapper")
+            .join("threshold")
+            .join("share_decryption");
+        if wrapper_src.join("share_decryption.json").exists()
+            && wrapper_src.join("share_decryption.vk_recursive").exists()
+        {
+            backend.circuits_dir = dist.clone();
+        }
+
+        let prover = ZkProver::new(&backend);
+
+        let wrapper_dir = backend
+            .circuits_dir
+            .join("recursive_aggregation")
+            .join("wrapper")
+            .join("threshold")
+            .join("share_decryption");
+        if !wrapper_dir.join("share_decryption.json").exists()
+            || !wrapper_dir.join("share_decryption.vk_recursive").exists()
+        {
+            panic!(
+                "threshold/share_decryption wrapper circuit not found at {} — run pnpm build:circuits",
+                wrapper_dir.display()
+            );
+        }
+
+        let preset = BfvPreset::InsecureThreshold512;
+        let committee = CiphernodesCommitteeSize::Small.values();
+
+        let sample = ThresholdShareDecryptionCircuitData::generate_sample(preset, committee)
+            .expect("threshold share_decryption sample generation should succeed");
+
+        let e3_id = "aggregation-test-threshold-sd-wrapper";
+        let start = std::time::Instant::now();
+        let wrapper_proof = ThresholdShareDecryptionCircuit
+            .aggregate_proof(&prover, &preset, &[sample], None, e3_id)
+            .expect("threshold share_decryption aggregate_proof (1 input) should succeed");
+        let elapsed = start.elapsed();
+        eprintln!(
+            "threshold/share_decryption 1-proof wrapper generation: {:?}",
+            elapsed
+        );
+
+        assert!(!wrapper_proof.data.is_empty());
+        assert!(!wrapper_proof.public_signals.is_empty());
+
+        let verified = prover
+            .verify_wrapper_proof(&wrapper_proof, e3_id, 0)
+            .expect("verification should not error");
+        assert!(
+            verified,
+            "threshold/share_decryption wrapper proof should verify successfully"
+        );
+
+        prover.cleanup(&format!("{}_inner_0", e3_id)).unwrap();
+        prover.cleanup(e3_id).unwrap();
+    }
+
+    /// Test for dkg/share_computation wrapper (2 proofs of the same variant — both sk).
+    /// The wrapper takes 2 proofs with a single VK, so both must be from the same inner circuit.
+    #[tokio::test]
+    async fn test_generate_and_verify_share_computation_wrapper_proof() {
+        let temp = get_tempdir().unwrap();
+        let mut backend = test_backend(temp.path());
+
+        backend.ensure_installed().await.expect("ensure_installed");
+
+        let dist = dist_circuits_path();
+        let wrapper_src = dist
+            .join("recursive_aggregation")
+            .join("wrapper")
+            .join("dkg")
+            .join("share_computation");
+        if wrapper_src.join("share_computation.json").exists()
+            && wrapper_src.join("share_computation.vk_recursive").exists()
+        {
+            backend.circuits_dir = dist.clone();
+        }
+
+        let prover = ZkProver::new(&backend);
+
+        let wrapper_dir = backend
+            .circuits_dir
+            .join("recursive_aggregation")
+            .join("wrapper")
+            .join("dkg")
+            .join("share_computation");
+        if !wrapper_dir.join("share_computation.json").exists()
+            || !wrapper_dir.join("share_computation.vk_recursive").exists()
+        {
+            panic!(
+                "share_computation wrapper circuit not found at {} — run pnpm build:circuits",
+                wrapper_dir.display()
+            );
+        }
+
+        let preset = BfvPreset::InsecureThreshold512;
+        let committee = CiphernodesCommitteeSize::Small.values();
+
+        // Both samples use SecretKey variant so they resolve to the same inner circuit (SkShareComputation)
+        let sample_a = ShareComputationCircuitData::generate_sample(
+            preset,
+            committee.clone(),
+            DkgInputType::SecretKey,
+        )
+        .expect("share_computation sample A generation should succeed");
+        let sample_b = ShareComputationCircuitData::generate_sample(
+            preset,
+            committee,
+            DkgInputType::SecretKey,
+        )
+        .expect("share_computation sample B generation should succeed");
+
+        let e3_id = "aggregation-test-share-comp-wrapper";
+        let start = std::time::Instant::now();
+        let wrapper_proof = ShareComputationCircuit
+            .aggregate_proof(&prover, &preset, &[sample_a, sample_b], None, e3_id)
+            .expect("share_computation aggregate_proof (2 inputs) should succeed");
+        let elapsed = start.elapsed();
+        eprintln!(
+            "share_computation 2-proof wrapper generation: {:?}",
+            elapsed
+        );
+
+        assert!(!wrapper_proof.data.is_empty());
+        assert!(!wrapper_proof.public_signals.is_empty());
+
+        let verified = prover
+            .verify_wrapper_proof(&wrapper_proof, e3_id, 0)
+            .expect("verification should not error");
+        assert!(
+            verified,
+            "share_computation wrapper proof should verify successfully"
+        );
+
+        prover.cleanup(&format!("{}_inner_0", e3_id)).unwrap();
+        prover.cleanup(&format!("{}_inner_1", e3_id)).unwrap();
+        prover.cleanup(e3_id).unwrap();
+    }
+
+    /// Test for threshold/decrypted_shares_aggregation wrapper (1 standard proof).
+    /// Uses wrapper_name fix: DecryptedSharesAggregationMod -> wrapper_name "decrypted_shares_aggregation".
+    #[tokio::test]
+    async fn test_generate_and_verify_decrypted_shares_aggregation_wrapper_proof() {
+        let temp = get_tempdir().unwrap();
+        let mut backend = test_backend(temp.path());
+
+        backend.ensure_installed().await.expect("ensure_installed");
+
+        let dist = dist_circuits_path();
+        let wrapper_src = dist
+            .join("recursive_aggregation")
+            .join("wrapper")
+            .join("threshold")
+            .join("decrypted_shares_aggregation");
+        if wrapper_src
+            .join("decrypted_shares_aggregation.json")
+            .exists()
+            && wrapper_src
+                .join("decrypted_shares_aggregation.vk_recursive")
+                .exists()
+        {
+            backend.circuits_dir = dist.clone();
+        }
+
+        let prover = ZkProver::new(&backend);
+
+        let wrapper_dir = backend
+            .circuits_dir
+            .join("recursive_aggregation")
+            .join("wrapper")
+            .join("threshold")
+            .join("decrypted_shares_aggregation");
+        if !wrapper_dir
+            .join("decrypted_shares_aggregation.json")
+            .exists()
+            || !wrapper_dir
+                .join("decrypted_shares_aggregation.vk_recursive")
+                .exists()
+        {
+            panic!(
+                "decrypted_shares_aggregation wrapper circuit not found at {} — run pnpm build:circuits",
+                wrapper_dir.display()
+            );
+        }
+
+        let preset = BfvPreset::InsecureThreshold512;
+        let committee = CiphernodesCommitteeSize::Small.values();
+
+        let sample =
+            DecryptedSharesAggregationCircuitData::generate_sample(preset, committee)
+                .expect("decrypted_shares_aggregation sample generation should succeed");
+
+        let e3_id = "aggregation-test-dsa-wrapper";
+        let start = std::time::Instant::now();
+        let wrapper_proof = DecryptedSharesAggregationCircuit
+            .aggregate_proof(&prover, &preset, &[sample], None, e3_id)
+            .expect("decrypted_shares_aggregation aggregate_proof (1 input) should succeed");
+        let elapsed = start.elapsed();
+        eprintln!(
+            "decrypted_shares_aggregation 1-proof wrapper generation: {:?}",
+            elapsed
+        );
+
+        assert!(!wrapper_proof.data.is_empty());
+        assert!(!wrapper_proof.public_signals.is_empty());
+
+        let verified = prover
+            .verify_wrapper_proof(&wrapper_proof, e3_id, 0)
+            .expect("verification should not error");
+        assert!(
+            verified,
+            "decrypted_shares_aggregation wrapper proof should verify successfully"
+        );
+
+        prover.cleanup(&format!("{}_inner_0", e3_id)).unwrap();
+        prover.cleanup(e3_id).unwrap();
+    }
+
+    /// Test for threshold/user_data_encryption wrapper (custom: ct0 + ct1 inner proofs).
+    /// This wrapper is unique — it takes TWO different inner circuit proofs (ct0 and ct1) with
+    /// different VKs and different public input counts (4 for ct0, 3 for ct1).
+    /// Both use UltraHonkProof1Phase (453 fields, multi-phase).
+    #[tokio::test]
+    async fn test_generate_and_verify_user_data_encryption_wrapper_proof() {
+        use crate::circuits::utils::inputs_json_to_input_map;
+        use crate::witness::{CompiledCircuit, WitnessGenerator};
+        use e3_zk_helpers::circuits::computation::Computation;
+        use e3_zk_helpers::threshold::user_data_encryption::circuit::UserDataEncryptionCircuitData;
+        use e3_zk_helpers::threshold::user_data_encryption::computation::Inputs;
+        use noirc_abi::InputMap;
+
+        let temp = get_tempdir().unwrap();
+        let mut backend = test_backend(temp.path());
+
+        backend.ensure_installed().await.expect("ensure_installed");
+
+        let dist = dist_circuits_path();
+        let wrapper_src = dist
+            .join("recursive_aggregation")
+            .join("wrapper")
+            .join("threshold")
+            .join("user_data_encryption");
+        if wrapper_src.join("user_data_encryption.json").exists()
+            && wrapper_src
+                .join("user_data_encryption.vk_recursive")
+                .exists()
+        {
+            backend.circuits_dir = dist.clone();
+        }
+
+        let prover = ZkProver::new(&backend);
+
+        let wrapper_dir = backend
+            .circuits_dir
+            .join("recursive_aggregation")
+            .join("wrapper")
+            .join("threshold")
+            .join("user_data_encryption");
+        if !wrapper_dir.join("user_data_encryption.json").exists()
+            || !wrapper_dir
+                .join("user_data_encryption.vk_recursive")
+                .exists()
+        {
+            panic!(
+                "user_data_encryption wrapper circuit not found at {} — run pnpm build:circuits",
+                wrapper_dir.display()
+            );
+        }
+
+        let preset = BfvPreset::InsecureThreshold512;
+
+        // Generate combined inputs for both ct0 and ct1
+        let sample = UserDataEncryptionCircuitData::generate_sample(preset)
+            .expect("user_data_encryption sample generation should succeed");
+        let inputs = Inputs::compute(preset, &sample)
+            .expect("Inputs::compute should succeed");
+        let json = inputs.to_json().expect("to_json should succeed");
+        let input_map = inputs_json_to_input_map(&json).expect("inputs_json_to_input_map");
+
+        let witness_gen = WitnessGenerator::new();
+
+        // ========== Generate ct0 inner proof ==========
+        let ct0_circuit_path = prover
+            .circuits_dir()
+            .join("threshold")
+            .join("user_data_encryption_ct0")
+            .join("user_data_encryption_ct0.json");
+        let ct0_compiled = CompiledCircuit::from_file(&ct0_circuit_path)
+            .expect("ct0 circuit load should succeed");
+        // Filter input_map to only include parameters in ct0's ABI
+        let ct0_param_names: std::collections::HashSet<String> = ct0_compiled
+            .abi
+            .parameters
+            .iter()
+            .map(|p| p.name.clone())
+            .collect();
+        let ct0_input_map: InputMap = input_map
+            .iter()
+            .filter(|(k, _)| ct0_param_names.contains(k.as_str()))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let ct0_witness = witness_gen
+            .generate_witness(&ct0_compiled, ct0_input_map)
+            .expect("ct0 witness generation should succeed");
+
+        // Use bb prove directly since there's no CircuitName for ct0
+        let ct0_e3_id = "ude-wrapper-test_ct0";
+        let ct0_job_dir = prover.work_dir().join(ct0_e3_id);
+        std::fs::create_dir_all(&ct0_job_dir).unwrap();
+        std::fs::write(ct0_job_dir.join("witness.gz"), &ct0_witness).unwrap();
+        let ct0_vk_path = prover
+            .circuits_dir()
+            .join("threshold")
+            .join("user_data_encryption_ct0")
+            .join("user_data_encryption_ct0.vk_recursive");
+        let ct0_out = ct0_job_dir.join("out");
+        let output = std::process::Command::new(prover.bb_binary())
+            .args([
+                "prove",
+                "-b", &ct0_circuit_path.to_string_lossy(),
+                "-w", &ct0_job_dir.join("witness.gz").to_string_lossy(),
+                "-k", &ct0_vk_path.to_string_lossy(),
+                "-o", &ct0_out.to_string_lossy(),
+                "-v",
+                "-t", "noir-recursive-no-zk",
+            ])
+            .output()
+            .expect("bb prove ct0 should execute");
+        assert!(
+            output.status.success(),
+            "bb prove ct0 failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let ct0_proof_data = std::fs::read(ct0_out.join("proof")).unwrap();
+        let ct0_public_inputs = std::fs::read(ct0_out.join("public_inputs")).unwrap();
+        eprintln!(
+            "ct0 inner proof: {} bytes ({} fields), public_inputs: {} bytes ({} fields)",
+            ct0_proof_data.len(),
+            ct0_proof_data.len() / 32,
+            ct0_public_inputs.len(),
+            ct0_public_inputs.len() / 32,
+        );
+
+        // ========== Generate ct1 inner proof ==========
+        let ct1_circuit_path = prover
+            .circuits_dir()
+            .join("threshold")
+            .join("user_data_encryption_ct1")
+            .join("user_data_encryption_ct1.json");
+        let ct1_compiled = CompiledCircuit::from_file(&ct1_circuit_path)
+            .expect("ct1 circuit load should succeed");
+        // Filter input_map to only include parameters in ct1's ABI
+        let ct1_param_names: std::collections::HashSet<String> = ct1_compiled
+            .abi
+            .parameters
+            .iter()
+            .map(|p| p.name.clone())
+            .collect();
+        let ct1_input_map: InputMap = input_map
+            .iter()
+            .filter(|(k, _)| ct1_param_names.contains(k.as_str()))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let ct1_witness = witness_gen
+            .generate_witness(&ct1_compiled, ct1_input_map)
+            .expect("ct1 witness generation should succeed");
+
+        let ct1_e3_id = "ude-wrapper-test_ct1";
+        let ct1_job_dir = prover.work_dir().join(ct1_e3_id);
+        std::fs::create_dir_all(&ct1_job_dir).unwrap();
+        std::fs::write(ct1_job_dir.join("witness.gz"), &ct1_witness).unwrap();
+        let ct1_vk_path = prover
+            .circuits_dir()
+            .join("threshold")
+            .join("user_data_encryption_ct1")
+            .join("user_data_encryption_ct1.vk_recursive");
+        let ct1_out = ct1_job_dir.join("out");
+        let output = std::process::Command::new(prover.bb_binary())
+            .args([
+                "prove",
+                "-b", &ct1_circuit_path.to_string_lossy(),
+                "-w", &ct1_job_dir.join("witness.gz").to_string_lossy(),
+                "-k", &ct1_vk_path.to_string_lossy(),
+                "-o", &ct1_out.to_string_lossy(),
+                "-v",
+                "-t", "noir-recursive-no-zk",
+            ])
+            .output()
+            .expect("bb prove ct1 should execute");
+        assert!(
+            output.status.success(),
+            "bb prove ct1 failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let ct1_proof_data = std::fs::read(ct1_out.join("proof")).unwrap();
+        let ct1_public_inputs = std::fs::read(ct1_out.join("public_inputs")).unwrap();
+        eprintln!(
+            "ct1 inner proof: {} bytes ({} fields), public_inputs: {} bytes ({} fields)",
+            ct1_proof_data.len(),
+            ct1_proof_data.len() / 32,
+            ct1_public_inputs.len(),
+            ct1_public_inputs.len() / 32,
+        );
+
+        // ========== Load VK artifacts for both inner circuits ==========
+        let ct0_vk_recursive = std::fs::read(&ct0_vk_path).unwrap();
+        let ct1_vk_recursive = std::fs::read(&ct1_vk_path).unwrap();
+        let ct0_vk_hash = std::fs::read(
+            prover
+                .circuits_dir()
+                .join("threshold")
+                .join("user_data_encryption_ct0")
+                .join("user_data_encryption_ct0.vk_recursive_hash"),
+        )
+        .unwrap();
+        let ct1_vk_hash = std::fs::read(
+            prover
+                .circuits_dir()
+                .join("threshold")
+                .join("user_data_encryption_ct1")
+                .join("user_data_encryption_ct1.vk_recursive_hash"),
+        )
+        .unwrap();
+
+        let ct0_vk_fields = bytes_to_field_strings(&ct0_vk_recursive).unwrap();
+        let ct1_vk_fields = bytes_to_field_strings(&ct1_vk_recursive).unwrap();
+        let ct0_proof_fields = bytes_to_field_strings(&ct0_proof_data).unwrap();
+        let ct1_proof_fields = bytes_to_field_strings(&ct1_proof_data).unwrap();
+        let ct0_pi_fields = bytes_to_field_strings(&ct0_public_inputs).unwrap();
+        let ct1_pi_fields = bytes_to_field_strings(&ct1_public_inputs).unwrap();
+        // Key hash is a single 32-byte field element
+        let ct0_key_hash_field = bytes_to_field_strings(&ct0_vk_hash).unwrap();
+        let ct1_key_hash_field = bytes_to_field_strings(&ct1_vk_hash).unwrap();
+
+        eprintln!(
+            "ct0: vk={} fields, proof={} fields, pi={} fields",
+            ct0_vk_fields.len(),
+            ct0_proof_fields.len(),
+            ct0_pi_fields.len(),
+        );
+        eprintln!(
+            "ct1: vk={} fields, proof={} fields, pi={} fields",
+            ct1_vk_fields.len(),
+            ct1_proof_fields.len(),
+            ct1_pi_fields.len(),
+        );
+
+        assert_eq!(ct0_pi_fields.len(), 4, "ct0 should have 4 public outputs");
+        assert_eq!(ct1_pi_fields.len(), 3, "ct1 should have 3 public outputs");
+
+        // ========== Build wrapper input JSON ==========
+        // The wrapper circuit has parameters:
+        //   ct0_verification_key, ct0_proof, ct0_public_inputs: [Field; 4], ct0_key_hash: pub Field,
+        //   ct1_verification_key, ct1_proof, ct1_public_inputs: [Field; 3], ct1_key_hash: pub Field,
+        let wrapper_json = serde_json::json!({
+            "ct0_verification_key": ct0_vk_fields,
+            "ct0_proof": ct0_proof_fields,
+            "ct0_public_inputs": ct0_pi_fields,
+            "ct0_key_hash": ct0_key_hash_field[0],
+            "ct1_verification_key": ct1_vk_fields,
+            "ct1_proof": ct1_proof_fields,
+            "ct1_public_inputs": ct1_pi_fields,
+            "ct1_key_hash": ct1_key_hash_field[0],
+        });
+
+        let wrapper_input_map = inputs_json_to_input_map(&wrapper_json)
+            .expect("wrapper inputs_json_to_input_map");
+
+        // ========== Generate wrapper witness and proof ==========
+        let wrapper_circuit_path = wrapper_dir.join("user_data_encryption.json");
+        let wrapper_compiled = CompiledCircuit::from_file(&wrapper_circuit_path)
+            .expect("wrapper circuit load should succeed");
+        let wrapper_witness = witness_gen
+            .generate_witness(&wrapper_compiled, wrapper_input_map)
+            .expect("wrapper witness generation should succeed");
+
+        let e3_id = "ude-wrapper-test";
+        let wrapper_job_dir = prover.work_dir().join(e3_id);
+        std::fs::create_dir_all(&wrapper_job_dir).unwrap();
+        std::fs::write(wrapper_job_dir.join("witness.gz"), &wrapper_witness).unwrap();
+        let wrapper_vk_path = wrapper_dir.join("user_data_encryption.vk_recursive");
+        let wrapper_out = wrapper_job_dir.join("out");
+        let output = std::process::Command::new(prover.bb_binary())
+            .args([
+                "prove",
+                "-b", &wrapper_circuit_path.to_string_lossy(),
+                "-w", &wrapper_job_dir.join("witness.gz").to_string_lossy(),
+                "-k", &wrapper_vk_path.to_string_lossy(),
+                "-o", &wrapper_out.to_string_lossy(),
+                "-v",
+                "-t", "noir-recursive-no-zk",
+            ])
+            .output()
+            .expect("bb prove wrapper should execute");
+        assert!(
+            output.status.success(),
+            "bb prove wrapper failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let wrapper_proof_data = std::fs::read(wrapper_out.join("proof")).unwrap();
+        let wrapper_public_inputs = std::fs::read(wrapper_out.join("public_inputs")).unwrap();
+        eprintln!(
+            "user_data_encryption wrapper proof: {} bytes ({} fields), public_inputs: {} bytes ({} fields)",
+            wrapper_proof_data.len(),
+            wrapper_proof_data.len() / 32,
+            wrapper_public_inputs.len(),
+            wrapper_public_inputs.len() / 32,
+        );
+
+        // ========== Verify wrapper proof ==========
+        std::fs::write(wrapper_job_dir.join("proof"), &wrapper_proof_data).unwrap();
+        std::fs::write(wrapper_job_dir.join("public_inputs"), &wrapper_public_inputs).unwrap();
+        let output = std::process::Command::new(prover.bb_binary())
+            .args([
+                "verify",
+                "-p", &wrapper_job_dir.join("proof").to_string_lossy(),
+                "-i", &wrapper_job_dir.join("public_inputs").to_string_lossy(),
+                "-k", &wrapper_vk_path.to_string_lossy(),
+                "-t", "noir-recursive-no-zk",
+            ])
+            .output()
+            .expect("bb verify wrapper should execute");
+        let verified = output.status.success();
+        if !verified {
+            eprintln!(
+                "wrapper verification FAILED: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        assert!(
+            verified,
+            "user_data_encryption wrapper proof should verify successfully"
+        );
+
+        eprintln!("user_data_encryption wrapper test PASSED");
     }
 }

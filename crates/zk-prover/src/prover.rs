@@ -74,11 +74,12 @@ impl ZkProver {
         witness_data: &[u8],
         e3_id: &str,
     ) -> Result<Proof, ZkError> {
-        self.generate_proof_impl(
+        self.generate_proof_impl_named(
             circuit,
             witness_data,
             e3_id,
             &circuit.wrapper_dir_path(),
+            circuit.wrapper_name(),
             Some("noir-recursive-no-zk"),
         )
     }
@@ -115,6 +116,25 @@ impl ZkProver {
         dir_path: &str,
         verifier_target: Option<&str>,
     ) -> Result<Proof, ZkError> {
+        self.generate_proof_impl_named(
+            circuit,
+            witness_data,
+            e3_id,
+            dir_path,
+            circuit.as_str(),
+            verifier_target,
+        )
+    }
+
+    fn generate_proof_impl_named(
+        &self,
+        circuit: CircuitName,
+        witness_data: &[u8],
+        e3_id: &str,
+        dir_path: &str,
+        file_stem: &str,
+        verifier_target: Option<&str>,
+    ) -> Result<Proof, ZkError> {
         if !self.bb_binary.exists() {
             return Err(ZkError::BbNotInstalled);
         }
@@ -125,8 +145,8 @@ impl ZkProver {
         };
 
         let circuit_dir = self.circuits_dir.join(dir_path);
-        let circuit_path = circuit_dir.join(format!("{}.json", circuit.as_str()));
-        let vk_path = circuit_dir.join(format!("{}.vk{vk_suffix}", circuit.as_str()));
+        let circuit_path = circuit_dir.join(format!("{}.json", file_stem));
+        let vk_path = circuit_dir.join(format!("{}.vk{vk_suffix}", file_stem));
 
         if !circuit_path.exists() {
             return Err(ZkError::CircuitNotFound(format!(
@@ -257,11 +277,12 @@ impl ZkProver {
         e3_id: &str,
         party_id: u64,
     ) -> Result<bool, ZkError> {
-        self.verify_proof_impl(
+        self.verify_proof_impl_named(
             proof.circuit,
             &proof.data,
             &proof.public_signals,
             proof.circuit.wrapper_dir_path(),
+            proof.circuit.wrapper_name(),
             e3_id,
             party_id,
             Some("noir-recursive-no-zk"),
@@ -303,6 +324,29 @@ impl ZkProver {
         party_id: u64,
         verifier_target: Option<&str>,
     ) -> Result<bool, ZkError> {
+        self.verify_proof_impl_named(
+            circuit,
+            proof_data,
+            public_signals,
+            dir_path,
+            circuit.as_str(),
+            e3_id,
+            party_id,
+            verifier_target,
+        )
+    }
+
+    fn verify_proof_impl_named(
+        &self,
+        circuit: CircuitName,
+        proof_data: &[u8],
+        public_signals: &[u8],
+        dir_path: String,
+        file_stem: &str,
+        e3_id: &str,
+        party_id: u64,
+        verifier_target: Option<&str>,
+    ) -> Result<bool, ZkError> {
         if !self.bb_binary.exists() {
             return Err(ZkError::BbNotInstalled);
         }
@@ -314,7 +358,7 @@ impl ZkProver {
         let vk_path = self
             .circuits_dir
             .join(&dir_path)
-            .join(format!("{}.vk{vk_suffix}", circuit.as_str()));
+            .join(format!("{}.vk{vk_suffix}", file_stem));
         if !vk_path.exists() {
             return Err(ZkError::CircuitNotFound(format!(
                 "VK not found: {}",

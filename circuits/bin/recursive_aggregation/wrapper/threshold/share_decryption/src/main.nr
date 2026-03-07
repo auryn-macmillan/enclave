@@ -11,7 +11,9 @@ use lib::math::poseidon2_commitment::compute_recursive_aggregation_commitment;
 // Number of proofs.
 pub global N_PROOFS: u32 = 1;
 /// Number of public inputs/outputs per proof.
-pub global N_PUBLIC_INPUTS: u32 = 2 + 3 * L * N;
+/// share_decryption has 2 pub Field params + pub [Polynomial<N>; L] ct0 + pub [Polynomial<N>; L] ct1
+/// = 2 + L*N + L*N = 2 + 2*L*N
+pub global N_PUBLIC_INPUTS: u32 = 2 + 2 * L * N;
 
 fn main(
     verification_key: UltraHonkVerificationKey,

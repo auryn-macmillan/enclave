@@ -52,7 +52,7 @@ pub fn load_wrapper_vk_artifacts(
     circuit: CircuitName,
 ) -> Result<VkArtifacts, ZkError> {
     let circuit_dir = circuits_dir.join(circuit.wrapper_dir_path());
-    load_vk_from_dir(&circuit_dir, circuit.as_str())
+    load_vk_from_dir(&circuit_dir, circuit.wrapper_name())
 }
 
 /// Loads recursive VK artifacts from `.vk_recursive` and `.vk_recursive_hash`.
