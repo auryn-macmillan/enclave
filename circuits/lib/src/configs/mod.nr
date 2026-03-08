@@ -6,5 +6,5 @@
 
 pub mod default;
 pub mod committee;
-pub mod insecure;
+// pub mod insecure; // Temporarily disabled for medium committee benchmark
 pub mod secure;

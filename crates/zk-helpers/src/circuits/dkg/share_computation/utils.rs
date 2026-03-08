@@ -71,3 +71,39 @@ pub fn parity_matrix_constant_string(
         parity_matrix_strings.join(",\n    ")
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use e3_fhe_params::{build_pair_for_preset, BfvPreset};
+
+    #[test]
+    fn gen_parity_matrix_large_insecure() {
+        let (threshold_params, _) = build_pair_for_preset(BfvPreset::InsecureThreshold512).unwrap();
+        let matrix_str = parity_matrix_constant_string(&threshold_params, 80, 39).unwrap();
+        println!(
+            "\n=== INSECURE PARITY MATRIX (N_PARTIES=80, T=39) ===\n{}\n",
+            matrix_str
+        );
+    }
+
+    #[test]
+    fn gen_parity_matrix_large_secure() {
+        let (threshold_params, _) = build_pair_for_preset(BfvPreset::SecureThreshold8192).unwrap();
+        let matrix_str = parity_matrix_constant_string(&threshold_params, 80, 39).unwrap();
+        println!(
+            "\n=== SECURE PARITY MATRIX (N_PARTIES=80, T=39) ===\n{}\n",
+            matrix_str
+        );
+    }
+
+    #[test]
+    fn gen_parity_matrix_medium_secure() {
+        let (threshold_params, _) = build_pair_for_preset(BfvPreset::SecureThreshold8192).unwrap();
+        let matrix_str = parity_matrix_constant_string(&threshold_params, 20, 9).unwrap();
+        println!(
+            "\n=== SECURE PARITY MATRIX (N_PARTIES=20, T=9) ===\n{}\n",
+            matrix_str
+        );
+    }
+}

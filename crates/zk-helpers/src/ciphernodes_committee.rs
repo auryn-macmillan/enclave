@@ -30,6 +30,18 @@ pub struct CiphernodesCommittee {
 }
 
 impl CiphernodesCommitteeSize {
+    /// Derive the committee size variant from the total number of parties.
+    ///
+    /// Returns `None` if `n` does not match any known committee size.
+    pub fn from_n(n: u64) -> Option<Self> {
+        match n {
+            5 => Some(CiphernodesCommitteeSize::Small),
+            20 => Some(CiphernodesCommitteeSize::Medium),
+            80 => Some(CiphernodesCommitteeSize::Large),
+            _ => None,
+        }
+    }
+
     /// Returns `(num_parties, num_honest_parties, threshold)` for this size.
     pub fn values(self) -> CiphernodesCommittee {
         match self {
@@ -38,18 +50,16 @@ impl CiphernodesCommitteeSize {
                 h: 5,
                 threshold: 2,
             },
-            _ => unreachable!(),
+            CiphernodesCommitteeSize::Medium => CiphernodesCommittee {
+                n: 20,
+                h: 20,
+                threshold: 9,
+            },
+            CiphernodesCommitteeSize::Large => CiphernodesCommittee {
+                n: 80,
+                h: 80,
+                threshold: 39,
+            },
         }
-        // @todo add the other committee sizes
-        // CiphernodesCommitteeSize::Medium => CiphernodesCommittee {
-        //     n: 5,
-        //     h: 5,
-        //     threshold: 2,
-        // },
-        // CiphernodesCommitteeSize::Large => CiphernodesCommittee {
-        //     n: 5,
-        //     h: 5,
-        //     threshold: 2,
-        // },
     }
 }

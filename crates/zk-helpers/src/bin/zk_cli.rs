@@ -163,6 +163,9 @@ struct Cli {
     /// When used with --toml: do not write configs.nr (e.g. for benchmarks where circuits use lib configs).
     #[arg(long, default_value = "false")]
     no_configs: bool,
+    /// Committee size: "small" (5 parties), "medium" (20 parties), or "large" (80 parties).
+    #[arg(long, default_value = "small")]
+    committee: String,
 }
 
 fn main() -> Result<()> {
@@ -265,9 +268,21 @@ fn main() -> Result<()> {
         no_configs,
     );
 
+    let committee_size = match args.committee.to_lowercase().as_str() {
+        "small" => CiphernodesCommitteeSize::Small,
+        "medium" => CiphernodesCommitteeSize::Medium,
+        "large" => CiphernodesCommitteeSize::Large,
+        other => {
+            return Err(anyhow!(
+                "unknown committee size: {}. Use \"small\", \"medium\", or \"large\"",
+                other
+            ))
+        }
+    };
+
     run_with_spinner(|| {
         let circuit_name = circuit_meta.name();
-        let committee = CiphernodesCommitteeSize::Small.values();
+        let committee = committee_size.values();
         let artifacts = match circuit_name {
             name if name == <PkCircuit as Circuit>::NAME => {
                 let sample = PkCircuitData::generate_sample(preset)?;
