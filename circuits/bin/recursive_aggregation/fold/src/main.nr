@@ -31,9 +31,10 @@ fn main(
     );
 
     // Hash the two commitments with Poseidon so the verifier can check the folded proof used the expected public inputs.
-    let commitment = compute_recursive_aggregation_commitment(
-        [proof1_public_inputs[1], proof2_public_inputs[1]],
-    );
+    let commitment = compute_recursive_aggregation_commitment([
+        proof1_public_inputs[1],
+        proof2_public_inputs[1],
+    ]);
 
     // Hash the full VK chain: attested key hashes from inner proofs (public_inputs[0]) plus the VKs
     // that verified them (proof*_key_hash). This combined fingerprint lets the verifier check the
@@ -41,8 +42,8 @@ fn main(
     let key_hash = compute_vk_hash([
         proof1_public_inputs[0], // key_hash attested by proof1 (from its inner folds)
         proof2_public_inputs[0], // key_hash attested by proof2 (from its inner folds)
-        proof1_key_hash,         // VK hash of circuit that produced proof1
-        proof2_key_hash,         // VK hash of circuit that produced proof2
+        proof1_key_hash, // VK hash of circuit that produced proof1
+        proof2_key_hash, // VK hash of circuit that produced proof2
     ]);
 
     (key_hash, commitment)

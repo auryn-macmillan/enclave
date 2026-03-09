@@ -4,11 +4,11 @@
 // without even the implied warranty of MERCHANTABILITY
 // or FITNESS FOR A PARTICULAR PURPOSE.
 
-use crate::math::poseidon2_commitment::compute_dkg_pk_commitment;
-use crate::math::poseidon2_commitment::compute_share_encryption_commitment_from_message;
 use crate::math::helpers::flatten_arr;
 use crate::math::modulo::U128::ModU128;
 use crate::math::polynomial::Polynomial;
+use crate::math::poseidon2_commitment::compute_dkg_pk_commitment;
+use crate::math::poseidon2_commitment::compute_share_encryption_commitment_from_message;
 use std::phase::challenge_multi_slice;
 
 /// Cryptographic parameters for DKG share encryption circuit.
@@ -237,7 +237,7 @@ impl<let N: u32, let L: u32, let BIT_PK: u32, let BIT_CT: u32, let BIT_U: u32, l
         let packed_p1 = flatten_arr::<_, _, BIT_P1>(self.p1is);
         let packed_p2 = flatten_arr::<_, _, BIT_P2>(self.p2is);
 
-        let mut payload: [Field] = &[];
+        let mut payload: [Field] = @[];
         payload = payload.push_back(self.expected_pk_commitment);
         for i in 0..packed_ct0.len() {
             payload = payload.push_back(packed_ct0[i]);

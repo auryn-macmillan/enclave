@@ -5,13 +5,13 @@
 // or FITNESS FOR A PARTICULAR PURPOSE.
 
 //user data encryption for ct1- the second part of the ciphertext
+use crate::math::helpers::flatten_arr;
+use crate::math::polynomial::Polynomial;
 use crate::math::poseidon2_commitment::compute_multiple_polynomial_commitment;
 use crate::math::poseidon2_commitment::compute_single_polynomial_commitment;
 use crate::math::poseidon2_commitment::DS_CIPHERTEXT;
 use crate::math::poseidon2_commitment::DS_PK_AGGREGATION;
 use crate::math::poseidon2_commitment::DS_USER_DATA_ENCRYPTION_COMMITMENT;
-use crate::math::helpers::flatten_arr;
-use crate::math::polynomial::Polynomial;
 use std::phase::challenge_multi_slice;
 
 pub struct Configs<let N: u32, let L: u32> {
@@ -105,7 +105,7 @@ impl<let N: u32, let L: u32, let BIT_PK: u32, let BIT_CT: u32, let BIT_U: u32, l
         let packed_p1 = flatten_arr::<_, _, BIT_P1>(self.p1is);
         let packed_p2 = flatten_arr::<_, _, BIT_P2>(self.p2is);
 
-        let mut payload: [Field] = &[];
+        let mut payload: [Field] = @[];
         payload = payload.push_back(pk1_commitment);
         payload = payload.push_back(ct1_commitment);
         payload = payload.push_back(u_commitment);

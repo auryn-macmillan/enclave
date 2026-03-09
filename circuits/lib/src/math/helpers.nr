@@ -86,7 +86,8 @@ pub fn pack_arr<let A: u32, let BIT: u32>(
     let radix = 2.pow_32((nibble_bits + 4) as Field);
     let num_chunks = (A + group - 1) / group;
 
-    let mut out = [0; (A + 254 / (((BIT + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT + 3) / 4) * 4 + 4))];
+    let mut out =
+        [0; (A + 254 / (((BIT + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT + 3) / 4) * 4 + 4))];
 
     for chunk in 0..num_chunks {
         let remain = A - (chunk * group);
@@ -121,7 +122,8 @@ pub fn flatten_arr<let A: u32, let L: u32, let BIT: u32>(
 ) -> [Field; L * ((A + 254 / (((BIT + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT + 3) / 4) * 4 + 4)))] {
     let num_chunks = (A + 254 / (((BIT + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT + 3) / 4) * 4 + 4));
 
-    let mut out = [0; L * ((A + 254 / (((BIT + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT + 3) / 4) * 4 + 4)))];
+    let mut out =
+        [0; L * ((A + 254 / (((BIT + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT + 3) / 4) * 4 + 4)))];
 
     for j in 0..L {
         let packed = pack_arr::<A, BIT>(poly[j].coefficients);

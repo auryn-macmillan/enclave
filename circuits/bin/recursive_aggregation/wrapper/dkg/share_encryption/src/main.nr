@@ -4,7 +4,9 @@
 // without even the implied warranty of MERCHANTABILITY
 // or FITNESS FOR A PARTICULAR PURPOSE.
 
-use bb_proof_verification::{UltraHonkProof1Phase, UltraHonkVerificationKey, verify_honk_proof_non_zk_1phase};
+use bb_proof_verification::{
+    UltraHonkProof1Phase, UltraHonkVerificationKey, verify_honk_proof_non_zk_1phase,
+};
 use lib::{
     configs::default::dkg::{L, N},
     math::poseidon2_commitment::compute_recursive_aggregation_commitment,

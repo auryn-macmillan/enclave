@@ -4,7 +4,9 @@
 // without even the implied warranty of MERCHANTABILITY
 // or FITNESS FOR A PARTICULAR PURPOSE.
 
-use bb_proof_verification::{UltraHonkProof1Phase, UltraHonkVerificationKey, verify_honk_proof_non_zk_1phase};
+use bb_proof_verification::{
+    UltraHonkProof1Phase, UltraHonkVerificationKey, verify_honk_proof_non_zk_1phase,
+};
 use lib::math::poseidon2_commitment::{compute_commitment, DS_CIPHERTEXT, DS_PK_AGGREGATION};
 
 fn main(
@@ -36,10 +38,8 @@ fn main(
     assert(ct0_public_inputs[3] == ct1_public_inputs[2]);
 
     // Compute the ct commitment.
-    let ct_commitment = compute_commitment(
-        [ct0_public_inputs[1], ct1_public_inputs[1]],
-        DS_CIPHERTEXT,
-    );
+    let ct_commitment =
+        compute_commitment([ct0_public_inputs[1], ct1_public_inputs[1]], DS_CIPHERTEXT);
 
     // Computes the public key aggregation commitment.
     let pk_commitment = compute_commitment(

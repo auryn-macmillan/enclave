@@ -5,7 +5,9 @@
 // or FITNESS FOR A PARTICULAR PURPOSE.
 
 use bb_proof_verification::{UltraHonkProof, UltraHonkVerificationKey, verify_honk_proof_non_zk};
-use lib::{configs::default::H, math::poseidon2_commitment::compute_recursive_aggregation_commitment};
+use lib::{
+    configs::default::H, math::poseidon2_commitment::compute_recursive_aggregation_commitment,
+};
 
 // Number of proofs.
 pub global N_PROOFS: u32 = 1;

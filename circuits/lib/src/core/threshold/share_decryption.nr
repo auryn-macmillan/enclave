@@ -4,9 +4,9 @@
 // without even the implied warranty of MERCHANTABILITY
 // or FITNESS FOR A PARTICULAR PURPOSE.
 
-use crate::math::poseidon2_commitment::compute_aggregated_shares_commitment;
 use crate::math::helpers::flatten_arr;
 use crate::math::polynomial::Polynomial;
+use crate::math::poseidon2_commitment::compute_aggregated_shares_commitment;
 use std::phase::challenge_slice;
 
 /// Cryptographic parameters for Threshold decryption share circuit.
@@ -159,7 +159,7 @@ impl<let N: u32, let L: u32, let BIT_CT: u32, let BIT_SK: u32, let BIT_E_SM: u32
         let packed_r2 = flatten_arr::<_, _, BIT_R2>(self.r2);
         let packed_d = flatten_arr::<_, _, BIT_D>(self.d);
 
-        let mut payload: [Field] = &[];
+        let mut payload: [Field] = @[];
         payload = payload.push_back(self.expected_sk_commitment);
         payload = payload.push_back(self.expected_e_sm_commitment);
         for i in 0..packed_ct0.len() {

@@ -6,9 +6,9 @@
 
 use crate::math::modulo::U128::ModU128;
 use crate::math::polynomial::Polynomial;
-use dep::bignum::BigNum;
-use dep::bignum::bignum::to_field;
-use dep::bignum::SecureThreshold8192;
+use ::bignum::BigNum;
+use ::bignum::bignum::to_field;
+use ::bignum::SecureThreshold8192;
 
 /// Cryptographic parameters for decryption share aggregation circuit.
 pub struct Configs<let L: u32> {

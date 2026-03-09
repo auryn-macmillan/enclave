@@ -8,13 +8,13 @@
 // and generates commitment for u, which will be used in ct1 to check consistency of u
 // across ct0 and ct1.
 
+use crate::math::helpers::flatten_arr;
+use crate::math::polynomial::Polynomial;
 use crate::math::poseidon2_commitment::compute_multiple_polynomial_commitment;
 use crate::math::poseidon2_commitment::compute_single_polynomial_commitment;
 use crate::math::poseidon2_commitment::DS_CIPHERTEXT;
 use crate::math::poseidon2_commitment::DS_PK_AGGREGATION;
 use crate::math::poseidon2_commitment::DS_USER_DATA_ENCRYPTION_COMMITMENT;
-use crate::math::helpers::flatten_arr;
-use crate::math::polynomial::Polynomial;
 use std::phase::challenge_multi_slice;
 
 pub struct Configs<let N: u32, let L: u32> {
@@ -151,7 +151,7 @@ impl<let N: u32, let L: u32, let BIT_PK: u32, let BIT_CT: u32, let BIT_U: u32, l
         let packed_r1 = flatten_arr::<_, _, BIT_R1>(self.r1is);
         let packed_r2 = flatten_arr::<_, _, BIT_R2>(self.r2is);
 
-        let mut payload: [Field] = &[];
+        let mut payload: [Field] = @[];
         payload = payload.push_back(pk0_commitment);
         payload = payload.push_back(ct0_commitment);
         payload = payload.push_back(k1_commitment);

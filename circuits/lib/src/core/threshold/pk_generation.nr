@@ -4,12 +4,12 @@
 // without even the implied warranty of MERCHANTABILITY
 // or FITNESS FOR A PARTICULAR PURPOSE.
 
+use crate::math::helpers::flatten_arr;
+use crate::math::polynomial::Polynomial;
 use crate::math::poseidon2_commitment::{
     compute_share_computation_e_sm_commitment, compute_share_computation_sk_commitment,
     compute_threshold_pk_commitment,
 };
-use crate::math::helpers::flatten_arr;
-use crate::math::polynomial::Polynomial;
 use std::phase::challenge_slice;
 
 /// Cryptographic parameters for threshold public key generation circuit.
@@ -130,7 +130,7 @@ impl<let N: u32, let L: u32, let BIT_EEK: u32, let BIT_SK: u32, let BIT_E_SM: u3
         let packed_r1 = flatten_arr::<_, _, BIT_R1>(self.r1);
         let packed_r2 = flatten_arr::<_, _, BIT_R2>(self.r2);
 
-        let mut payload: [Field] = &[];
+        let mut payload: [Field] = @[];
         for i in 0..packed_a.len() {
             payload = payload.push_back(packed_a[i]);
         }

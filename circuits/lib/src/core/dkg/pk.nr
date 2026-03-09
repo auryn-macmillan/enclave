@@ -4,8 +4,8 @@
 // without even the implied warranty of MERCHANTABILITY
 // or FITNESS FOR A PARTICULAR PURPOSE.
 
-use crate::math::poseidon2_commitment::compute_dkg_pk_commitment;
 use crate::math::polynomial::Polynomial;
+use crate::math::poseidon2_commitment::compute_dkg_pk_commitment;
 
 /// Correct DKG Public Key Circuit (Circuit 0).
 pub struct Pk<let N: u32, let L: u32, let BIT_PK: u32> {

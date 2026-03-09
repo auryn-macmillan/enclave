@@ -21,9 +21,9 @@ use crate::math::polynomial::Polynomial;
 // All circuit files should import from poseidon2_commitment instead of commitments
 // to ensure they use the lightweight raw Poseidon2 functions.
 pub use crate::math::commitments::{
-    DS_PK, DS_PK_GENERATION, DS_SHARE_COMPUTATION, DS_SHARE_ENCRYPTION,
-    DS_PK_AGGREGATION, DS_CIPHERTEXT, DS_AGGREGATED_SHARES,
-    DS_VK_HASH, DS_RECURSIVE_AGGREGATION, DS_USER_DATA_ENCRYPTION_COMMITMENT,
+    DS_AGGREGATED_SHARES, DS_CIPHERTEXT, DS_PK, DS_PK_AGGREGATION, DS_PK_GENERATION,
+    DS_RECURSIVE_AGGREGATION, DS_SHARE_COMPUTATION, DS_SHARE_ENCRYPTION,
+    DS_USER_DATA_ENCRYPTION_COMMITMENT, DS_VK_HASH,
 };
 
 /// Domain separator encoding: convert a 64-byte domain separator to a Field
@@ -131,8 +131,13 @@ pub fn compute_dkg_pk_commitment<let N: u32, let L: u32, let BIT_PK: u32>(
     let flat0 = flatten_arr::<N, L, BIT_PK>(pk0);
     let flat1 = flatten_arr::<N, L, BIT_PK>(pk1);
     // Concatenate into a single array: [flat0..., flat1...]
-    let packed_len = L * ((N + 254 / (((BIT_PK + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_PK + 3) / 4) * 4 + 4)));
-    let mut payload = [0; 2 * L * ((N + 254 / (((BIT_PK + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_PK + 3) / 4) * 4 + 4)))];
+    let packed_len =
+        L * ((N + 254 / (((BIT_PK + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_PK + 3) / 4) * 4 + 4)));
+    let mut payload = [
+        0; 2
+            * L
+            * ((N + 254 / (((BIT_PK + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_PK + 3) / 4) * 4 + 4)))
+    ];
     for i in 0..packed_len {
         payload[i] = flat0[i];
         payload[packed_len + i] = flat1[i];
@@ -146,8 +151,13 @@ pub fn compute_threshold_pk_commitment<let N: u32, let L: u32, let BIT_PK: u32>(
 ) -> Field {
     let flat0 = flatten_arr::<N, L, BIT_PK>(pk0);
     let flat1 = flatten_arr::<N, L, BIT_PK>(pk1);
-    let packed_len = L * ((N + 254 / (((BIT_PK + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_PK + 3) / 4) * 4 + 4)));
-    let mut payload = [0; 2 * L * ((N + 254 / (((BIT_PK + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_PK + 3) / 4) * 4 + 4)))];
+    let packed_len =
+        L * ((N + 254 / (((BIT_PK + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_PK + 3) / 4) * 4 + 4)));
+    let mut payload = [
+        0; 2
+            * L
+            * ((N + 254 / (((BIT_PK + 3) / 4) * 4 + 4) - 1) / (254 / (((BIT_PK + 3) / 4) * 4 + 4)))
+    ];
     for i in 0..packed_len {
         payload[i] = flat0[i];
         payload[packed_len + i] = flat1[i];

@@ -4,12 +4,12 @@
 // without even the implied warranty of MERCHANTABILITY
 // or FITNESS FOR A PARTICULAR PURPOSE.
 
+use crate::math::modulo::U128::ModU128;
+use crate::math::polynomial::Polynomial;
 use crate::math::poseidon2_commitment::{
     compute_share_computation_e_sm_commitment, compute_share_computation_sk_commitment,
     compute_share_encryption_commitment_from_shares,
 };
-use crate::math::modulo::U128::ModU128;
-use crate::math::polynomial::Polynomial;
 
 /// Cryptographic parameters for Threshold secret share verification circuit.
 pub struct Configs<let L: u32> {
