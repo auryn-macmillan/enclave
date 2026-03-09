@@ -42,7 +42,10 @@ fn dummy_circuit() -> CompiledCircuit {
         num_phases: 0,
     };
 
-    let program = Program { functions: vec![circuit], unconstrained_functions: Vec::new() };
+    let program = Program {
+        functions: vec![circuit],
+        unconstrained_functions: Vec::new(),
+    };
     let bytecode = general_purpose::STANDARD.encode(Program::serialize_program(&program));
 
     CompiledCircuit {

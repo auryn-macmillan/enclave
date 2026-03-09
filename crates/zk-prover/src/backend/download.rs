@@ -154,7 +154,10 @@ impl ZkBackend {
 }
 
 async fn try_install_local_circuits(circuits_dir: &Path) -> Result<bool, ZkError> {
-    let mut candidates = vec![PathBuf::from("dist/circuits"), PathBuf::from("./dist/circuits")];
+    let mut candidates = vec![
+        PathBuf::from("dist/circuits"),
+        PathBuf::from("./dist/circuits"),
+    ];
 
     if let Ok(cwd) = std::env::current_dir() {
         for ancestor in cwd.ancestors() {
@@ -174,8 +177,8 @@ async fn try_install_local_circuits(circuits_dir: &Path) -> Result<bool, ZkError
     fs::create_dir_all(circuits_dir).await?;
 
     for entry in WalkDir::new(&source) {
-        let entry = entry
-            .map_err(|err| ZkError::IoError(std::io::Error::other(err.to_string())))?;
+        let entry =
+            entry.map_err(|err| ZkError::IoError(std::io::Error::other(err.to_string())))?;
         let path = entry.path();
         let rel = path.strip_prefix(&source).map_err(|err| {
             ZkError::IoError(std::io::Error::other(format!(

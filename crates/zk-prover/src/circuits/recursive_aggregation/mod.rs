@@ -489,9 +489,7 @@ mod tests {
             "pk_generation wrapper proof should verify successfully"
         );
 
-        prover
-            .cleanup(&format!("{}_inner_0", e3_id))
-            .unwrap();
+        prover.cleanup(&format!("{}_inner_0", e3_id)).unwrap();
         prover.cleanup(e3_id).unwrap();
     }
 
@@ -501,8 +499,8 @@ mod tests {
     /// This test generates inner proofs, verifies them natively, then generates the wrapper proof.
     #[tokio::test]
     async fn test_generate_and_verify_share_encryption_wrapper_proof() {
-        use crate::witness::{CompiledCircuit, WitnessGenerator};
         use crate::traits::Provable;
+        use crate::witness::{CompiledCircuit, WitnessGenerator};
 
         let temp = get_tempdir().unwrap();
         let mut backend = test_backend(temp.path());
@@ -568,18 +566,21 @@ mod tests {
         let mut inner_proofs = Vec::new();
 
         for (i, input) in inputs.iter().enumerate() {
-            let input_map = ShareEncryptionCircuit.build_inputs(&preset, input)
+            let input_map = ShareEncryptionCircuit
+                .build_inputs(&preset, input)
                 .expect("build_inputs should succeed");
             let circuit_path = prover
                 .circuits_dir()
                 .join(circuit_name.dir_path())
                 .join(format!("{}.json", circuit_name.as_str()));
-            let circuit = CompiledCircuit::from_file(&circuit_path)
-                .expect("circuit load should succeed");
-            let witness = witness_gen.generate_witness(&circuit, input_map)
+            let circuit =
+                CompiledCircuit::from_file(&circuit_path).expect("circuit load should succeed");
+            let witness = witness_gen
+                .generate_witness(&circuit, input_map)
                 .expect("witness generation should succeed");
             let inner_e3_id = format!("{}_inner_{}", e3_id, i);
-            let proof = prover.generate_recursive_proof(circuit_name, &witness, &inner_e3_id)
+            let proof = prover
+                .generate_recursive_proof(circuit_name, &witness, &inner_e3_id)
                 .expect("inner proof generation should succeed");
 
             eprintln!(
@@ -612,14 +613,26 @@ mod tests {
         std::fs::create_dir_all(&debug_dir).unwrap();
         for (i, proof) in inner_proofs.iter().enumerate() {
             std::fs::write(debug_dir.join(format!("inner_{}_proof", i)), &*proof.data).unwrap();
-            std::fs::write(debug_dir.join(format!("inner_{}_public_inputs", i)), &*proof.public_signals).unwrap();
+            std::fs::write(
+                debug_dir.join(format!("inner_{}_public_inputs", i)),
+                &*proof.public_signals,
+            )
+            .unwrap();
         }
         // Also save the VK artifacts
         let vk_recursive = std::fs::read(
-            prover.circuits_dir().join(circuit_name.dir_path()).join(format!("{}.vk_recursive", circuit_name.as_str()))
-        ).unwrap();
+            prover
+                .circuits_dir()
+                .join(circuit_name.dir_path())
+                .join(format!("{}.vk_recursive", circuit_name.as_str())),
+        )
+        .unwrap();
         std::fs::write(debug_dir.join("inner_vk_recursive"), &vk_recursive).unwrap();
-        eprintln!("Inner VK recursive size: {} bytes ({} fields)", vk_recursive.len(), vk_recursive.len() / 32);
+        eprintln!(
+            "Inner VK recursive size: {} bytes ({} fields)",
+            vk_recursive.len(),
+            vk_recursive.len() / 32
+        );
 
         // Dump the first few VK fields for debugging
         let vk_fields = utils::bytes_to_field_strings(&vk_recursive).unwrap();
@@ -646,7 +659,11 @@ mod tests {
 
         // Save wrapper artifacts
         std::fs::write(debug_dir.join("wrapper_proof"), &*wrapper_proof.data).unwrap();
-        std::fs::write(debug_dir.join("wrapper_public_inputs"), &*wrapper_proof.public_signals).unwrap();
+        std::fs::write(
+            debug_dir.join("wrapper_public_inputs"),
+            &*wrapper_proof.public_signals,
+        )
+        .unwrap();
 
         // ========== STEP 5: Verify wrapper proof natively ==========
         let verified = prover
@@ -667,8 +684,12 @@ mod tests {
 
         prover.cleanup(&format!("{}_inner_0", e3_id)).unwrap();
         prover.cleanup(&format!("{}_inner_1", e3_id)).unwrap();
-        prover.cleanup(&format!("{}_verify_inner_0", e3_id)).unwrap();
-        prover.cleanup(&format!("{}_verify_inner_1", e3_id)).unwrap();
+        prover
+            .cleanup(&format!("{}_verify_inner_0", e3_id))
+            .unwrap();
+        prover
+            .cleanup(&format!("{}_verify_inner_1", e3_id))
+            .unwrap();
         prover.cleanup(e3_id).unwrap();
     }
 
@@ -771,32 +792,62 @@ mod tests {
         // Swapped order: proof1=pk_wrapper, proof2=share_enc_wrapper
         // If #1 still fails → position-dependent bug
         // If share_enc always fails → proof-specific bug
-        eprintln!("SWAP TEST: proof1=pk_wrapper (circuit={:?}), proof2=share_enc_wrapper (circuit={:?})",
-            pk_wrapper_proof.circuit, share_enc_wrapper_proof.circuit);
+        eprintln!(
+            "SWAP TEST: proof1=pk_wrapper (circuit={:?}), proof2=share_enc_wrapper (circuit={:?})",
+            pk_wrapper_proof.circuit, share_enc_wrapper_proof.circuit
+        );
         let fold_proof = generate_fold_proof(
             &prover,
             &pk_wrapper_proof,        // proof1 (was proof2 in original)
-            &share_enc_wrapper_proof,  // proof2 (was proof1 in original)
+            &share_enc_wrapper_proof, // proof2 (was proof1 in original)
             e3_id_fold,
         )
         .expect("fold proof generation should succeed");
 
-        eprintln!("pk_wrapper_proof: data={} bytes, public_signals={} bytes, circuit={:?}",
-            pk_wrapper_proof.data.len(), pk_wrapper_proof.public_signals.len(), pk_wrapper_proof.circuit);
-        eprintln!("share_enc_wrapper_proof: data={} bytes, public_signals={} bytes, circuit={:?}",
-            share_enc_wrapper_proof.data.len(), share_enc_wrapper_proof.public_signals.len(), share_enc_wrapper_proof.circuit);
-        eprintln!("fold_proof: data={} bytes, public_signals={} bytes, circuit={:?}",
-            fold_proof.data.len(), fold_proof.public_signals.len(), fold_proof.circuit);
+        eprintln!(
+            "pk_wrapper_proof: data={} bytes, public_signals={} bytes, circuit={:?}",
+            pk_wrapper_proof.data.len(),
+            pk_wrapper_proof.public_signals.len(),
+            pk_wrapper_proof.circuit
+        );
+        eprintln!(
+            "share_enc_wrapper_proof: data={} bytes, public_signals={} bytes, circuit={:?}",
+            share_enc_wrapper_proof.data.len(),
+            share_enc_wrapper_proof.public_signals.len(),
+            share_enc_wrapper_proof.circuit
+        );
+        eprintln!(
+            "fold_proof: data={} bytes, public_signals={} bytes, circuit={:?}",
+            fold_proof.data.len(),
+            fold_proof.public_signals.len(),
+            fold_proof.circuit
+        );
 
         // Save fold proof artifacts for manual inspection
         let debug_dir = std::path::PathBuf::from("/tmp/fold_debug");
         std::fs::create_dir_all(&debug_dir).unwrap();
         std::fs::write(debug_dir.join("fold_proof"), &*fold_proof.data).unwrap();
-        std::fs::write(debug_dir.join("fold_public_inputs"), &*fold_proof.public_signals).unwrap();
+        std::fs::write(
+            debug_dir.join("fold_public_inputs"),
+            &*fold_proof.public_signals,
+        )
+        .unwrap();
         std::fs::write(debug_dir.join("pk_wrapper_proof"), &*pk_wrapper_proof.data).unwrap();
-        std::fs::write(debug_dir.join("pk_wrapper_public_inputs"), &*pk_wrapper_proof.public_signals).unwrap();
-        std::fs::write(debug_dir.join("share_enc_wrapper_proof"), &*share_enc_wrapper_proof.data).unwrap();
-        std::fs::write(debug_dir.join("share_enc_wrapper_public_inputs"), &*share_enc_wrapper_proof.public_signals).unwrap();
+        std::fs::write(
+            debug_dir.join("pk_wrapper_public_inputs"),
+            &*pk_wrapper_proof.public_signals,
+        )
+        .unwrap();
+        std::fs::write(
+            debug_dir.join("share_enc_wrapper_proof"),
+            &*share_enc_wrapper_proof.data,
+        )
+        .unwrap();
+        std::fs::write(
+            debug_dir.join("share_enc_wrapper_public_inputs"),
+            &*share_enc_wrapper_proof.public_signals,
+        )
+        .unwrap();
 
         // Also copy work dir contents for manual testing
         let work_dir = prover.work_dir();
@@ -804,7 +855,11 @@ mod tests {
         if fold_work.exists() {
             let copy_dest = debug_dir.join("work_aggregation-test-fold");
             let _ = std::process::Command::new("cp")
-                .args(["-r", &fold_work.to_string_lossy(), &copy_dest.to_string_lossy()])
+                .args([
+                    "-r",
+                    &fold_work.to_string_lossy(),
+                    &copy_dest.to_string_lossy(),
+                ])
                 .output();
         }
         eprintln!("Saved proof artifacts to /tmp/fold_debug/");
@@ -1099,9 +1154,8 @@ mod tests {
         let preset = BfvPreset::InsecureThreshold512;
         let committee = CiphernodesCommitteeSize::Small.values();
 
-        let sample =
-            DecryptedSharesAggregationCircuitData::generate_sample(preset, committee)
-                .expect("decrypted_shares_aggregation sample generation should succeed");
+        let sample = DecryptedSharesAggregationCircuitData::generate_sample(preset, committee)
+            .expect("decrypted_shares_aggregation sample generation should succeed");
 
         let e3_id = "aggregation-test-dsa-wrapper";
         let start = std::time::Instant::now();
@@ -1185,8 +1239,7 @@ mod tests {
         // Generate combined inputs for both ct0 and ct1
         let sample = UserDataEncryptionCircuitData::generate_sample(preset)
             .expect("user_data_encryption sample generation should succeed");
-        let inputs = Inputs::compute(preset, &sample)
-            .expect("Inputs::compute should succeed");
+        let inputs = Inputs::compute(preset, &sample).expect("Inputs::compute should succeed");
         let json = inputs.to_json().expect("to_json should succeed");
         let input_map = inputs_json_to_input_map(&json).expect("inputs_json_to_input_map");
 
@@ -1198,8 +1251,8 @@ mod tests {
             .join("threshold")
             .join("user_data_encryption_ct0")
             .join("user_data_encryption_ct0.json");
-        let ct0_compiled = CompiledCircuit::from_file(&ct0_circuit_path)
-            .expect("ct0 circuit load should succeed");
+        let ct0_compiled =
+            CompiledCircuit::from_file(&ct0_circuit_path).expect("ct0 circuit load should succeed");
         // Filter input_map to only include parameters in ct0's ABI
         let ct0_param_names: std::collections::HashSet<String> = ct0_compiled
             .abi
@@ -1230,12 +1283,17 @@ mod tests {
         let output = std::process::Command::new(prover.bb_binary())
             .args([
                 "prove",
-                "-b", &ct0_circuit_path.to_string_lossy(),
-                "-w", &ct0_job_dir.join("witness.gz").to_string_lossy(),
-                "-k", &ct0_vk_path.to_string_lossy(),
-                "-o", &ct0_out.to_string_lossy(),
+                "-b",
+                &ct0_circuit_path.to_string_lossy(),
+                "-w",
+                &ct0_job_dir.join("witness.gz").to_string_lossy(),
+                "-k",
+                &ct0_vk_path.to_string_lossy(),
+                "-o",
+                &ct0_out.to_string_lossy(),
                 "-v",
-                "-t", "noir-recursive-no-zk",
+                "-t",
+                "noir-recursive-no-zk",
             ])
             .output()
             .expect("bb prove ct0 should execute");
@@ -1260,8 +1318,8 @@ mod tests {
             .join("threshold")
             .join("user_data_encryption_ct1")
             .join("user_data_encryption_ct1.json");
-        let ct1_compiled = CompiledCircuit::from_file(&ct1_circuit_path)
-            .expect("ct1 circuit load should succeed");
+        let ct1_compiled =
+            CompiledCircuit::from_file(&ct1_circuit_path).expect("ct1 circuit load should succeed");
         // Filter input_map to only include parameters in ct1's ABI
         let ct1_param_names: std::collections::HashSet<String> = ct1_compiled
             .abi
@@ -1291,12 +1349,17 @@ mod tests {
         let output = std::process::Command::new(prover.bb_binary())
             .args([
                 "prove",
-                "-b", &ct1_circuit_path.to_string_lossy(),
-                "-w", &ct1_job_dir.join("witness.gz").to_string_lossy(),
-                "-k", &ct1_vk_path.to_string_lossy(),
-                "-o", &ct1_out.to_string_lossy(),
+                "-b",
+                &ct1_circuit_path.to_string_lossy(),
+                "-w",
+                &ct1_job_dir.join("witness.gz").to_string_lossy(),
+                "-k",
+                &ct1_vk_path.to_string_lossy(),
+                "-o",
+                &ct1_out.to_string_lossy(),
                 "-v",
-                "-t", "noir-recursive-no-zk",
+                "-t",
+                "noir-recursive-no-zk",
             ])
             .output()
             .expect("bb prove ct1 should execute");
@@ -1376,8 +1439,8 @@ mod tests {
             "ct1_key_hash": ct1_key_hash_field[0],
         });
 
-        let wrapper_input_map = inputs_json_to_input_map(&wrapper_json)
-            .expect("wrapper inputs_json_to_input_map");
+        let wrapper_input_map =
+            inputs_json_to_input_map(&wrapper_json).expect("wrapper inputs_json_to_input_map");
 
         // ========== Generate wrapper witness and proof ==========
         let wrapper_circuit_path = wrapper_dir.join("user_data_encryption.json");
@@ -1396,12 +1459,17 @@ mod tests {
         let output = std::process::Command::new(prover.bb_binary())
             .args([
                 "prove",
-                "-b", &wrapper_circuit_path.to_string_lossy(),
-                "-w", &wrapper_job_dir.join("witness.gz").to_string_lossy(),
-                "-k", &wrapper_vk_path.to_string_lossy(),
-                "-o", &wrapper_out.to_string_lossy(),
+                "-b",
+                &wrapper_circuit_path.to_string_lossy(),
+                "-w",
+                &wrapper_job_dir.join("witness.gz").to_string_lossy(),
+                "-k",
+                &wrapper_vk_path.to_string_lossy(),
+                "-o",
+                &wrapper_out.to_string_lossy(),
                 "-v",
-                "-t", "noir-recursive-no-zk",
+                "-t",
+                "noir-recursive-no-zk",
             ])
             .output()
             .expect("bb prove wrapper should execute");
@@ -1422,14 +1490,22 @@ mod tests {
 
         // ========== Verify wrapper proof ==========
         std::fs::write(wrapper_job_dir.join("proof"), &wrapper_proof_data).unwrap();
-        std::fs::write(wrapper_job_dir.join("public_inputs"), &wrapper_public_inputs).unwrap();
+        std::fs::write(
+            wrapper_job_dir.join("public_inputs"),
+            &wrapper_public_inputs,
+        )
+        .unwrap();
         let output = std::process::Command::new(prover.bb_binary())
             .args([
                 "verify",
-                "-p", &wrapper_job_dir.join("proof").to_string_lossy(),
-                "-i", &wrapper_job_dir.join("public_inputs").to_string_lossy(),
-                "-k", &wrapper_vk_path.to_string_lossy(),
-                "-t", "noir-recursive-no-zk",
+                "-p",
+                &wrapper_job_dir.join("proof").to_string_lossy(),
+                "-i",
+                &wrapper_job_dir.join("public_inputs").to_string_lossy(),
+                "-k",
+                &wrapper_vk_path.to_string_lossy(),
+                "-t",
+                "noir-recursive-no-zk",
             ])
             .output()
             .expect("bb verify wrapper should execute");
