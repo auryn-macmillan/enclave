@@ -934,5 +934,5 @@
   "deployedLinkReferences": {},
   "immutableReferences": {},
   "inputSourceName": "project/contracts/interfaces/ISlashingManager.sol",
-  "buildInfoId": "solc-0_8_28-e31106e21ee0b1a0de522e91c17cb752d4a7fb4e"
+  "buildInfoId": "solc-0_8_28-77c1a4b1620f2f09665dfb4cf52040065205c607"
 }

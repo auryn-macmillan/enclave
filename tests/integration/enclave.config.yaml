@@ -32,6 +32,8 @@ program:
   #     program_url: "https://gateway.pinata.cloud/ipfs/QmNMRAB7DW43JSmENfzGmD96G6sqaeBBNfTVrrq5WQae3D" # Pre-uploaded program
   #     onchain: true # true = onchain requests, false = offchain
 
+custom_bb: "/home/dev/aztec-packages/barretenberg/cpp/build-gcc/bin/bb"
+
 nodes:
   cn1:
     address: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"

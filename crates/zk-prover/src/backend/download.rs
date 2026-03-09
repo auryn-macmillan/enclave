@@ -107,17 +107,25 @@ impl ZkBackend {
                 info!("installed circuits v{}", version);
             }
             Err(e) => {
-                warn!(
-                    "could not download circuits ({}), creating placeholder for testing",
-                    e
-                );
-                create_placeholder_circuits(&self.circuits_dir).await?;
+                warn!("could not download circuits ({})", e);
 
-                version_info.circuits_version = Some("0.0.0-placeholder".to_string());
-                version_info.last_updated = Some(chrono::Utc::now().to_rfc3339());
-                version_info.save(&self.version_file()).await?;
+                if try_install_local_circuits(&self.circuits_dir).await? {
+                    warn!(
+                        "installed local circuits fallback from dist/circuits because download failed"
+                    );
+                    version_info.circuits_version = Some(version.clone());
+                    version_info.last_updated = Some(chrono::Utc::now().to_rfc3339());
+                    version_info.save(&self.version_file()).await?;
+                } else {
+                    warn!("no local circuits fallback found, creating placeholder for testing");
+                    create_placeholder_circuits(&self.circuits_dir).await?;
 
-                info!("created placeholder circuits (will retry download on next setup)");
+                    version_info.circuits_version = Some("0.0.0-placeholder".to_string());
+                    version_info.last_updated = Some(chrono::Utc::now().to_rfc3339());
+                    version_info.save(&self.version_file()).await?;
+
+                    info!("created placeholder circuits (will retry download on next setup)");
+                }
             }
         }
 
@@ -143,6 +151,50 @@ impl ZkBackend {
         let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
         Ok(version)
     }
+}
+
+async fn try_install_local_circuits(circuits_dir: &Path) -> Result<bool, ZkError> {
+    let mut candidates = vec![PathBuf::from("dist/circuits"), PathBuf::from("./dist/circuits")];
+
+    if let Ok(cwd) = std::env::current_dir() {
+        for ancestor in cwd.ancestors() {
+            candidates.push(ancestor.join("dist/circuits"));
+        }
+    }
+
+    let source = candidates.into_iter().find(|p| p.exists() && p.is_dir());
+
+    let Some(source) = source else {
+        return Ok(false);
+    };
+
+    if circuits_dir.exists() {
+        fs::remove_dir_all(circuits_dir).await?;
+    }
+    fs::create_dir_all(circuits_dir).await?;
+
+    for entry in WalkDir::new(&source) {
+        let entry = entry
+            .map_err(|err| ZkError::IoError(std::io::Error::other(err.to_string())))?;
+        let path = entry.path();
+        let rel = path.strip_prefix(&source).map_err(|err| {
+            ZkError::IoError(std::io::Error::other(format!(
+                "failed to strip circuits path prefix: {err}"
+            )))
+        })?;
+        let dest = circuits_dir.join(rel);
+
+        if entry.file_type().is_dir() {
+            fs::create_dir_all(&dest).await?;
+        } else {
+            if let Some(parent) = dest.parent() {
+                fs::create_dir_all(parent).await?;
+            }
+            fs::copy(path, &dest).await?;
+        }
+    }
+
+    Ok(true)
 }
 
 fn find_bb_in_dir(dir: &Path) -> Result<PathBuf, ZkError> {

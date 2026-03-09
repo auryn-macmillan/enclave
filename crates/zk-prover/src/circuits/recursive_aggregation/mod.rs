@@ -168,6 +168,13 @@ pub fn generate_fold_proof(
     proof2: &Proof,
     e3_id: &str,
 ) -> Result<Proof, ZkError> {
+    if proof1.circuit == CircuitName::PkGeneration || proof2.circuit == CircuitName::PkGeneration {
+        return Err(ZkError::InvalidInput(
+            "pk_generation wrappers expose 3 public inputs and are not fold-compatible with the 2-input fold schema"
+                .into(),
+        ));
+    }
+
     let vk1 = vk::load_vk_for_fold_input(prover.circuits_dir(), proof1.circuit)?;
     let vk2 = vk::load_vk_for_fold_input(prover.circuits_dir(), proof2.circuit)?;
 

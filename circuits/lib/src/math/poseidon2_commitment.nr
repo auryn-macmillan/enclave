@@ -31,6 +31,9 @@ pub use crate::math::commitments::{
 /// This preserves uniqueness for all domain separators used in Enclave
 /// (all are <= 31 ASCII bytes, zero-padded to 64).
 fn domain_separator_to_field(ds: [u8; 64]) -> Field {
+    for i in 31..64 {
+        assert(ds[i] == 0);
+    }
     let mut result: Field = 0;
     for i in 0..31 {
         result = result * 256 + ds[i] as Field;

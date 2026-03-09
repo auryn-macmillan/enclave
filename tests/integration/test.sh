@@ -11,8 +11,11 @@ fi
 if [ $# -eq 0 ]; then 
   "$THIS_DIR/persist.sh"
   "$THIS_DIR/base.sh"
-  "$THIS_DIR/net.sh"
+  if command -v docker >/dev/null 2>&1; then
+    "$THIS_DIR/net.sh"
+  else
+    echo "Skipping net.sh: docker not found"
+  fi
 else
   "$THIS_DIR/$1.sh"
 fi
-

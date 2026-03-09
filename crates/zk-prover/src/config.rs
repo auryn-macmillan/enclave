@@ -351,6 +351,11 @@ mod tests {
     /// Integration test that downloads a real bb binary and verifies checksum.
     #[tokio::test]
     async fn test_download_and_verify_bb() {
+        if ZkConfig::default().required_bb_version == "00000000.00000000.00000000" {
+            println!("skipping test: placeholder required_bb_version");
+            return;
+        }
+
         let Some(target) = BbTarget::current() else {
             println!("skipping test: unsupported platform");
             return;

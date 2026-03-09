@@ -102,6 +102,10 @@ const DS_RECURSIVE_AGGREGATION: [u8; 64] = [
 ///
 /// Matches the Noir `domain_separator_to_field` function exactly.
 fn domain_separator_to_field(ds: &[u8; 64]) -> Field {
+    assert!(
+        ds[31..].iter().all(|b| *b == 0),
+        "domain separator must fit in 31 bytes (bytes 31..63 must be zero)"
+    );
     let mut result = Field::from(0u64);
     let f256 = Field::from(256u64);
     for i in 0..31 {
@@ -435,6 +439,15 @@ mod tests {
             h1, h2,
             "Different domain separators must produce different outputs"
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "domain separator must fit in 31 bytes")]
+    fn domain_separator_rejects_non_zero_tail() {
+        let mut bad_ds = [0u8; 64];
+        bad_ds[0] = b'A';
+        bad_ds[40] = 1;
+        let _ = domain_separator_to_field(&bad_ds);
     }
 
     #[test]

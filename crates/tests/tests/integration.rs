@@ -80,14 +80,13 @@ async fn setup_test_zk_backend() -> (ZkBackend, tempfile::TempDir) {
     let temp_path = temp.path();
     let noir_dir = temp_path.join("noir");
     let bb_binary = noir_dir.join("bin").join("bb");
-    let circuits_dir = noir_dir.join("circuits");
+    let mut circuits_dir = noir_dir.join("circuits");
     let work_dir = noir_dir.join("work").join("test_node");
 
     if let Some(bb) = find_bb().await {
         tokio::fs::create_dir_all(bb_binary.parent().unwrap())
             .await
             .unwrap();
-        tokio::fs::create_dir_all(&circuits_dir).await.unwrap();
         tokio::fs::create_dir_all(&work_dir).await.unwrap();
 
         #[cfg(unix)]
@@ -95,132 +94,19 @@ async fn setup_test_zk_backend() -> (ZkBackend, tempfile::TempDir) {
         #[cfg(not(unix))]
         compile_error!("Integration tests require unix symlink support");
 
-        // Copy circuit artifacts from the compiled circuit build output
-        let circuits_build_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        // Prefer prebuilt release artifacts so ABI matches DEFAULT_BFV_PRESET in tests.
+        // Fallback to local temp circuits dir only if release artifacts are unavailable.
+        let dist_circuits_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("..")
             .join("..")
-            .join("circuits")
-            .join("bin");
+            .join("dist")
+            .join("circuits");
 
-        // Copy T0 (pk) circuit
-        let pk_circuit_dir = circuits_dir.join("dkg").join("pk");
-        tokio::fs::create_dir_all(&pk_circuit_dir).await.unwrap();
-        let dkg_target = circuits_build_root.join("dkg").join("target");
-        tokio::fs::copy(dkg_target.join("pk.json"), pk_circuit_dir.join("pk.json"))
-            .await
-            .unwrap();
-        tokio::fs::copy(dkg_target.join("pk.vk"), pk_circuit_dir.join("pk.vk"))
-            .await
-            .unwrap();
-
-        // Copy C1 (pk_generation) circuit
-        let pk_gen_circuit_dir = circuits_dir.join("threshold").join("pk_generation");
-        tokio::fs::create_dir_all(&pk_gen_circuit_dir)
-            .await
-            .unwrap();
-        let threshold_target = circuits_build_root.join("threshold").join("target");
-        tokio::fs::copy(
-            threshold_target.join("pk_generation.json"),
-            pk_gen_circuit_dir.join("pk_generation.json"),
-        )
-        .await
-        .unwrap();
-        tokio::fs::copy(
-            threshold_target.join("pk_generation.vk"),
-            pk_gen_circuit_dir.join("pk_generation.vk"),
-        )
-        .await
-        .unwrap();
-
-        // Copy C2a (sk_share_computation) circuit
-        let sk_share_comp_circuit_dir = circuits_dir.join("dkg").join("sk_share_computation");
-        tokio::fs::create_dir_all(&sk_share_comp_circuit_dir)
-            .await
-            .unwrap();
-        tokio::fs::copy(
-            dkg_target.join("sk_share_computation.json"),
-            sk_share_comp_circuit_dir.join("sk_share_computation.json"),
-        )
-        .await
-        .unwrap();
-        tokio::fs::copy(
-            dkg_target.join("sk_share_computation.vk"),
-            sk_share_comp_circuit_dir.join("sk_share_computation.vk"),
-        )
-        .await
-        .unwrap();
-
-        // Copy C2b (e_sm_share_computation) circuit
-        let e_sm_share_comp_circuit_dir = circuits_dir.join("dkg").join("e_sm_share_computation");
-        tokio::fs::create_dir_all(&e_sm_share_comp_circuit_dir)
-            .await
-            .unwrap();
-        tokio::fs::copy(
-            dkg_target.join("e_sm_share_computation.json"),
-            e_sm_share_comp_circuit_dir.join("e_sm_share_computation.json"),
-        )
-        .await
-        .unwrap();
-        tokio::fs::copy(
-            dkg_target.join("e_sm_share_computation.vk"),
-            e_sm_share_comp_circuit_dir.join("e_sm_share_computation.vk"),
-        )
-        .await
-        .unwrap();
-
-        // Copy C3 (share_encryption) circuit — single circuit used for both SK and E_SM
-        let share_enc_circuit_dir = circuits_dir.join("dkg").join("share_encryption");
-        tokio::fs::create_dir_all(&share_enc_circuit_dir)
-            .await
-            .unwrap();
-        tokio::fs::copy(
-            dkg_target.join("share_encryption.json"),
-            share_enc_circuit_dir.join("share_encryption.json"),
-        )
-        .await
-        .unwrap();
-        tokio::fs::copy(
-            dkg_target.join("share_encryption.vk"),
-            share_enc_circuit_dir.join("share_encryption.vk"),
-        )
-        .await
-        .unwrap();
-
-        // Copy C4 (share_decryption) circuit — used for DKG share decryption proofs (Exchange #3)
-        let share_dec_circuit_dir = circuits_dir.join("dkg").join("share_decryption");
-        tokio::fs::create_dir_all(&share_dec_circuit_dir)
-            .await
-            .unwrap();
-        tokio::fs::copy(
-            dkg_target.join("share_decryption.json"),
-            share_dec_circuit_dir.join("share_decryption.json"),
-        )
-        .await
-        .unwrap();
-        tokio::fs::copy(
-            dkg_target.join("share_decryption.vk"),
-            share_dec_circuit_dir.join("share_decryption.vk"),
-        )
-        .await
-        .unwrap();
-
-        // Copy C5 (pk_aggregation) circuit
-        let pk_agg_circuit_dir = circuits_dir.join("threshold").join("pk_aggregation");
-        tokio::fs::create_dir_all(&pk_agg_circuit_dir)
-            .await
-            .unwrap();
-        tokio::fs::copy(
-            threshold_target.join("pk_aggregation.json"),
-            pk_agg_circuit_dir.join("pk_aggregation.json"),
-        )
-        .await
-        .unwrap();
-        tokio::fs::copy(
-            threshold_target.join("pk_aggregation.vk"),
-            pk_agg_circuit_dir.join("pk_aggregation.vk"),
-        )
-        .await
-        .unwrap();
+        if dist_circuits_dir.exists() {
+            circuits_dir = dist_circuits_dir;
+        } else {
+            tokio::fs::create_dir_all(&circuits_dir).await.unwrap();
+        }
 
         let backend = ZkBackend::new(BBPath::Default(bb_binary), circuits_dir, work_dir);
 
