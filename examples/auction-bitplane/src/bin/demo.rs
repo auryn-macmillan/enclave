@@ -145,7 +145,15 @@ fn main() {
     println!("  Winner: {winner_name} (slot {winner_slot})");
 
     // ── Threshold decrypt the Vickrey (second) price ─────────────────────
-    let second_slot = second_slot.expect("expected at least two bidders");
+    let second_slot = match second_slot {
+        Some(s) => s,
+        None => {
+            // Single-bidder auction: no second price exists.
+            println!("  (single bidder — no Vickrey second price)\n");
+            println!("✅ Single-bidder result verified.");
+            return;
+        }
+    };
     let (second_name, _) = bids[second_slot];
 
     let bid_cts = &per_bidder_cts[second_slot];
