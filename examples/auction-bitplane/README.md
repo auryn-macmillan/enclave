@@ -25,16 +25,16 @@ The public key shares are aggregated into a single **joint public key**.  Bidder
 
 Each member also aggregates the Shamir shares they received from others into their **secret-key polynomial sum**, used later for threshold decryption.
 
-### 2. Encoding: horizontal SIMD bitplanes
+### 2. Encoding: BFV row-halves
 
 Each bidder occupies one SIMD **slot** (ring position) across 64 packed ciphertexts — one per bit of a `u64` bid.  Slot `i` of bitplane `j` holds bit `j` of bidder `i`'s bid (MSB first).
 
+With degree $N=2048$, BFV SIMD slots are organized as two rows of $N/2 = 1024$ slots each.  Rotations operate cyclically within each row.  To sum across all 2048 slots, the tally implementation performs $log_2(1024)$ column rotations followed by a row swap.
+
 ```
-            slot 0    slot 1    slot 2    ...
-bitplane 0  (MSB)     (MSB)     (MSB)
-bitplane 1
-  ...
-bitplane 63 (LSB)     (LSB)     (LSB)
+            slot 0    slot 1    ...    slot 1023
+row 0       bidder 0  bidder 1         bidder 1023
+row 1       bidder 1024 ...            bidder 2047
 ```
 
 Bidders encrypt their own bitplanes with the joint public key and submit them to the accumulator, which adds them slot-wise.
