@@ -16,20 +16,71 @@
 
 This is the monorepo for **The Interfold**, an open-source protocol for confidential coordination.
 
-The Interfold leverages a combination of Fully Homomorphic Encryption (FHE), Zero-Knowledge Proofs
-(ZKPs), and Multi-Party Computation (MPC) to enable Encrypted Execution Environments (E3), with
-integrity and privacy guarantees rooted in cryptography and economics, rather than hardware and
-attestations.
+The Interfold leverages a combination of Fully Homo morphic Encryption (FHE), Zero-Knowledge Proofs (ZKPs), and Multi-Party Computation (MPC) to enable Encrypted Execution Environments (E3), with integrity and privacy guarantees rooted in cryptography and economics, rather than hardware and attestations.
+
+## Auction Bit-Plane Demo
+
+This example demonstrates a sealed-bid auction using a bit-plane tallying approach. Unlike traditional tournament-based comparison circuits that require expensive column rotations, this implementation achieves $O(1)$ multiplicative depth by computing bitwise signals and aggregating them into a tally matrix.
+
+### How to Run the Demo
+
+#### 1. Build the project
+```bash
+cd examples/auction-bitplane
+cargo build --release
+```
+
+#### 2. Start the Auction Server
+The server manages auction state and provides endpoints for bid submission and result retrieval.
+```bash
+cargo run --example server
+```
+The server will start on `http://0.0.0.0:4001`.
+
+#### 3. Submit Bids
+Use `curl` to interact with the server. First, create an auction, then encrypt and submit bids.
+
+**Create an Auction:**
+```bash
+curl -X POST http://localhost:4001/auction/create
+```
+*Note the `id` returned in the JSON response.*
+
+**Encrypt a Bid (Client-side simulation):**
+```bash
+curl -X POST http://localhost:4001/auction/{id}/encrypt \
+     -H "Content-Type: application/json" \
+     -d '{"bid": 123}'
+```
+*Note the `ciphertext` returned.*
+
+**Submit the Encrypted Bid:**
+```bash
+curl -X POST http://localhost:4001/auction/{id}/bid \
+     -H "Content-Type: application/json" \
+     -d '{"address": "0xYourAddress", "ciphertext": "<CIPHERTEXT_B64>"}'
+```
+
+#### 4. Close Auction and Get Results
+**Close the Auction:**
+```bash
+curl -X POST http://localhost:4001/auction/{id}/close
+```
+
+**Get the Winner:**
+```bash
+curl -X GET http://localhost:4001/auction/{id}/result
+```
+
+#### 5. Run Benchmarks
+Compare the performance of the bit-plane tallying approach against the traditional tournament approach.
+```bash
+cargo bench --bench bench
+```
 
 ## Documentation
 
 Full documentation is available at: https://docs.theinterfold.com
-
-## Quick Start
-
-Follow instructions in the [quick start][quick-start] section of the documentation.
-
-See the [CRISP example][crisp] for a fully functioning example application.
 
 ## Getting Help
 
@@ -41,8 +92,7 @@ See [CONTRIBUTING.md][contributing].
 
 ## Development
 
-This section covers the essential commands for setting up and working with the Enclave codebase
-locally.
+This section covers the essential commands for setting up and working with the Enclave codebase locally.
 
 ```bash
 # Install dependencies
@@ -57,54 +107,16 @@ pnpm clean
 
 ### Testing
 
-**⚠️ Important:** Always run tests through pnpm scripts, not directly via `cargo test` or other
-build tools. The pnpm scripts ensure necessary setup steps are executed (e.g., building required
-binaries, setting up test environments) that may be skipped when running tests directly.
+**⚠️ Important:** Always run tests through pnpm scripts, not directly via `cargo test` or other build tools.
 
 #### Test Scripts
 
-The monorepo provides several test scripts for different components:
-
-- **`pnpm test`** - Runs all tests across the entire monorepo:
-  - EVM/Smart contract tests (`evm:test`)
-  - Rust crate tests (`rust:test`)
-  - SDK tests (`sdk:test`)
-  - Noir circuit tests (`noir:test`)
-
-- **`pnpm rust:test`** - Runs all Rust crate tests in the `crates/` directory. This script runs
-  tests for all crates in the workspace, not just ciphernode-related crates.
-
-- **`pnpm evm:test`** - Runs tests for the EVM smart contracts in `packages/enclave-contracts`.
-
-- **`pnpm sdk:test`** - Runs tests for the TypeScript SDK in `packages/enclave-sdk`.
-
-- **`pnpm noir:test`** - Runs tests for Noir circuits in the `circuits/` directory using
-  `nargo test`.
-
-- **`pnpm test:integration`** - Runs integration tests from `tests/integration/`. These tests may
-  require prebuilt binaries and can be run with `--no-prebuild` if binaries are already available.
-
-#### Running Individual Test Suites
-
-```bash
-# Run only Rust crate tests
-pnpm rust:test
-
-# Run only EVM/smart contract tests
-pnpm evm:test
-
-# Run only SDK tests
-pnpm sdk:test
-
-# Run only Noir circuit tests
-pnpm noir:test
-
-# Run only integration tests
-pnpm test:integration
-
-# Run integration tests without prebuild step (if binaries already exist)
-pnpm test:integration --no-prebuild
-```
+- **`pnpm test`** - Runs all tests across the entire monorepo.
+- **`pnpm rust:test`** - Runs all Rust crate tests in the `crates/` directory.
+- **`pnpm evm:test`** - Runs tests for the EVM smart contracts.
+- **`pnpm sdk:test`** - Runs tests for the TypeScript SDK.
+- **`pnpm noir:test`** - Runs tests for Noir circuits.
+- **`pnpm test:integration`** - Runs integration tests.
 
 ### Contributors
 
@@ -155,44 +167,7 @@ pnpm test:integration --no-prebuild
                 </a>
             </td>
 		</tr>
-		<tr>
-            <td align="center">
-                <a href="https://github.com/nginnever">
-                    <img src="https://avatars.githubusercontent.com/u/7103153?v=4" width="100;" alt="nginnever"/>
-                    <br />
-                    <sub><b>Nathan Ginnever</b></sub>
-                </a>
-            </td>
-            <td align="center">
-                <a href="https://github.com/0xjei">
-                    <img src="https://avatars.githubusercontent.com/u/20580910?v=4" width="100;" alt="0xjei"/>
-                    <br />
-                    <sub><b>Giacomo</b></sub>
-                </a>
-            </td>
-            <td align="center">
-                <a href="https://github.com/cedoor">
-                    <img src="https://avatars.githubusercontent.com/u/11427903?v=4" width="100;" alt="cedoor"/>
-                    <br />
-                    <sub><b>Cedoor</b></sub>
-                </a>
-            </td>
-            <td align="center">
-                <a href="https://github.com/ozgurarmanc">
-                    <img src="https://avatars.githubusercontent.com/u/94117770?v=4" width="100;" alt="ozgurarmanc"/>
-                    <br />
-                    <sub><b>Armanc</b></sub>
-                </a>
-            </td>
-            <td align="center">
-                <a href="https://github.com/Subhasish-Behera">
-                    <img src="https://avatars.githubusercontent.com/u/92573882?v=4" width="100;" alt="Subhasish-Behera"/>
-                    <br />
-                    <sub><b>SUBHASISH BEHERA</b></sub>
-                </a>
-            </td>
-		</tr>
-	<tbody>
+	</tbody>
 </table>
 <!-- readme: contributors-end -->
 
@@ -202,152 +177,13 @@ This workspace's minimum supported rustc version is 1.86.0.
 
 ## Architecture
 
-The Interfold employs a modular architecture involving numerous actors and participants. The
-sequence diagram below offers a high-level overview of the protocol, but necessarily omits most
-detail.
-
-```mermaid
-sequenceDiagram
-    participant Users
-    participant Enclave
-    participant CiphernodeRegistry
-    participant E3Program
-    participant ComputeProvider
-    participant DecryptionVerifier
-
-    Users->>Enclave: request(parameters)
-    Enclave->>E3Program: validate(e3ProgramParams)
-    Enclave->>ComputeProvider: validate(computeProviderParams)
-    ComputeProvider-->>Enclave: decryptionVerifier
-    Enclave->>CiphernodeRegistry: requestCommittee(e3Id, seed, threshold)
-    CiphernodeRegistry-->>Enclave: success
-    Enclave-->>Users: e3Id, E3 struct
-
-    Users->>Enclave: activate(e3Id)
-    Enclave->>CiphernodeRegistry: committeePublicKey(e3Id)
-    CiphernodeRegistry-->>Enclave: publicKey
-    Enclave->>Enclave: Set expiration and committeePublicKey
-    Enclave-->>Users: success
-
-    Users->>Enclave: publishInput(e3Id, data)
-    Enclave->>E3Program: validateInput(msg.sender, data)
-    E3Program-->>Enclave: input, success
-    Enclave->>Enclave: Store input
-    Enclave-->>Users: success
-
-    Users->>Enclave: publishCiphertextOutput(e3Id, data)
-    Enclave->>DecryptionVerifier: verify(e3Id, data)
-    DecryptionVerifier-->>Enclave: output, success
-    Enclave->>Enclave: Store ciphertextOutput
-    Enclave-->>Users: success
-
-    Users->>Enclave: publishPlaintextOutput(e3Id, data)
-    Enclave->>E3Program: verify(e3Id, data)
-    E3Program-->>Enclave: output, success
-    Enclave->>Enclave: Store plaintextOutput
-    Enclave-->>Users: success
-```
+The Interfold employs a modular architecture involving numerous actors and participants.
 
 ## 🚀 Release Process
 
 ### Overview
 
-The Interfold uses a unified versioning strategy where all packages (Rust crates and npm packages)
-share the same version number. Releases are triggered by git tags and follow semantic versioning.
-
-### Quick Release
-
-```bash
-# One command to release! 🎉
-pnpm bump:versions 1.0.0
-
-# This automatically:
-# - Bumps all versions
-# - Generates changelog
-# - Commits changes
-# - Creates tag
-# - Pushes to GitHub
-# - Triggers release workflow
-```
-
-### Detailed Release Workflow
-
-#### 1. Development Phase
-
-Developers work on features and fixes, committing with
-[conventional commits](https://www.conventionalcommits.org/):
-
-```bash
-git commit -m "feat: add new encryption module"
-git commit -m "fix: resolve memory leak in SDK"
-git commit -m "docs: update API documentation"
-git commit -m "BREAKING CHANGE: redesign configuration API"
-```
-
-#### 2. Release Execution
-
-When ready to release, maintainers run a single command:
-
-```bash
-# For stable release
-pnpm bump:versions 1.0.0
-
-# For pre-release
-pnpm bump:versions 1.0.0-beta.1
-```
-
-This command automatically:
-
-- ✅ Validates working directory is clean
-- ✅ Updates version in `Cargo.toml` (workspace version)
-- ✅ Updates version in all npm `package.json` files
-- ✅ Updates lock files (`Cargo.lock`, `pnpm-lock.yaml`)
-- ✅ Generates/updates `CHANGELOG.md` from commit history
-- ✅ Commits changes: `chore(release): bump version to X.Y.Z`
-- ✅ Creates annotated tag: `vX.Y.Z`
-- ✅ Pushes commits and tag to GitHub
-- ✅ **Triggers automated release workflow**
-
-Please ensure you are in release branch before running the command. For example,
-`git checkout -b chore/release-v1.0.0-beta.1`.
-
-#### 3. Alternative: Manual Review Before Push
-
-If you prefer to review changes before pushing:
-
-```bash
-# Prepare release locally (no push)
-pnpm bump:versions --no-push 1.0.0
-
-# Review the changes
-git diff HEAD~1
-cat CHANGELOG.md
-
-# If everything looks good, push
-git push && git push --tags
-```
-
-#### 4. Automated Release Pipeline
-
-Once the tag is pushed, GitHub Actions automatically:
-
-1. **Validates** version consistency across all packages
-2. **Builds** binaries for all platforms:
-   - Linux (x86_64)
-   - macOS (x86_64, aarch64)
-3. **Runs** all tests
-4. **Publishes** packages:
-   - All versions (stable and pre-release):
-     - ✅ Publishes to crates.io
-     - ✅ Publishes to npm
-   - Tag differences:
-     - Stable (`v1.0.0`): npm `latest` tag, updates `stable` git tag
-     - Pre-release (`v1.0.0-beta.1`): npm `next` tag, no `stable` tag update
-5. **Creates** GitHub Release with:
-   - Binary downloads for all platforms
-   - Release notes from CHANGELOG.md
-   - SHA256 checksums
-   - Installation instructions
+The Interfold uses a unified versioning strategy where all packages share the same version number. Releases are triggered by git tags and follow semantic versioning.
 
 ## 🏷️ Version Strategy
 
@@ -357,72 +193,20 @@ The Interfold follows [Semantic Versioning](https://semver.org/):
 
 - **Stable**: `v1.0.0` - Production ready
 - **Pre-release**: `v1.0.0-beta.1` - Testing/preview versions
-  - `-alpha.X` - Early development, may have breaking changes
-  - `-beta.X` - Feature complete, testing for bugs
-  - `-rc.X` - Release candidate, final testing
-
-### Which Version Should I Use?
-
-#### For Production (Mainnet)
-
-Use stable versions only:
-
-```bash
-enclaveup install              # Latest stable
-enclaveup install v1.0.0       # Specific stable version
-```
-
-#### For Testing (Testnet)
-
-You can use pre-release versions:
-
-```bash
-enclaveup install --pre-release # Latest pre-release
-enclaveup install v1.0.0-beta.1 # Specific pre-release
-```
-
-#### For Development
-
-Build from source:
-
-```bash
-git clone https://github.com/gnosisguild/enclave.git
-cd enclave
-cargo build --release
-```
 
 ## 🌿 Branch and Tag Strategy
 
-### Current Setup
-
-- **`main`** - Latest code. All releases are tagged from here. Using feature flags for experimental
-  features, we ensure that code is always stable.
-- **`v*.*.*`** - Version tags for releases
-- **`stable`** - Always points to the latest stable release
-
-### Installation Sources
-
-```bash
-# Latest stable release (recommended for production)
-curl -fsSL https://raw.githubusercontent.com/gnosisguild/enclave/stable/install | bash
-
-# Latest development version (may be unstable)
-curl -fsSL https://raw.githubusercontent.com/gnosisguild/enclave/main/install | bash
-```
+- **`main`** - Latest code. All releases are tagged from here.
 
 ## 📋 Release Checklist
 
 For maintainers doing a release:
 
 - [ ] Ensure all tests pass on `main`
-- [ ] Review commits since last release for proper conventional format
-- [ ] Decide version number (major/minor/patch)
-- [ ] Run: `pnpm bump:versions X.Y.Z`
-- [ ] Monitor GitHub Actions for successful deployment
-- [ ] Verify packages on [npm](https://www.npmjs.com/org/enclave) and
-      [crates.io](https://crates.io/search?q=enclave)
-- [ ] Check GitHub release page for binaries and changelog
-- [ ] Announce release (Discord/Twitter/etc)
+- [ ] Review commits since last release
+- [ ] Decide version number
+- [ ] Run `pnpm bump:versions X.Y.Z`
+- [ ] Monitor GitHub Actions
 
 ## 🔧 Script Options
 
@@ -440,41 +224,23 @@ pnpm bump:versions --skip-git 1.0.0
 
 # Dry run - see what would happen
 pnpm bump:versions --dry-run 1.0.0
-
-# Show help
-pnpm bump:versions --help
 ```
 
 ## 🔄 Rollback Procedure
 
 If a release has issues:
 
-1. **Mark as deprecated on npm**:
-
-   ```bash
-   npm deprecate @enclave/sdk@1.0.0 "Critical bug, use 1.0.1"
-   ```
-
-2. **Yank from crates.io** (if critical):
-
-   ```bash
-   cargo yank --version 1.0.0 enclave
-   ```
-
-3. **Fix and release patch**:
-   ```bash
-   pnpm bump:versions 1.0.1
-   ```
+1. **Mark as deprecated on npm**
+2. **Yank from crates.io**
+3. **Fix and release patch**
 
 ## 📊 Version History
 
-Check our [Releases page](https://github.com/gnosisguild/enclave/releases) for full version history
-and changelogs.
+Check our [Releases page](https://github.com/gnosisguild/enclave/releases) for full version history and changelogs.
 
 ## Security and Liability
 
-This repo is provided WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
-FITNESS FOR A PARTICULAR PURPOSE.
+This repo is provided WITHOUT ANY WARRANTY.
 
 ## License
 
@@ -483,7 +249,7 @@ This repo created under the [LGPL-3.0+ license](LICENSE).
 [gha]: https://github.com/gnosisguild/enclave/actions
 [gha-badge]: https://github.com/gnosisguild/enclave/actions/workflows/ci.yml/badge.svg
 [hardhat]: https://hardhat.org/
-[hardhat-badge]: https://img.shields.io/badge/Built%20with-Hardhat-FFDB1C.svg
+[hardhat-badge]: https://img.shields.io/badge/Built%20with%20Hardhat-FFDB1C.svg
 [license]: https://opensource.org/license/lgpl-3-0
 [license-badge]: https://img.shields.io/badge/License-LGPLv3.0-blue.svg
 [docs]: https://docs.theinterfold.com
