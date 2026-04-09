@@ -11,9 +11,9 @@
 
 use fhe::bfv::{
     BfvParameters, BfvParametersBuilder, Ciphertext, Encoding, EvaluationKey, EvaluationKeyBuilder,
-    Plaintext, PublicKey, RelinearizationKey, SecretKey,
+    Plaintext, RelinearizationKey, SecretKey,
 };
-use fhe_traits::{FheDecoder, FheDecrypter, FheEncoder, FheEncrypter, Serialize};
+use fhe_traits::{FheDecoder, FheDecrypter, FheEncoder, FheEncrypter};
 use rand::rngs::OsRng;
 use std::sync::Arc;
 
@@ -73,12 +73,6 @@ pub fn mul_relin(a: &Ciphertext, b: &Ciphertext, rk: &RelinearizationKey) -> Cip
     result
 }
 
-/// Encode a SIMD plaintext where every slot holds `value`.
-pub fn encode_scalar(value: u64, params: &Arc<BfvParameters>) -> Plaintext {
-    Plaintext::try_encode(&vec![value; params.degree()], Encoding::simd(), params)
-        .expect("failed to encode scalar broadcast")
-}
-
 // ── Horizontal Bit-Plane Encoding ────────────────────────────────────────────
 
 /// Encode a single bidder's bid into `BID_BITS` sparse plaintexts.
@@ -99,17 +93,6 @@ pub fn encode_bid_into_planes(
             slots[slot] = (value >> (BID_BITS - 1 - j)) & 1;
             Plaintext::try_encode(&slots, Encoding::simd(), params)
                 .expect("failed to encode bitplane")
-        })
-        .collect()
-}
-
-/// Encrypt a set of bitplane plaintexts with the public key.
-pub fn encrypt_bitplanes_pk(planes: &[Plaintext], pk: &PublicKey) -> Vec<Ciphertext> {
-    planes
-        .iter()
-        .map(|pt| {
-            pk.try_encrypt(pt, &mut OsRng)
-                .expect("failed to encrypt bitplane")
         })
         .collect()
 }
@@ -355,130 +338,4 @@ pub fn find_winner_bitplane(
     let tally_cts = compute_tallies(bitplanes, n_bidders, eval_key, rk, params);
     let tally_matrix = decrypt_tally_matrix(&tally_cts, n_bidders, sk, params);
     rank_bidders_from_tallies(&tally_matrix)
-}
-
-// ── Legacy Helpers (kept for benchmark comparison) ───────────────────────────
-
-/// Encode a bid value into a single SIMD plaintext (binary across slots,
-/// MSB first).  Used only by the legacy prefix-scan comparison path.
-pub fn encode_bid_legacy(value: u64, params: &Arc<BfvParameters>) -> Plaintext {
-    let degree = params.degree();
-    let mut slots = vec![0u64; degree];
-    for i in 0..BID_BITS.min(64) {
-        slots[i] = (value >> (BID_BITS - 1 - i)) & 1;
-    }
-    Plaintext::try_encode(&slots, Encoding::simd(), params).expect("failed to encode bid (legacy)")
-}
-
-/// Encrypt a plaintext bid with a secret key (legacy path).
-pub fn encrypt_bid_sk(pt: &Plaintext, sk: &SecretKey) -> Ciphertext {
-    sk.try_encrypt(pt, &mut OsRng)
-        .expect("failed to encrypt bid")
-}
-
-/// Decrypt and read slot 0 from a SIMD ciphertext (legacy comparison).
-pub fn decrypt_slot0(ct: &Ciphertext, sk: &SecretKey, params: &Arc<BfvParameters>) -> u64 {
-    let pt = sk.try_decrypt(ct).expect("decryption failed");
-    let slots = Vec::<u64>::try_decode(&pt, Encoding::simd()).expect("decode failed");
-    let value = slots[0];
-    if value > params.plaintext() / 2 {
-        0
-    } else {
-        value
-    }
-}
-
-/// Decrypt a bid ciphertext and reconstruct the integer value from SIMD
-/// binary slots (legacy path).
-pub fn decrypt_bid_legacy(ct: &Ciphertext, sk: &SecretKey, _params: &Arc<BfvParameters>) -> u64 {
-    let pt = sk.try_decrypt(ct).expect("decryption failed");
-    let slots = Vec::<u64>::try_decode(&pt, Encoding::simd()).expect("decode failed");
-    let mut value = 0u64;
-    for i in 0..BID_BITS.min(64) {
-        value |= (slots[i] & 1) << (BID_BITS - 1 - i);
-    }
-    value
-}
-
-/// Generate per-bit Gt and Eq signals (legacy, used by prefix-scan comparison).
-pub fn generate_bitwise_signals(
-    ct_a: &Ciphertext,
-    ct_b: &Ciphertext,
-    rk: &RelinearizationKey,
-    params: &Arc<BfvParameters>,
-) -> (Ciphertext, Ciphertext) {
-    let degree = params.degree();
-    let ones = Plaintext::try_encode(&vec![1u64; degree], Encoding::simd(), params)
-        .expect("failed to encode ones");
-
-    let diff = ct_a - ct_b;
-    let diff_sq = mul_relin(&diff, &diff, rk);
-    let eq = &ones - &diff_sq;
-
-    let ab = mul_relin(ct_a, ct_b, rk);
-    let gt = ct_a - &ab;
-
-    (gt, eq)
-}
-
-/// Homomorphic comparison via prefix-scan: returns encrypted result where
-/// slot 0 = 1 iff a > b.  Legacy path kept for benchmarking.
-pub fn compare_greater_than(
-    ct_a: &Ciphertext,
-    ct_b: &Ciphertext,
-    eval_key: &EvaluationKey,
-    rk: &RelinearizationKey,
-    params: &Arc<BfvParameters>,
-) -> Ciphertext {
-    let (mut gt, mut eq) = generate_bitwise_signals(ct_a, ct_b, rk, params);
-
-    let mut shift = 1;
-    while shift < BID_BITS {
-        let gt_shifted = eval_key
-            .rotates_columns_by(&gt, shift)
-            .expect("column rotation failed for gt");
-        let eq_shifted = eval_key
-            .rotates_columns_by(&eq, shift)
-            .expect("column rotation failed for eq");
-
-        let eq_times_gt_shifted = mul_relin(&eq, &gt_shifted, rk);
-        gt = &gt + &eq_times_gt_shifted;
-        eq = mul_relin(&eq, &eq_shifted, rk);
-
-        shift *= 2;
-    }
-
-    gt
-}
-
-/// Run a pairwise tournament over encrypted bids (legacy prefix-scan path).
-pub fn find_winner_legacy(
-    bids: &[Ciphertext],
-    eval_key: &EvaluationKey,
-    rk: &RelinearizationKey,
-    sk: &SecretKey,
-    params: &Arc<BfvParameters>,
-) -> (usize, u64) {
-    assert!(!bids.is_empty(), "no bids to compare");
-
-    let mut winner_idx = 0;
-    for i in 1..bids.len() {
-        let result = compare_greater_than(&bids[i], &bids[winner_idx], eval_key, rk, params);
-        if decrypt_slot0(&result, sk, params) == 1 {
-            winner_idx = i;
-        }
-    }
-
-    let winning_value = decrypt_bid_legacy(&bids[winner_idx], sk, params);
-    (winner_idx, winning_value)
-}
-
-// ── Serialization Helpers ────────────────────────────────────────────────────
-
-pub fn pk_to_bytes(pk: &PublicKey) -> Vec<u8> {
-    pk.to_bytes()
-}
-
-pub fn ct_to_bytes(ct: &Ciphertext) -> Vec<u8> {
-    ct.to_bytes()
 }

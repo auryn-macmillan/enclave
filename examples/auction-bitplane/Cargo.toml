@@ -1,26 +1,13 @@
 [workspace]
-members = ["server", "wasm"]
-resolver = "2"
 
 [package]
 name = "auction_bitplane_example"
 version = "0.1.0"
 edition = "2021"
 license = "LGPL-3.0-only"
-description = "Sealed-bid auction demo using BFV SIMD encoding"
+description = "Sealed-bid Vickrey auction demo using BFV SIMD bit-plane encoding"
 
 [dependencies]
 fhe = { git = "https://github.com/gnosisguild/fhe.rs" }
 fhe-traits = { git = "https://github.com/gnosisguild/fhe.rs" }
 rand = "0.8"
-
-[dev-dependencies]
-criterion = "0.5"
-
-[[bin]]
-name = "main_sealed"
-path = "src/main_sealed.rs"
-
-[[bench]]
-name = "bench"
-harness = false
