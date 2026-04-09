@@ -167,7 +167,7 @@ pub fn member_keygen(params: &Arc<BfvParameters>, crp: &CommonRandomPoly) -> Mem
         .coeffs_to_poly_level0(sk.coeffs.clone().as_ref())
         .expect("sk → polynomial");
     let sk_shares = share_manager
-        .generate_secret_shares_from_poly(sk_poly, &mut OsRng)
+        .generate_secret_shares_from_poly(sk_poly, OsRng)
         .expect("Shamir split");
 
     MemberKeygenOutput {
@@ -230,8 +230,10 @@ pub fn aggregate_sk_shares_for_party(
 /// Galois key generation protocol would be used instead.
 ///
 /// The all-slot sum needs column rotations by every power of two from 1
-/// up to `SLOTS / 2` (exclusive).  With `SLOTS = 2048` that means shifts
-/// of 1, 2, 4, 8, …, 512 — ten rotations per bitplane.
+/// up to `SLOTS / 2` (exclusive), plus a **row rotation** (row swap) to
+/// combine both row halves.  With `SLOTS = 2048` that means column shifts
+/// of 1, 2, 4, 8, …, 512 plus one row swap — eleven rotations per
+/// bitplane.
 pub fn build_eval_key_from_committee(
     member_sks: &[&SecretKey],
     params: &Arc<BfvParameters>,
@@ -268,16 +270,17 @@ pub fn build_eval_key_from_committee(
         })
         .collect();
 
-    let combined_sk = SecretKey::new(coeffs_i64.into_vec(), &params);
+    let combined_sk = SecretKey::new(coeffs_i64.into_vec(), params);
 
     let mut builder = EvaluationKeyBuilder::new(&combined_sk).expect("eval key builder");
     let mut shift = 1;
     while shift < SLOTS / 2 {
         builder
             .enable_column_rotation(shift)
-            .expect("enable rotation");
+            .expect("enable column rotation");
         shift *= 2;
     }
+    builder.enable_row_rotation().expect("enable row rotation");
     let eval_key = builder.build(&mut OsRng).expect("build evaluation key");
     let relin_key =
         RelinearizationKey::new(&combined_sk, &mut OsRng).expect("build relinearization key");
@@ -332,8 +335,12 @@ pub fn accumulate_bitplanes(global: &mut [Ciphertext], contribution: &[Ciphertex
 
 /// Sum all SIMD slots of `ct` into every slot via a rotation reduce-tree.
 ///
-/// After `log2(SLOTS/2)` steps each slot holds `Σ_i ct[i]`.
+/// BFV SIMD batching with degree `N` arranges `N` slots into **two rows**
+/// of `N/2` each.  Column rotations (shifts within a row) reduce each row
+/// independently in `log2(N/2)` steps.  A final **row swap + add**
+/// combines both halves so every slot holds the global sum `Σ_i ct[i]`.
 fn all_slots_sum(ct: &Ciphertext, eval_key: &EvaluationKey) -> Ciphertext {
+    // Phase 1: reduce within each row half via column rotations.
     let mut acc = ct.clone();
     let mut shift = 1;
     while shift < SLOTS / 2 {
@@ -343,6 +350,9 @@ fn all_slots_sum(ct: &Ciphertext, eval_key: &EvaluationKey) -> Ciphertext {
         acc = &acc + &rotated;
         shift *= 2;
     }
+    // Phase 2: combine the two row halves via a row swap.
+    let row_swapped = eval_key.rotates_rows(&acc).expect("row rotation");
+    acc = &acc + &row_swapped;
     acc
 }
 
@@ -381,8 +391,8 @@ pub fn compute_tallies(
     // ciphertext by this plaintext zeroes out noise in unused slots
     // before the all-slot reduction sum.
     let mut mask_slots = vec![0u64; params.degree()];
-    for s in 0..n_bidders {
-        mask_slots[s] = 1;
+    for slot in mask_slots.iter_mut().take(n_bidders) {
+        *slot = 1;
     }
     let mask = Plaintext::try_encode(&mask_slots, Encoding::simd(), params).expect("encode mask");
 
@@ -594,4 +604,485 @@ pub fn decode_bid(bid_pts: &[Plaintext], slot: usize, params: &Arc<BfvParameters
         value |= bit << (BID_BITS - 1 - j);
     }
     value
+}
+
+// ── Tests (plaintext-only, no FHE key generation) ────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── decode_slot ──────────────────────────────────────────────────────
+
+    #[test]
+    fn decode_slot_zero_stays_zero() {
+        assert_eq!(decode_slot(0, 12289), 0);
+    }
+
+    #[test]
+    fn decode_slot_small_positive_passes_through() {
+        assert_eq!(decode_slot(1, 12289), 1);
+        assert_eq!(decode_slot(42, 12289), 42);
+        assert_eq!(decode_slot(6144, 12289), 6144); // exactly t/2 (integer division)
+    }
+
+    #[test]
+    fn decode_slot_large_values_mapped_to_zero() {
+        // Values above t/2 represent "noisy zeros" in BFV and should map to 0.
+        let t: u64 = 12289;
+        assert_eq!(decode_slot(t / 2 + 1, t), 0); // 6145
+        assert_eq!(decode_slot(t - 1, t), 0); // 12288 — typical noisy zero
+        assert_eq!(decode_slot(t, t), 0); // t itself (shouldn't appear, but safe)
+    }
+
+    #[test]
+    fn decode_slot_boundary_at_half_modulus() {
+        let t: u64 = 12289;
+        let half = t / 2; // 6144
+                          // Exactly at half: passes through.
+        assert_eq!(decode_slot(half, t), half);
+        // One above half: mapped to zero.
+        assert_eq!(decode_slot(half + 1, t), 0);
+    }
+
+    // ── tally_row_beats ─────────────────────────────────────────────────
+
+    /// Helper: build a BID_BITS-length row with the given leading values;
+    /// the rest are zero.
+    fn make_row(leading: &[u64]) -> Vec<u64> {
+        let mut row = vec![0u64; BID_BITS];
+        for (j, &v) in leading.iter().enumerate() {
+            row[j] = v;
+        }
+        row
+    }
+
+    #[test]
+    fn tally_row_beats_clear_winner_first_bit() {
+        // MSB difference should decide immediately.
+        let a = make_row(&[5]);
+        let b = make_row(&[3]);
+        assert!(tally_row_beats(&a, 0, &b, 1));
+        assert!(!tally_row_beats(&b, 1, &a, 0));
+    }
+
+    #[test]
+    fn tally_row_beats_msb_dominant() {
+        // a wins at bit 0, even though b wins at every subsequent bit.
+        let mut a = make_row(&[1]);
+        let mut b = make_row(&[0]);
+        for j in 1..BID_BITS {
+            a[j] = 0;
+            b[j] = 999;
+        }
+        assert!(tally_row_beats(&a, 0, &b, 1));
+    }
+
+    #[test]
+    fn tally_row_beats_tie_broken_by_slot_index() {
+        // Identical rows — lower slot index should win.
+        let row = make_row(&[3, 2, 1]);
+        assert!(tally_row_beats(&row, 0, &row, 1));
+        assert!(!tally_row_beats(&row, 1, &row, 0));
+    }
+
+    #[test]
+    fn tally_row_beats_same_slot_is_false() {
+        // A row does NOT beat itself at the same slot (a_slot < b_slot is false).
+        let row = make_row(&[3, 2, 1]);
+        assert!(!tally_row_beats(&row, 5, &row, 5));
+    }
+
+    #[test]
+    fn tally_row_beats_later_bit_decides() {
+        // Tied at bit 0, decided at bit 1.
+        let a = make_row(&[3, 5]);
+        let b = make_row(&[3, 2]);
+        assert!(tally_row_beats(&a, 0, &b, 1));
+        assert!(!tally_row_beats(&b, 1, &a, 0));
+    }
+
+    // ── rank_bidders ────────────────────────────────────────────────────
+
+    #[test]
+    fn rank_single_bidder() {
+        let tallies = vec![make_row(&[1, 0, 1])];
+        let (winner, runner) = rank_bidders(&tallies);
+        assert_eq!(winner, 0);
+        assert_eq!(runner, None);
+    }
+
+    #[test]
+    fn rank_two_bidders_clear_winner() {
+        let tallies = vec![
+            make_row(&[0, 1, 0]), // bidder 0
+            make_row(&[1, 0, 0]), // bidder 1 — wins at MSB
+        ];
+        let (winner, runner) = rank_bidders(&tallies);
+        assert_eq!(winner, 1);
+        assert_eq!(runner, Some(0));
+    }
+
+    #[test]
+    fn rank_three_bidders_ordering() {
+        let tallies = vec![
+            make_row(&[0, 0, 5]), // bidder 0 — weakest
+            make_row(&[0, 3, 0]), // bidder 1 — middle
+            make_row(&[1, 0, 0]), // bidder 2 — strongest (MSB)
+        ];
+        let (winner, runner) = rank_bidders(&tallies);
+        assert_eq!(winner, 2);
+        assert_eq!(runner, Some(1));
+    }
+
+    #[test]
+    fn rank_tie_broken_by_slot_index() {
+        // All three bidders have identical tally rows.
+        let row = make_row(&[2, 1]);
+        let tallies = vec![row.clone(), row.clone(), row.clone()];
+        let (winner, runner) = rank_bidders(&tallies);
+        // Tie-break: lowest slot index wins.
+        assert_eq!(winner, 0);
+        assert_eq!(runner, Some(1));
+    }
+
+    #[test]
+    fn rank_winner_and_runner_tie() {
+        // Bidders 0 and 1 tie (both strongest), bidder 2 is weaker.
+        let strong = make_row(&[5, 3]);
+        let weak = make_row(&[1, 0]);
+        let tallies = vec![strong.clone(), strong.clone(), weak];
+        let (winner, runner) = rank_bidders(&tallies);
+        // Bidder 0 wins tie-break over bidder 1.
+        assert_eq!(winner, 0);
+        assert_eq!(runner, Some(1));
+    }
+
+    #[test]
+    fn rank_runner_up_is_second_not_last() {
+        // 4 bidders with descending strength — runner-up should be #1, not #3.
+        let tallies = vec![
+            make_row(&[9, 0, 0, 0]), // bidder 0 — winner
+            make_row(&[8, 0, 0, 0]), // bidder 1 — runner-up
+            make_row(&[5, 0, 0, 0]), // bidder 2
+            make_row(&[1, 0, 0, 0]), // bidder 3
+        ];
+        let (winner, runner) = rank_bidders(&tallies);
+        assert_eq!(winner, 0);
+        assert_eq!(runner, Some(1));
+    }
+
+    #[test]
+    fn rank_msb_dominant_across_bidders() {
+        // Bidder 0 has large values in lower bits but 0 at MSB.
+        // Bidder 1 has 1 at MSB but 0 everywhere else.
+        let mut low_heavy = vec![999u64; BID_BITS];
+        low_heavy[0] = 0; // MSB = 0
+        let mut msb_only = vec![0u64; BID_BITS];
+        msb_only[0] = 1; // MSB = 1
+        let tallies = vec![low_heavy, msb_only];
+        let (winner, runner) = rank_bidders(&tallies);
+        assert_eq!(winner, 1, "MSB=1 bidder must beat MSB=0 bidder");
+        assert_eq!(runner, Some(0));
+    }
+
+    #[test]
+    #[should_panic(expected = "no tallies to rank")]
+    fn rank_empty_panics() {
+        let tallies: Vec<Vec<u64>> = vec![];
+        rank_bidders(&tallies);
+    }
+
+    // ── FHE helpers for end-to-end tests ────────────────────────────────
+
+    /// Build the accumulated bitplane ciphertexts directly from a full bid
+    /// vector.  This is equivalent to per-bidder encrypt + accumulate but
+    /// produces only `BID_BITS` ciphertexts instead of `n × BID_BITS`,
+    /// keeping the test runtime manageable for large `n`.
+    fn build_accumulated_bitplanes(
+        bids: &[u64],
+        params: &Arc<BfvParameters>,
+        pk: &PublicKey,
+    ) -> Vec<Ciphertext> {
+        let degree = params.degree();
+        (0..BID_BITS)
+            .map(|j| {
+                let mut slots = vec![0u64; degree];
+                for (slot, &bid) in bids.iter().enumerate() {
+                    slots[slot] = (bid >> (BID_BITS - 1 - j)) & 1;
+                }
+                let pt =
+                    Plaintext::try_encode(&slots, Encoding::simd(), params).expect("encode plane");
+                pk.try_encrypt(&pt, &mut OsRng).expect("encrypt plane")
+            })
+            .collect()
+    }
+
+    /// Plaintext shadow: compute the expected tally matrix the same way
+    /// the FHE pipeline does but entirely in the clear.
+    ///
+    /// For each bitplane `j` and bidder `i`:
+    ///   ones_j  = number of active bidders with bit j set
+    ///   zeros_j = n_bidders − ones_j
+    ///   tally[i][j] = bit_j(bid_i) × zeros_j
+    fn plaintext_tally_shadow(bids: &[u64]) -> Vec<Vec<u64>> {
+        let n = bids.len();
+        let mut matrix = vec![vec![0u64; BID_BITS]; n];
+        for j in 0..BID_BITS {
+            let ones: u64 = bids.iter().map(|&b| (b >> (BID_BITS - 1 - j)) & 1).sum();
+            let zeros = n as u64 - ones;
+            for (i, &bid) in bids.iter().enumerate() {
+                let bit = (bid >> (BID_BITS - 1 - j)) & 1;
+                matrix[i][j] = bit * zeros;
+            }
+        }
+        matrix
+    }
+
+    // ── Full-pipeline end-to-end: single bidder ─────────────────────────
+
+    /// End-to-end test with a single bidder: DKG → encode → encrypt →
+    /// accumulate → tally → threshold decrypt → rank → verify.
+    ///
+    /// Confirms the library pipeline works when only one bidder participates:
+    /// the winner is correctly identified and `rank_bidders` returns `None`
+    /// for the runner-up (no second-price assumption forced).
+    #[test]
+    fn e2e_single_bidder_pipeline() {
+        let params = build_params();
+
+        // ── Committee DKG (3 members) ────────────────────────────────────
+        let crp = generate_crp(&params);
+        let members: Vec<_> = (0..COMMITTEE_N)
+            .map(|_| member_keygen(&params, &crp))
+            .collect();
+
+        let pk_shares: Vec<_> = members.iter().map(|m| m.pk_share.clone()).collect();
+        let joint_pk = aggregate_public_key(pk_shares);
+
+        let all_sk_shares: Vec<_> = members.iter().map(|m| m.sk_shares.clone()).collect();
+        let sk_poly_sums: Vec<_> = (0..COMMITTEE_N)
+            .map(|i| aggregate_sk_shares_for_party(&all_sk_shares, i, &params))
+            .collect();
+
+        let member_sk_refs: Vec<&_> = members.iter().map(|m| &m.sk).collect();
+        let (eval_key, relin_key) = build_eval_key_from_committee(&member_sk_refs, &params);
+
+        let bid: u64 = 7_500_000_000_000_000_000; // 7.5 ETH in wei
+        let slot = 0;
+        let n_bidders = 1;
+
+        let planes = encode_bid_into_planes(bid, slot, &params);
+        let encrypted = encrypt_bitplanes(&planes, &joint_pk);
+
+        // With one bidder the global accumulator is just their ciphertexts.
+        let global_bitplanes = encrypted.clone();
+
+        let tally_cts =
+            compute_tallies(&global_bitplanes, n_bidders, &eval_key, &relin_key, &params);
+
+        let participating = [0usize, 1];
+        let party_tally_shares: Vec<(usize, Vec<_>)> = participating
+            .iter()
+            .map(|&i| {
+                let smudging = generate_smudging_noise(&params, tally_cts.len());
+                let shares =
+                    compute_decryption_shares(&tally_cts, &sk_poly_sums[i], &smudging, &params);
+                (i + 1, shares)
+            })
+            .collect();
+
+        let tally_pts = threshold_decrypt(&party_tally_shares, &tally_cts, &params);
+        let tally_matrix = decode_tally_matrix(&tally_pts, n_bidders, &params);
+        let (winner_slot, runner_up) = rank_bidders(&tally_matrix);
+
+        // ── Assertions ───────────────────────────────────────────────────
+        assert_eq!(winner_slot, 0, "single bidder must win");
+        assert_eq!(
+            runner_up, None,
+            "single bidder: no runner-up, no forced second-price"
+        );
+
+        // Single-bidder tally: for every bit, zeros = n(1) − ones.
+        // A '1' bit: tally = 1 × 0 = 0.  A '0' bit: tally = 0 × 1 = 0.
+        // The entire row must be zero.
+        for &val in &tally_matrix[0] {
+            assert_eq!(val, 0, "single-bidder tally must be all zeros");
+        }
+
+        // Threshold-decrypt the raw bitplanes to confirm the bid
+        // round-trips through FHE correctly.
+        let party_bid_shares: Vec<(usize, Vec<_>)> = participating
+            .iter()
+            .map(|&i| {
+                let smudging = generate_smudging_noise(&params, encrypted.len());
+                let shares =
+                    compute_decryption_shares(&encrypted, &sk_poly_sums[i], &smudging, &params);
+                (i + 1, shares)
+            })
+            .collect();
+        let bid_pts = threshold_decrypt(&party_bid_shares, &encrypted, &params);
+        let recovered = decode_bid(&bid_pts, slot, &params);
+        assert_eq!(recovered, bid, "bid must round-trip through FHE");
+    }
+
+    // ── Cross-row-half regression (>1024 bidders) ───────────────────────
+
+    /// Full FHE pipeline with 1025 bidders — enough to span both BFV row
+    /// halves (row 0: slots 0..1023, row 1: slots 1024..2047).
+    ///
+    /// The winner lives in row 1 (slot 1024) and the runner-up in row 0
+    /// (slot 500).  Without the row-rotation fix in `all_slots_sum`, the
+    /// ones-count would miss row-1 contributions and the tally (hence the
+    /// ranking) would be wrong.
+    #[test]
+    fn fhe_tally_cross_row_halves_1025_bidders() {
+        let n_bidders = SLOTS / 2 + 1;
+
+        let params = build_params();
+        let crp = generate_crp(&params);
+        let members: Vec<_> = (0..COMMITTEE_N)
+            .map(|_| member_keygen(&params, &crp))
+            .collect();
+
+        let pk_shares: Vec<_> = members.iter().map(|m| m.pk_share.clone()).collect();
+        let joint_pk = aggregate_public_key(pk_shares);
+
+        let all_sk_shares: Vec<_> = members.iter().map(|m| m.sk_shares.clone()).collect();
+        let sk_poly_sums: Vec<_> = (0..COMMITTEE_N)
+            .map(|i| aggregate_sk_shares_for_party(&all_sk_shares, i, &params))
+            .collect();
+
+        let member_sk_refs: Vec<&_> = members.iter().map(|m| &m.sk).collect();
+        let (eval_key, relin_key) = build_eval_key_from_committee(&member_sk_refs, &params);
+
+        // Winner in row 1 (slot 1024), runner-up in row 0 (slot 500).
+        // All other bidders bid 0 → all-zero tally rows → they lose.
+        let mut bids = vec![0u64; n_bidders];
+        bids[1024] = 1000; // winner   — row 1
+        bids[500] = 900; // runner-up — row 0
+        bids[0] = 100; // third place — row 0
+
+        let bitplanes = build_accumulated_bitplanes(&bids, &params, &joint_pk);
+        let tally_cts = compute_tallies(&bitplanes, n_bidders, &eval_key, &relin_key, &params);
+
+        let participating = [0usize, 1];
+        let party_shares: Vec<(usize, Vec<_>)> = participating
+            .iter()
+            .map(|&i| {
+                let smudging = generate_smudging_noise(&params, tally_cts.len());
+                let shares =
+                    compute_decryption_shares(&tally_cts, &sk_poly_sums[i], &smudging, &params);
+                (i + 1, shares)
+            })
+            .collect();
+        let tally_pts = threshold_decrypt(&party_shares, &tally_cts, &params);
+        let fhe_matrix = decode_tally_matrix(&tally_pts, n_bidders, &params);
+        let (fhe_winner, fhe_runner) = rank_bidders(&fhe_matrix);
+
+        let shadow = plaintext_tally_shadow(&bids);
+        let (shadow_winner, shadow_runner) = rank_bidders(&shadow);
+
+        assert_eq!(shadow_winner, 1024, "shadow: expected winner at slot 1024");
+        assert_eq!(
+            shadow_runner,
+            Some(500),
+            "shadow: expected runner-up at slot 500"
+        );
+
+        assert_eq!(
+            fhe_winner, shadow_winner,
+            "FHE winner (slot {fhe_winner}) != shadow winner (slot {shadow_winner})"
+        );
+        assert_eq!(
+            fhe_runner, shadow_runner,
+            "FHE runner-up ({fhe_runner:?}) != shadow runner-up ({shadow_runner:?})"
+        );
+
+        // Spot-check tally values for the three non-zero bidders to
+        // verify the row-rotation sum was correct, not just the ranking.
+        for &slot in &[0, 500, 1024] {
+            for j in 0..BID_BITS {
+                assert_eq!(
+                    fhe_matrix[slot][j], shadow[slot][j],
+                    "tally mismatch at slot {slot}, bit {j}: FHE={}, shadow={}",
+                    fhe_matrix[slot][j], shadow[slot][j]
+                );
+            }
+        }
+    }
+
+    /// Variant: all non-zero bidders live in row 1 (slots ≥ 1024) while
+    /// row 0 is filled with zero bids.  Verifies the row swap propagates
+    /// correctly even when active bidders are concentrated in one half.
+    #[test]
+    fn fhe_tally_bidders_only_in_row1() {
+        const N_BIDDERS: usize = 1030;
+
+        let params = build_params();
+        let crp = generate_crp(&params);
+        let members: Vec<_> = (0..COMMITTEE_N)
+            .map(|_| member_keygen(&params, &crp))
+            .collect();
+
+        let pk_shares: Vec<_> = members.iter().map(|m| m.pk_share.clone()).collect();
+        let joint_pk = aggregate_public_key(pk_shares);
+
+        let all_sk_shares: Vec<_> = members.iter().map(|m| m.sk_shares.clone()).collect();
+        let sk_poly_sums: Vec<_> = (0..COMMITTEE_N)
+            .map(|i| aggregate_sk_shares_for_party(&all_sk_shares, i, &params))
+            .collect();
+
+        let member_sk_refs: Vec<&_> = members.iter().map(|m| &m.sk).collect();
+        let (eval_key, relin_key) = build_eval_key_from_committee(&member_sk_refs, &params);
+
+        let mut bids = vec![0u64; N_BIDDERS];
+        bids[1024] = 500;
+        bids[1025] = 400;
+        bids[1026] = 300;
+        bids[1027] = 200;
+        bids[1028] = 100;
+        bids[1029] = 50;
+
+        let bitplanes = build_accumulated_bitplanes(&bids, &params, &joint_pk);
+        let tally_cts = compute_tallies(&bitplanes, N_BIDDERS, &eval_key, &relin_key, &params);
+
+        let participating = [0usize, 1];
+        let party_shares: Vec<(usize, Vec<_>)> = participating
+            .iter()
+            .map(|&i| {
+                let smudging = generate_smudging_noise(&params, tally_cts.len());
+                let shares =
+                    compute_decryption_shares(&tally_cts, &sk_poly_sums[i], &smudging, &params);
+                (i + 1, shares)
+            })
+            .collect();
+        let tally_pts = threshold_decrypt(&party_shares, &tally_cts, &params);
+        let fhe_matrix = decode_tally_matrix(&tally_pts, N_BIDDERS, &params);
+        let (fhe_winner, fhe_runner) = rank_bidders(&fhe_matrix);
+
+        let shadow = plaintext_tally_shadow(&bids);
+        let (shadow_winner, shadow_runner) = rank_bidders(&shadow);
+
+        assert_eq!(shadow_winner, 1024);
+        assert_eq!(shadow_runner, Some(1025));
+
+        assert_eq!(
+            fhe_winner, shadow_winner,
+            "FHE winner (slot {fhe_winner}) != shadow (slot {shadow_winner})"
+        );
+        assert_eq!(
+            fhe_runner, shadow_runner,
+            "FHE runner-up ({fhe_runner:?}) != shadow ({shadow_runner:?})"
+        );
+
+        for slot in 1024..1030 {
+            for j in 0..BID_BITS {
+                assert_eq!(
+                    fhe_matrix[slot][j], shadow[slot][j],
+                    "tally mismatch at slot {slot}, bit {j}"
+                );
+            }
+        }
+    }
 }
