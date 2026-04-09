@@ -1,18 +1,31 @@
-# Bit-Plane Auction (FHE Vickrey Demo)
+# Bit-Plane Auction (Threshold FHE Vickrey Demo)
 
-A sealed-bid **Vickrey (second-price)** auction where bids are encrypted under BFV fully-homomorphic encryption.  The FHE program determines *who* won and *whose* bid sets the price — without ever decrypting the raw bids.
+A sealed-bid **Vickrey (second-price)** auction where bids are encrypted under threshold BFV fully-homomorphic encryption.  A **2-of-3 committee** jointly generates the encryption key (DKG), computes the tally homomorphically, and threshold-decrypts only the ranking and second price — without ever decrypting the raw bids.
 
 ## Quick start
 
 ```bash
-cargo run --bin demo
+cargo run --bin demo --release
 ```
 
-This generates 10 random bids, runs the full FHE pipeline, and asserts the result against a plaintext shadow.
+This generates 10 random bids, runs the full threshold FHE pipeline, and asserts the result against a plaintext shadow.
 
 ## How it works
 
-### Encoding: horizontal SIMD bitplanes
+### 1. Committee DKG (distributed key generation)
+
+Three committee members run a distributed key generation protocol — **no trusted dealer**.
+
+Each member:
+1. Samples a fresh BFV secret key.
+2. Computes a **public key share** from their secret key and a shared common random polynomial (CRP).
+3. **Shamir-splits** their secret key into shares for distribution to all members.
+
+The public key shares are aggregated into a single **joint public key**.  Bidders encrypt to this key.  No single committee member knows the corresponding full secret key.
+
+Each member also aggregates the Shamir shares they received from others into their **secret-key polynomial sum**, used later for threshold decryption.
+
+### 2. Encoding: horizontal SIMD bitplanes
 
 Each bidder occupies one SIMD **slot** (ring position) across 64 packed ciphertexts — one per bit of a `u64` bid.  Slot `i` of bitplane `j` holds bit `j` of bidder `i`'s bid (MSB first).
 
@@ -24,45 +37,60 @@ bitplane 1
 bitplane 63 (LSB)     (LSB)     (LSB)
 ```
 
-Bidders encrypt their own bitplanes (one ciphertext per bit) and submit them to the accumulator, which simply adds them slot-wise.
+Bidders encrypt their own bitplanes with the joint public key and submit them to the accumulator, which adds them slot-wise.
 
-### Tally: one multiply per bitplane (depth 1)
+### 3. Tally: one multiply per bitplane (depth 1)
 
 For each bitplane `j`:
 
-1. **`ones`** — rotate-and-add the bitplane to count how many bidders have a 1.
-2. **`zeros`** = `n_bidders − ones`.
-3. **`tally`** = `bitplane × zeros` — one ciphertext × ciphertext multiply.
+1. **`masked`** = `bitplane × slot_mask` — zero out unused SIMD slots (ct × pt, depth 0).  Without this, accumulated encryption noise in unused slots corrupts the all-slot sum.
+2. **`ones`** — rotation-reduce-tree sum of the masked bitplane.
+3. **`zeros`** = `n_bidders − ones`.
+4. **`tally`** = `bitplane × zeros` — one ct × ct multiply.
+5. **Relinearize** — reduce the degree-3 ciphertext back to degree 2 for threshold decryption.
 
 `tally[j][i]` is non-zero only when bidder `i` has a 1 *and* some opponents have a 0.  The value equals how many opponents have 0 — a measure of "how much bidder `i` is winning this bit."
 
 Total multiplicative depth: **1** (a single ct × ct multiply per bitplane).
 
-### Ranking: lexicographic comparison in plaintext
+### 4. Threshold decryption (2-of-3)
 
-The tally matrix is decrypted (this reveals only the tally scores, not the bids).  Each bidder's row is compared lexicographically from MSB to LSB.  The highest row is the winner; the second-highest identifies the Vickrey price source.  Ties are broken deterministically by slot index (lower wins).
+Any 2 of the 3 committee members can jointly decrypt ciphertexts:
 
-### Vickrey price recovery
+1. Each participating member generates **smudging noise** (see below) and computes a **decryption share** for each ciphertext.
+2. The shares are combined via **Shamir reconstruction** to recover the plaintext.
 
-The FHE program returns `(winner_slot, second_slot)`.  In production, a decryption committee would decrypt only `bid_ciphertexts[second_slot]` to learn the price the winner pays.  The demo does this locally and asserts it matches the plaintext expectation.
+The committee first threshold-decrypts the 64 tally ciphertexts, then ranks bidders lexicographically.
+
+### 5. Ranking and Vickrey price
+
+The decrypted tally matrix is compared row-by-row (MSB → LSB).  The highest row is the winner; the second-highest identifies the Vickrey price source.  Ties are broken deterministically by slot index (lower wins).
+
+The FHE program **never decrypts raw bids**.  The committee uses the ranking to select which input ciphertext to threshold-decrypt — the second-ranked bidder's bitplanes — to recover the Vickrey price.
 
 ## Production considerations
 
-### No relinearization needed
+### Eval key shortcut
 
-Each tally ciphertext is the product of exactly one ct × ct multiplication and is then immediately decrypted — no further homomorphic operations follow.  BFV decryption handles the resulting 3-polynomial ciphertext natively, so we skip relinearization entirely, saving a significant key-generation and computation cost.
+The rotation reduce-tree requires a Galois (evaluation) key, and relinearization requires a relinearization key.  The `fhe` library can only build these from a full secret key — no multiparty key generation protocol exists in the library.
 
-### Noise smudging
+This demo reconstructs the full secret key *temporarily* from all committee members' raw secret keys, builds both keys, and immediately discards the reconstructed key.  DKG and threshold decryption remain fully distributed.
 
-Every BFV decryption leaks a small amount of information about the secret key through the noise term.  This demo performs 64 tally decryptions plus 1 bid decryption (65 total).  In production, every decryption must be preceded by **noise flooding** — adding a large random noise term that statistically drowns the key-dependent component.  The demo omits smudging for clarity.
+A production system would need an MPC protocol for Galois and relinearization key generation (e.g. the approach in Mouchet et al., "Multiparty Homomorphic Encryption from Ring-Learning-with-Errors").
+
+### Smudging noise
+
+Every BFV decryption leaks a small amount of information about the secret key through the noise term.  Each decryption share includes **smudging noise** — a large random term (λ = 80 bits of statistical security) that drowns the key-dependent component.
+
+This demo generates smudging noise via `TRBFV::generate_smudging_error` for every threshold decryption.
 
 ## Project structure
 
 ```
 src/
-├── lib.rs          Core library: encoding, encryption, tally, ranking
+├── lib.rs          Core library: params, DKG, encoding, tally, threshold decryption, ranking
 └── bin/
-    └── demo.rs     10-bidder demo with shadow verification
+    └── demo.rs     10-bidder demo with 2-of-3 committee and shadow verification
 ```
 
 ## BFV parameters
@@ -71,5 +99,13 @@ src/
 |-----------|-------|-------|
 | N (degree) | 2048 | = max bidders (one SIMD slot each) |
 | t (plaintext mod) | 12289 | Prime, NTT-friendly |
-| Moduli | 6 × 62-bit | Noise budget for 1 multiply + rotations |
+| Moduli | 6 × 62-bit | Noise budget for 1 multiply + rotations + relinearization |
 | Bid size | 64 bits | Full `u64` range |
+
+## Threshold parameters
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| Committee size (n) | 3 | Minimum for threshold semantics |
+| Threshold (t) | 1 | Reconstruction requires t+1 = 2 parties |
+| Smudging λ | 80 bits | Statistical security for noise flooding |

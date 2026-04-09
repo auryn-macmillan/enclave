@@ -22,7 +22,10 @@ name = "auction_bitplane_example"
 version = "0.1.0"
 dependencies = [
  "fhe",
+ "fhe-math",
  "fhe-traits",
+ "ndarray",
+ "num-bigint",
  "rand",
 ]
 

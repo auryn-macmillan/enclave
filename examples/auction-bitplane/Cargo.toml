@@ -10,4 +10,7 @@ description = "Sealed-bid Vickrey auction demo using BFV SIMD bit-plane encoding
 [dependencies]
 fhe = { git = "https://github.com/gnosisguild/fhe.rs" }
 fhe-traits = { git = "https://github.com/gnosisguild/fhe.rs" }
+fhe-math = { git = "https://github.com/gnosisguild/fhe.rs" }
+ndarray = "0.15"
+num-bigint = { version = "0.4", features = ["rand"] }
 rand = "0.8"
