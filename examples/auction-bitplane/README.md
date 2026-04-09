@@ -46,6 +46,16 @@ The tally matrix is decrypted (this reveals only the tally scores, not the bids)
 
 The FHE program returns `(winner_slot, second_slot)`.  In production, a decryption committee would decrypt only `bid_ciphertexts[second_slot]` to learn the price the winner pays.  The demo does this locally and asserts it matches the plaintext expectation.
 
+## Production considerations
+
+### No relinearization needed
+
+Each tally ciphertext is the product of exactly one ct × ct multiplication and is then immediately decrypted — no further homomorphic operations follow.  BFV decryption handles the resulting 3-polynomial ciphertext natively, so we skip relinearization entirely, saving a significant key-generation and computation cost.
+
+### Noise smudging
+
+Every BFV decryption leaks a small amount of information about the secret key through the noise term.  This demo performs 64 tally decryptions plus 1 bid decryption (65 total).  In production, every decryption must be preceded by **noise flooding** — adding a large random noise term that statistically drowns the key-dependent component.  The demo omits smudging for clarity.
+
 ## Project structure
 
 ```

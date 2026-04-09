@@ -36,10 +36,19 @@
 //! The FHE program **never decrypts raw bids**.  In production a
 //! decryption committee would use the ranking to select which input
 //! ciphertext to decrypt (the second-ranked bidder's) to obtain the price.
+//!
+//! ## Production considerations
+//!
+//! **Noise smudging.**  Each BFV decryption leaks a small amount of
+//! information about the secret key through the noise term.  In production,
+//! every decryption (64 tally ciphertexts + the second-price bid) must be
+//! preceded by **noise flooding**: adding a large random noise that
+//! statistically drowns the key-dependent component.  This demo omits
+//! smudging for clarity.
 
 use fhe::bfv::{
     BfvParameters, BfvParametersBuilder, Ciphertext, Encoding, EvaluationKey, EvaluationKeyBuilder,
-    Plaintext, RelinearizationKey, SecretKey,
+    Plaintext, SecretKey,
 };
 use fhe_traits::{FheDecoder, FheDecrypter, FheEncoder, FheEncrypter};
 use rand::rngs::OsRng;
@@ -85,12 +94,6 @@ pub fn build_eval_key(sk: &SecretKey) -> EvaluationKey {
         shift *= 2;
     }
     builder.build(&mut OsRng).expect("build evaluation key")
-}
-
-/// Build a relinearization key (required after every ct × ct multiply to
-/// keep the ciphertext size at two polynomials).
-pub fn build_relin_key(sk: &SecretKey) -> RelinearizationKey {
-    RelinearizationKey::new(sk, &mut OsRng).expect("build relinearization key")
 }
 
 // ── Encoding & Encryption ────────────────────────────────────────────────────
@@ -156,13 +159,6 @@ fn all_slots_sum(ct: &Ciphertext, eval_key: &EvaluationKey) -> Ciphertext {
     acc
 }
 
-/// Multiply two ciphertexts and immediately relinearize.
-fn mul_relin(a: &Ciphertext, b: &Ciphertext, rk: &RelinearizationKey) -> Ciphertext {
-    let mut product = a * b;
-    rk.relinearizes(&mut product).expect("relinearize");
-    product
-}
-
 /// Compute the tally ciphertexts from the accumulated bitplanes.
 ///
 /// For each bitplane `j`:
@@ -172,11 +168,14 @@ fn mul_relin(a: &Ciphertext, b: &Ciphertext, rk: &RelinearizationKey) -> Ciphert
 /// 3. `tally` = `bitplane × zeros` — one ct × ct multiply (**depth 1**).
 ///
 /// The result for slot `i` is: "if my bit is 1, how many opponents have 0?"
+///
+/// We skip relinearization: since tally ciphertexts are decrypted
+/// immediately (no further homomorphic ops), the 3-polynomial product is
+/// fine — BFV decryption handles arbitrary ciphertext degree.
 pub fn compute_tallies(
     bitplanes: &[Ciphertext],
     n_bidders: usize,
     eval_key: &EvaluationKey,
-    rk: &RelinearizationKey,
     params: &Arc<BfvParameters>,
 ) -> Vec<Ciphertext> {
     assert_eq!(bitplanes.len(), BID_BITS, "expected {BID_BITS} bitplanes");
@@ -199,7 +198,7 @@ pub fn compute_tallies(
         .map(|bp| {
             let ones = all_slots_sum(bp, eval_key);
             let zeros = &n_broadcast - &ones;
-            mul_relin(bp, &zeros, rk)
+            bp * &zeros
         })
         .collect()
 }
@@ -308,11 +307,10 @@ pub fn find_winner(
     bitplanes: &[Ciphertext],
     n_bidders: usize,
     eval_key: &EvaluationKey,
-    rk: &RelinearizationKey,
     sk: &SecretKey,
     params: &Arc<BfvParameters>,
 ) -> (usize, Option<usize>) {
-    let tally_cts = compute_tallies(bitplanes, n_bidders, eval_key, rk, params);
+    let tally_cts = compute_tallies(bitplanes, n_bidders, eval_key, params);
     let tally_matrix = decrypt_tally_matrix(&tally_cts, n_bidders, sk, params);
     rank_bidders(&tally_matrix)
 }

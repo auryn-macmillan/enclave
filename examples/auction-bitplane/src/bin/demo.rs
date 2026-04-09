@@ -7,8 +7,8 @@
 //! shadow computation.
 
 use auction_bitplane_example::{
-    accumulate_bitplanes, build_eval_key, build_params, build_relin_key, decrypt_bid,
-    encode_bid_into_planes, encrypt_bitplanes, find_winner, BID_BITS, SLOTS,
+    accumulate_bitplanes, build_eval_key, build_params, decrypt_bid, encode_bid_into_planes,
+    encrypt_bitplanes, find_winner, BID_BITS, SLOTS,
 };
 use fhe::bfv::{Ciphertext, SecretKey};
 use rand::rngs::OsRng;
@@ -32,7 +32,6 @@ fn main() {
     let params = build_params();
     let sk = SecretKey::random(&params, &mut OsRng);
     let eval_key = build_eval_key(&sk);
-    let relin_key = build_relin_key(&sk);
 
     println!(
         "BFV parameters: N={}, t={}, {} moduli, {} bitplanes\n",
@@ -72,14 +71,8 @@ fn main() {
     }
 
     // ── FHE tally + ranking ──────────────────────────────────────────────
-    let (winner_slot, second_slot) = find_winner(
-        &global_bitplanes,
-        bids.len(),
-        &eval_key,
-        &relin_key,
-        &sk,
-        &params,
-    );
+    let (winner_slot, second_slot) =
+        find_winner(&global_bitplanes, bids.len(), &eval_key, &sk, &params);
 
     let (winner_name, _) = bids[winner_slot];
     println!("\nFHE result: winner = {winner_name} (slot {winner_slot})");
