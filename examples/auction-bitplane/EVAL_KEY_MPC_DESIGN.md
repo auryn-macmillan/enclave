@@ -118,13 +118,15 @@ Where `d` = number of RNS decomposition components, `L` = number of RNS moduli a
 
 ### 4.1 Common Reference String
 
-All parties share a deterministic seed (the existing CRP seed from DKG). For each Galois key exponent k and decomposition index i, derive a common random polynomial:
+The current codebase does **not** already distribute a reusable CRP root seed for eval-key generation. It currently samples a single `CommonRandomPoly` for public-key generation. Therefore, eval-key generation needs a **new root-seed distribution step** (or equivalent explicit broadcast of deterministic randomness) after DKG.
+
+From that root seed, all parties derive common random polynomials. For each Galois key exponent k and decomposition index i, derive a common random polynomial:
 
 ```
 a_{k,i} = PRNG(seed, domain="galois", exponent=k, index=i)
 ```
 
-This extends the existing CRP mechanism. The `c1` component of the KSK is fully determined by the seed — it does not depend on any secret.
+This extends the existing common-randomness mechanism, but it is a **new derivation tree**, not simple reuse of the single public-key CRP object already present in the demo. The `c1` component of the KSK is fully determined by the derived randomness — it does not depend on any secret.
 
 ### 4.2 Per-Party Share Generation (Local, No Interaction)
 
@@ -138,7 +140,7 @@ For each decomposition index i ∈ {0, ..., d-1}:
     share_j[i] = e_{j,i} − a_{k,i}·s_j + g_i·from_j
 ```
 
-Where `g_i` is the i-th RNS garner coefficient (same as in `KeySwitchingKey::generate_c0`), and `mod_switch_up` extends the polynomial from ciphertext context (level 0) to key-switching context. This mirrors the single-party `GaloisKey` construction in fhe.rs (`galois_key.rs`), which calls `Poly::mod_switch_to()` on the substituted polynomial before passing it to `KeySwitchingKey::new()`.
+Where `g_i` is the i-th RNS Garner coefficient (same as in `KeySwitchingKey::generate_c0`), and `mod_switch_up` extends the polynomial from ciphertext context (level 0) to key-switching context. This mirrors the single-party `GaloisKey` construction in fhe.rs (`galois_key.rs`), which calls `Poly::mod_switch_to()` on the substituted polynomial before passing it to `KeySwitchingKey::new()`.
 
 **Note on levels**: This protocol currently supports only **level 0** (ciphertext level = 0, ksk level = 0), matching the existing fhe.rs multiparty relin protocol. If multi-level support is needed later, the mod-switch step must target the appropriate key-switching context.
 
@@ -166,16 +168,17 @@ c0[i] = Σ_j (e_{j,i} − a_{k,i}·s_j + g_i·from_j)
 
 This has the exact form of a KSK `c0` component with secret key `s` and source polynomial `mod_switch_up(σ_k(s))`, with aggregated error `e_agg = Σ e_{j,i}`. The linearity of `mod_switch_up` and `σ_k` over addition ensures `Σ from_j = mod_switch_up(Σ σ_k(s_j)) = mod_switch_up(σ_k(s))`.
 
-The aggregated error is slightly larger than a single-party error (by factor √N in variance), which is acceptable for our parameters.
+The aggregated error is slightly larger than a single-party error: the **variance** scales by `N`, so the **standard deviation** scales by `√N`. This is acceptable for our parameters.
 
 ### 4.5 Integration with Existing DKG
 
 This protocol runs as a **new phase after the existing DKG Phase 5** (public key aggregation, circuit C5). At that point:
 - Each party holds their secret key share `s_j`
-- The CRP seed is already distributed
+- The public-key CRP is already distributed
+- The eval-key root seed / deterministic CRS description has been distributed
 - The joint public key is available
 
-The Galois key generation requires **no modifications** to the existing DKG phases. It is purely additive.
+The Galois key generation is purely additive, but it does require **new appended phases** for eval-key CRS distribution and share exchange. It does not require changing the existing five DKG phases themselves.
 
 ---
 
@@ -190,7 +193,7 @@ This follows the Mouchet et al. 2-round protocol with ephemeral keys. **fhe.rs a
 The problem: we need `KSK(s, s²)`, but `s²` cannot be decomposed additively from shares of `s`. The trick is to use ephemeral keys `u_j` (one per party) in a 2-round protocol:
 
 - **Round 1**: Each party publishes RLWE-style encryptions involving `s_j` and `u_j` combined with the CRS. The aggregate `(H0, H1)` encodes `u = Σ u_j` and `s = Σ s_j` jointly.
-- **Round 2**: Each party multiplies the Round 1 aggregate by `s_j` (for one component) and `u_j − s_j` (for the other). When aggregated, the `s·u` cross terms cancel in the sum `R0 + R1`, leaving `P_i·s² + noise` — exactly the `s²`-dependent term needed for the KSK.
+- **Round 2**: Each party multiplies the Round 1 aggregate by `s_j` (for one component) and `u_j − s_j` (for the other). When aggregated, the `s·u` cross terms cancel in the sum `R0 + R1`, leaving `w_i·s² + noise` — exactly the `s²`-dependent term needed for the KSK.
 
 ### 5.2 Round 1: Ephemeral Share Generation
 
@@ -200,14 +203,14 @@ Each party j:
 
 2. **Compute Round 1 share**: For each decomposition index i:
    ```
-   a_i        ← CRS(seed, domain="relin", index=i)     // common random poly
+   a_i        ← CRS(seed, domain="relin", index=i)     // common random poly (NTT representation)
    e_{j,i}    ← sample_small_error()
    e'_{j,i}   ← sample_small_error()
 
-   h0_{j}[i]  = −a_i·u_j + P_i·s_j + e_{j,i}
+   h0_{j}[i]  = −a_i·u_j + w_i·s_j + e_{j,i}
    h1_{j}[i]  =  a_i·s_j + e'_{j,i}
    ```
-   Where `P_i` is the i-th RNS prime (or garner coefficient, depending on decomposition mode).
+   Where `w_i` is the i-th RNS **Garner coefficient** (`rns.get_garner(i)` in fhe.rs). This matches both `mbfv/relin_key_gen.rs` and `bfv/keys/key_switching_key.rs`.
 
 3. **Broadcast** `(h0_j, h1_j)` and **retain** `u_j` for Round 2.
 
@@ -217,7 +220,7 @@ Aggregate all Round 1 shares:
 
 ```
 For each decomposition index i:
-    H0[i] = Σ_j h0_j[i] = −a_i·u + P_i·s + e_agg
+    H0[i] = Σ_j h0_j[i] = −a_i·u + w_i·s + e_agg
     H1[i] = Σ_j h1_j[i] =  a_i·s + e'_agg
 ```
 
@@ -244,8 +247,8 @@ Aggregate Round 2 shares:
 ```
 For each decomposition index i:
     R0[i] = Σ_j r0_j[i] = s·H0[i] + noise
-           = s·(−a_i·u + P_i·s + e_agg) + noise
-           = −a_i·s·u + P_i·s² + noise
+           = s·(−a_i·u + w_i·s + e_agg) + noise
+           = −a_i·s·u + w_i·s² + noise
 
     R1[i] = Σ_j r1_j[i] = (u − s)·H1[i] + noise
            = (u − s)·(a_i·s + e'_agg) + noise
@@ -256,21 +259,21 @@ The final relinearization key combines these to cancel the `s·u` cross terms:
 
 ```
     c0[i] = R0[i] + R1[i]
-           = (−a_i·s·u + P_i·s²) + (a_i·s·u − a_i·s²) + noise
-           = (P_i − a_i)·s² + noise
+           = (−a_i·s·u + w_i·s²) + (a_i·s·u − a_i·s²) + noise
+           = (w_i − a_i)·s² + noise
 
     c1[i] = H1[i] = a_i·s + e'_agg             (from Round 1 aggregate)
 ```
 
-**Correctness check**: A valid KSK satisfies `c0[i] + c1[i]·s ≈ P_i·from`. Substituting with `from = s²`:
+**Correctness check**: A valid KSK satisfies `c0[i] + c1[i]·s ≈ w_i·from`. Substituting with `from = s²`:
 
 ```
-    c0[i] + c1[i]·s = (P_i − a_i)·s² + (a_i·s + e')·s + noise
-                     = P_i·s² − a_i·s² + a_i·s² + noise
-                     = P_i·s² + noise  ✓
+    c0[i] + c1[i]·s = (w_i − a_i)·s² + (a_i·s + e')·s + noise
+                     = w_i·s² − a_i·s² + a_i·s² + noise
+                     = w_i·s² + noise  ✓
 ```
 
-This is exactly the fhe.rs implementation (`relin_key_gen.rs` lines 343–351): `c0 = Σ r2.h0 + Σ r2.h1`, `c1 = R1_agg.h1`. The resulting `(c0, c1)` forms a valid `KeySwitchingKey` that switches from `s²` to `s`.
+This is exactly the fhe.rs implementation (`relin_key_gen.rs` lines 343–351): `c0 = Σ r2.h0 + Σ r2.h1`, `c1 = R1_agg.h1`. Before wrapping into `KeySwitchingKey`, both `c0` and `c1` must be converted to `Representation::NttShoup`, matching fhe.rs.
 
 ### 5.6 Why This Is Secure
 
@@ -295,11 +298,11 @@ For our parameters (N=3, ternary secrets with 6×62-bit moduli), the fhe.rs libr
 
 | Existing Component | Reuse for Eval Key Gen | How |
 |-------------------|----------------------|-----|
-| **CRP seed** | CRS for eval key protocols | Extend domain separation to include "galois" and "relin" tags |
+| **Common randomness mechanism** | Root for eval key CRS derivation | Add a new root-seed distribution or deterministic-CRP broadcast, then derive domain-separated randomness for "galois" and "relin" |
 | **`SecretKey` coefficients** (`s_j`) | Input to share generation | Already held by each party from DKG |
 | **P2P gossip broadcast** | Share distribution | Same broadcast mechanism as DKG shares |
-| **`ShareManager`** | Share collection and aggregation | Extend to handle eval key share types |
-| **`ThresholdShareCollector`** | Round management for relin key | Extend to support 2-round protocols |
+| **`ShareManager` / collectors** | Message collection only | Can be extended to carry eval-key shares, but must operate over additive BFV secret keys, not Shamir-reconstructed decryption material |
+| **`ThresholdShareCollector`** | Round management for relin key | Can be extended to support 2-round protocols, but it should not change the underlying additive-share model |
 | **Barretenberg ZK backend** | Proof generation for new circuits | Same infrastructure, new circuit definitions |
 | **`PublicKeyShare::new_extended()`** | Pattern for share-then-aggregate | Same encrypt-with-error-then-aggregate pattern |
 | **Protobuf serialization** | Message format for shares | Extend existing proto definitions |
@@ -317,20 +320,21 @@ For our parameters (N=3, ternary secrets with 6×62-bit moduli), the fhe.rs libr
 The complete DKG + eval key generation flow:
 
 ```
-Phase 0:  Generate CRP seed                           (existing)
+Phase 0:  Generate public-key CRP                      (existing)
 Phase 1:  Generate BFV keypairs + PK shares            (existing, C0)
 Phase 2:  Shamir share computation                     (existing, C2a/C2b)
 Phase 3:  Share encryption + distribution              (existing, C3a/C3b)
 Phase 4:  Share decryption verification                (existing, C4a/C4b)
 Phase 5:  Public key aggregation                       (existing, C5)
 ─── NEW PHASES BELOW ───
-Phase 6:  Galois key generation (1 round)              (NEW)
-Phase 7a: Relin key generation Round 1                 (NEW)
-Phase 7b: Relin key generation Round 2                 (NEW)
-Phase 8:  Eval key verification                        (NEW, optional)
+Phase 6:  Distribute eval-key root seed / deterministic CRS description (NEW)
+Phase 7:  Galois key generation (1 round)              (NEW)
+Phase 8a: Relin key generation Round 1                 (NEW)
+Phase 8b: Relin key generation Round 2                 (NEW)
+Phase 9:  Eval key verification                        (NEW, optional)
 ```
 
-Phases 6 and 7a can potentially run **in parallel** since they are independent.
+Phases 7 and 8a can potentially run **in parallel** once the eval-key CRS/root seed has been distributed.
 
 ---
 
@@ -350,7 +354,7 @@ Phases 6 and 7a can potentially run **in parallel** since they are independent.
 - C0 proves `pk = e − a·s`
 - C-GK proves `share = e − a·s + g·σ_k(s)`
 
-The automorphism `σ_k` is a permutation of coefficients (index mapping `i ↦ k·i mod 2N`), which is cheap in a circuit. This circuit can be built by extending C0 with a coefficient permutation step.
+The automorphism `σ_k` is **not just a plain coefficient permutation**. In the negacyclic ring, substitution by an odd exponent can also induce sign flips after reduction modulo `x^N + 1`. The circuit must therefore implement the exact substitution semantics used by `fhe.rs::SubstitutionExponent`, including index remapping and sign handling.
 
 ### 7.2 Relin Key Share Correctness — Round 1 (C-RK1)
 
@@ -362,7 +366,7 @@ The automorphism `σ_k` is a permutation of coefficients (index mapping `i ↦ k
 
 **Relation**:
 ```
-h0_j[i] = −a_i·u_j + P_i·s_j + e_{j,i}
+h0_j[i] = −a_i·u_j + w_i·s_j + e_{j,i}
 h1_j[i] =  a_i·s_j + e'_{j,i}
 ||e_{j,i}||∞ < B_err AND ||e'_{j,i}||∞ < B_err AND ||u_j||∞ < B_eph
 ```
@@ -408,7 +412,7 @@ For a semi-honest adversary model, ZK proofs are **not strictly required** — p
 
 ### 8.1 Constructing Keys from Aggregated Shares
 
-fhe.rs does not currently have public APIs for constructing keys from pre-computed `(c0, c1)` components. The implementation will need one of:
+fhe.rs does not currently have a complete public API for constructing every eval-key type from pre-computed `(c0, c1)` components. The implementation should keep **Galois keys** and the **relinearization key** separate, matching the actual fhe.rs object model.
 
 **Option A: Proto round-trip for GaloisKey (Preferred — no fork needed)**
 
@@ -416,6 +420,9 @@ fhe.rs does not currently have public APIs for constructing keys from pre-comput
 
 ```rust
 // Construct KSK from aggregated c0 and c1
+aggregated_c0.iter_mut().for_each(|p| p.change_representation(Representation::NttShoup));
+crs_c1.iter_mut().for_each(|p| p.change_representation(Representation::NttShoup));
+
 let ksk = KeySwitchingKey {
     par: params.clone(),
     seed: None,  // No seed — c1 was from CRS, not local PRNG
@@ -437,11 +444,16 @@ For **GaloisKey**, direct struct construction is **not possible** — fields are
 Construct a `GaloisKeyProto` from the aggregated KSK and deserialize:
 
 ```rust
-use fhe_traits::TryConvertFrom;
+use fhe::bfv::traits::TryConvertFrom;
+use fhe::proto::bfv::{
+    EvaluationKey as EvaluationKeyProto,
+    GaloisKey as GaloisKeyProto,
+    KeySwitchingKey as KeySwitchingKeyProto,
+};
 
 // Build the KSK proto from aggregated shares
-let ksk_proto = fhe::proto::bfv::KeySwitchingKeyProto::from(&aggregated_ksk);
-let gk_proto = fhe::proto::bfv::GaloisKeyProto {
+let ksk_proto = KeySwitchingKeyProto::from(&aggregated_ksk);
+let gk_proto = GaloisKeyProto {
     exponent: exponent as u32,
     ksk: Some(ksk_proto),
 };
@@ -457,7 +469,7 @@ Submit a small PR to fhe.rs adding:
 ```rust
 impl GaloisKey {
     pub fn new_from_ksk(exponent: usize, ksk: KeySwitchingKey) -> Result<Self> {
-        let element = SubstitutionExponent::new(ksk.par.ctx_at_level(0)?, exponent)?;
+        let element = SubstitutionExponent::new(ksk.ctx_ciphertext.clone(), exponent)?;
         Ok(Self { element, ksk })
     }
 }
@@ -465,20 +477,27 @@ impl GaloisKey {
 
 This mirrors the existing `RelinearizationKey::new_from_ksk()` pattern. ~5 lines of code.
 
-The `EvaluationKey` is then assembled by proto deserialization from the collection of `GaloisKey` and `RelinearizationKey` protos, using the existing `TryConvertFrom<&EvaluationKeyProto>` implementation.
+The `EvaluationKey` is then assembled by proto deserialization from the collection of **GaloisKey protos only**, using the existing `TryConvertFrom<&EvaluationKeyProto>` implementation. The `RelinearizationKey` remains a separate object, so the application-level output stays `(EvaluationKey, RelinearizationKey)`.
 
 **Recommendation**: Option A1 for initial implementation (zero fork), with A2 as a follow-up upstream contribution.
 
 ### 8.2 CRS Polynomial Generation
 
-The `c1` components must be identical across all parties. fhe.rs already supports deterministic polynomial generation via `Poly::random_from_seed()`. The CRS extends this:
+The `c1` components must be identical across all parties. fhe.rs already supports deterministic polynomial generation via `Poly::random_from_seed()`, but the current repo does not yet distribute an eval-key root seed. The implementation must first distribute a new root seed (or an equivalent deterministic CRS description), then derive:
+
+- one **NTT** CRP polynomial per relin decomposition index `i`, and
+- one **NttShoup** `c1` polynomial per `(galois exponent, i)` pair.
+
+Conceptually:
 
 ```rust
-fn crs_polynomial(seed: &[u8; 32], domain: &str, index: usize) -> Poly {
+fn crs_polynomial(seed: &[u8; 32], domain: &str, index: usize, repr: Representation) -> Poly {
     let derived_seed = HKDF::expand(seed, &format!("{domain}/{index}"));
-    Poly::random_from_seed(ctx, Representation::NttShoup, derived_seed)
+    Poly::random_from_seed(ctx, repr, derived_seed)
 }
 ```
+
+The important point is the **separation of derivation domains and representations**; the exact KDF can be chosen to match project conventions.
 
 ---
 
@@ -487,15 +506,16 @@ fn crs_polynomial(seed: &[u8; 32], domain: &str, index: usize) -> Poly {
 ### Step-by-step for the auction demo (N=3, generating 11 Galois keys + 1 relin key):
 
 **Setup** (already done by existing DKG):
-- CRP seed distributed
-- Each party holds `s_j` (BFV secret key share)
+- Public-key CRP already distributed
+- Eval-key root seed / deterministic CRS description distributed
+- Each party holds `s_j` (the additive BFV secret key share, not a Shamir reconstruction)
 - Joint public key `pk` aggregated
 
 **Galois Key Generation** (11 keys, 1 round):
 1. For each rotation exponent k ∈ {3, 9, 81, 2465, 1857, 3713, 3329, 2561, 1025, 2049, 4095} (i.e. `3^rot mod 4096` for rot ∈ {1,2,4,8,16,32,64,128,256,512} plus 4095 for row swap):
-   - Party 0: compute `σ_k(s_0)`, generate share, broadcast
-   - Party 1: compute `σ_k(s_1)`, generate share, broadcast
-   - Party 2: compute `σ_k(s_2)`, generate share, broadcast
+   - Party 0: compute `σ_k(s_0)`, mod-switch up, generate share, broadcast
+   - Party 1: compute `σ_k(s_1)`, mod-switch up, generate share, broadcast
+   - Party 2: compute `σ_k(s_2)`, mod-switch up, generate share, broadcast
    - Coordinator: aggregate 3 shares → `GaloisKey` for rotation k
 2. All 11 rotations can be processed in parallel within the single round.
 
@@ -534,7 +554,7 @@ fn crs_polynomial(seed: &[u8; 32], domain: &str, index: usize) -> Poly {
 
 Aggregated keys have larger noise than single-party keys due to summing independent error samples:
 
-- **Galois key noise**: Sum of N independent error samples per decomposition component. For N=3, this increases the error variance by 3× compared to a single-party key. This is well within the noise budget for our parameters (6×62-bit moduli provide ~370 bits of budget).
+- **Galois key noise**: Sum of N independent error samples per decomposition component. For N=3, this increases the error variance by 3× (standard deviation by `√3`) compared to a single-party key. This is well within the noise budget for our parameters (6×62-bit moduli provide ~370 bits of budget).
 - **Relin key noise**: Includes additional terms from the ephemeral key interaction in Round 2 (products of errors with ephemeral/secret polynomials). The exact noise growth depends on the coefficient norms of `s_j`, `u_j`, and the number of parties. For our parameters (N=3, ternary secrets), empirical testing with the fhe.rs `mbfv::RelinKeyGenerator` (which implements this exact protocol) confirms successful multiplication and decryption.
 
 **Note**: The smudging parameter λ=80 used in the existing threshold decryption is **separate** from eval key noise — it applies to decryption shares, not key generation. Eval key noise does not require smudging.
