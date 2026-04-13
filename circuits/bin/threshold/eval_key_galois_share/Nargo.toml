@@ -1,0 +1,7 @@
+[package]
+name = "eval_key_galois_share"
+type = "bin"
+authors = ["Gnosis Guild / Enclave"]
+
+[dependencies]
+lib = { path = "../../../lib" }

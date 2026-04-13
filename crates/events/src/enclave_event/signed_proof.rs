@@ -47,6 +47,9 @@ pub enum ProofType {
     C7DecryptedSharesAggregation = 8,
     /// C5 — Public key aggregation proof (Proof 5).
     C5PkAggregation = 9,
+    C8EvalKeyGaloisShare = 10,
+    C9EvalKeyRelinRound1Share = 11,
+    C10EvalKeyRelinRound2Share = 12,
 }
 
 impl ProofType {
@@ -65,6 +68,9 @@ impl ProofType {
                 vec![CircuitName::DecryptedSharesAggregation]
             }
             ProofType::C5PkAggregation => vec![CircuitName::PkAggregation],
+            ProofType::C8EvalKeyGaloisShare => vec![CircuitName::EvalKeyGaloisShare],
+            ProofType::C9EvalKeyRelinRound1Share => vec![CircuitName::EvalKeyRelinRound1Share],
+            ProofType::C10EvalKeyRelinRound2Share => vec![CircuitName::EvalKeyRelinRound2Share],
         }
     }
 
@@ -77,7 +83,10 @@ impl ProofType {
             | ProofType::C2bESmShareComputation
             | ProofType::C3aSkShareEncryption
             | ProofType::C3bESmShareEncryption
-            | ProofType::C4DkgShareDecryption => "E3_BAD_DKG_PROOF",
+            | ProofType::C4DkgShareDecryption
+            | ProofType::C8EvalKeyGaloisShare
+            | ProofType::C9EvalKeyRelinRound1Share
+            | ProofType::C10EvalKeyRelinRound2Share => "E3_BAD_DKG_PROOF",
             ProofType::C6ThresholdShareDecryption => "E3_BAD_DECRYPTION_PROOF",
             ProofType::C7DecryptedSharesAggregation => "E3_BAD_AGGREGATION_PROOF",
             ProofType::C5PkAggregation => "E3_BAD_PK_AGGREGATION_PROOF",

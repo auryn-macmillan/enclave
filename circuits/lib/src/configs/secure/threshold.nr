@@ -32841,6 +32841,16 @@ pub global PK_GENERATION_CONFIGS: PkGenerationConfigs<N, L> = PkGenerationConfig
 
 /************************************
 -------------------------------------
+eval_key_galois_share (CIRCUIT 8 - THRESHOLD BFV EVAL KEY GALOIS SHARE)
+-------------------------------------
+************************************/
+
+pub global EVAL_KEY_GALOIS_SHARE_BIT_SK: u32 = 52;
+pub global EVAL_KEY_GALOIS_SHARE_BIT_TRANSFORMED_SK: u32 = 52;
+pub global EVAL_KEY_GALOIS_SHARE_BIT_C0: u32 = 52;
+
+/************************************
+-------------------------------------
 pk_aggregation (CIRCUIT 5)
 -------------------------------------
 ************************************/

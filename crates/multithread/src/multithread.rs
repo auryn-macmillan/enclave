@@ -26,7 +26,8 @@ use e3_events::{
     BusHandle, ComputeRequest, ComputeRequestError, ComputeRequestErrorKind, ComputeRequestKind,
     ComputeResponse, DecryptedSharesAggregationProofRequest,
     DecryptedSharesAggregationProofResponse, DkgShareDecryptionProofRequest,
-    DkgShareDecryptionProofResponse, EnclaveEvent, EnclaveEventData, EventPublisher,
+    DkgShareDecryptionProofResponse, EnclaveEvent, EnclaveEventData,
+    EvalKeyGaloisShareProofRequest, EvalKeyShareProofResponse, EventPublisher,
     EventSubscriber, EventType, FoldProofsResponse, PartyVerificationResult,
     PkAggregationProofRequest, PkAggregationProofResponse, PkBfvProofRequest, PkBfvProofResponse,
     PkGenerationProofRequest, PkGenerationProofResponse, ShareComputationProofRequest,
@@ -50,12 +51,21 @@ use e3_trbfv::helpers::try_poly_from_bytes;
 use e3_trbfv::helpers::try_poly_from_sensitive_bytes;
 use e3_trbfv::shares::SharedSecret;
 use e3_trbfv::{TrBFVError, TrBFVRequest, TrBFVResponse};
+use e3_trbfv::{
+    aggregate_distributed_evaluation_key, aggregate_distributed_galois_key,
+    aggregate_distributed_relin_key, aggregate_distributed_relin_round1,
+    generate_distributed_galois_key_share, generate_distributed_relin_round1,
+    generate_distributed_relin_round2,
+};
 use e3_utils::SharedRng;
 use e3_utils::MAILBOX_LIMIT;
 use e3_zk_helpers::circuits::dkg::pk::circuit::{PkCircuit, PkCircuitData};
 use e3_zk_helpers::circuits::dkg::share_computation::utils::compute_parity_matrix;
 use e3_zk_helpers::circuits::threshold::decrypted_shares_aggregation::circuit::{
     DecryptedSharesAggregationCircuit, DecryptedSharesAggregationCircuitData,
+};
+use e3_zk_helpers::circuits::threshold::eval_key_galois_share::circuit::{
+    EvalKeyGaloisShareCircuit, EvalKeyGaloisShareCircuitData,
 };
 use e3_zk_helpers::circuits::threshold::pk_generation::circuit::{
     PkGenerationCircuit, PkGenerationCircuitData,
@@ -277,6 +287,27 @@ async fn handle_compute_request_event(
                         }
                         TrBFVRequest::CalculateThresholdDecryption(_) => {
                             TrBFVError::CalculateThresholdDecryption(msg)
+                        }
+                        TrBFVRequest::GenerateDistributedGaloisKeyShare(_) => {
+                            TrBFVError::GenerateDistributedGaloisKeyShare(msg)
+                        }
+                        TrBFVRequest::AggregateDistributedGaloisKey(_) => {
+                            TrBFVError::AggregateDistributedGaloisKey(msg)
+                        }
+                        TrBFVRequest::AggregateDistributedEvaluationKey(_) => {
+                            TrBFVError::AggregateDistributedEvaluationKey(msg)
+                        }
+                        TrBFVRequest::GenerateDistributedRelinRound1(_) => {
+                            TrBFVError::GenerateDistributedRelinRound1(msg)
+                        }
+                        TrBFVRequest::AggregateDistributedRelinRound1(_) => {
+                            TrBFVError::AggregateDistributedRelinRound1(msg)
+                        }
+                        TrBFVRequest::GenerateDistributedRelinRound2(_) => {
+                            TrBFVError::GenerateDistributedRelinRound2(msg)
+                        }
+                        TrBFVRequest::AggregateDistributedRelinKey(_) => {
+                            TrBFVError::AggregateDistributedRelinKey(msg)
                         }
                     })
                 }
@@ -607,6 +638,134 @@ fn handle_trbfv_request(
                 )),
             },
         ),
+        TrBFVRequest::GenerateDistributedGaloisKeyShare(req) => timefunc(
+            "generate_distributed_galois_key_share",
+            id,
+            || {
+                let mut guard = rng.lock().unwrap();
+                match generate_distributed_galois_key_share(&mut *guard, req) {
+                    Ok(o) => Ok(ComputeResponse::trbfv(
+                        TrBFVResponse::GenerateDistributedGaloisKeyShare(o),
+                        request.correlation_id,
+                        request.e3_id,
+                    )),
+                    Err(e) => Err(ComputeRequestError::new(
+                        ComputeRequestErrorKind::TrBFV(
+                            TrBFVError::GenerateDistributedGaloisKeyShare(e.to_string()),
+                        ),
+                        request,
+                    )),
+                }
+            },
+        ),
+        TrBFVRequest::AggregateDistributedGaloisKey(req) => timefunc(
+            "aggregate_distributed_galois_key",
+            id,
+            || match aggregate_distributed_galois_key(req) {
+                Ok(o) => Ok(ComputeResponse::trbfv(
+                    TrBFVResponse::AggregateDistributedGaloisKey(o),
+                    request.correlation_id,
+                    request.e3_id,
+                )),
+                Err(e) => Err(ComputeRequestError::new(
+                    ComputeRequestErrorKind::TrBFV(TrBFVError::AggregateDistributedGaloisKey(
+                        e.to_string(),
+                    )),
+                    request,
+                )),
+            },
+        ),
+        TrBFVRequest::AggregateDistributedEvaluationKey(req) => timefunc(
+            "aggregate_distributed_evaluation_key",
+            id,
+            || match aggregate_distributed_evaluation_key(req) {
+                Ok(o) => Ok(ComputeResponse::trbfv(
+                    TrBFVResponse::AggregateDistributedEvaluationKey(o),
+                    request.correlation_id,
+                    request.e3_id,
+                )),
+                Err(e) => Err(ComputeRequestError::new(
+                    ComputeRequestErrorKind::TrBFV(
+                        TrBFVError::AggregateDistributedEvaluationKey(e.to_string()),
+                    ),
+                    request,
+                )),
+            },
+        ),
+        TrBFVRequest::GenerateDistributedRelinRound1(req) => timefunc(
+            "generate_distributed_relin_round1",
+            id,
+            || {
+                let mut guard = rng.lock().unwrap();
+                match generate_distributed_relin_round1(&mut *guard, req) {
+                    Ok(o) => Ok(ComputeResponse::trbfv(
+                        TrBFVResponse::GenerateDistributedRelinRound1(o),
+                        request.correlation_id,
+                        request.e3_id,
+                    )),
+                    Err(e) => Err(ComputeRequestError::new(
+                        ComputeRequestErrorKind::TrBFV(
+                            TrBFVError::GenerateDistributedRelinRound1(e.to_string()),
+                        ),
+                        request,
+                    )),
+                }
+            },
+        ),
+        TrBFVRequest::AggregateDistributedRelinRound1(req) => timefunc(
+            "aggregate_distributed_relin_round1",
+            id,
+            || match aggregate_distributed_relin_round1(req) {
+                Ok(o) => Ok(ComputeResponse::trbfv(
+                    TrBFVResponse::AggregateDistributedRelinRound1(o),
+                    request.correlation_id,
+                    request.e3_id,
+                )),
+                Err(e) => Err(ComputeRequestError::new(
+                    ComputeRequestErrorKind::TrBFV(
+                        TrBFVError::AggregateDistributedRelinRound1(e.to_string()),
+                    ),
+                    request,
+                )),
+            },
+        ),
+        TrBFVRequest::GenerateDistributedRelinRound2(req) => timefunc(
+            "generate_distributed_relin_round2",
+            id,
+            || {
+                let mut guard = rng.lock().unwrap();
+                match generate_distributed_relin_round2(&mut *guard, req) {
+                    Ok(o) => Ok(ComputeResponse::trbfv(
+                        TrBFVResponse::GenerateDistributedRelinRound2(o),
+                        request.correlation_id,
+                        request.e3_id,
+                    )),
+                    Err(e) => Err(ComputeRequestError::new(
+                        ComputeRequestErrorKind::TrBFV(
+                            TrBFVError::GenerateDistributedRelinRound2(e.to_string()),
+                        ),
+                        request,
+                    )),
+                }
+            },
+        ),
+        TrBFVRequest::AggregateDistributedRelinKey(req) => timefunc(
+            "aggregate_distributed_relin_key",
+            id,
+            || match aggregate_distributed_relin_key(req) {
+                Ok(o) => Ok(ComputeResponse::trbfv(
+                    TrBFVResponse::AggregateDistributedRelinKey(o),
+                    request.correlation_id,
+                    request.e3_id,
+                )),
+                Err(e) => Err(ComputeRequestError::new(
+                    ComputeRequestErrorKind::TrBFV(TrBFVError::AggregateDistributedRelinKey(
+                        e.to_string(),
+                    )),
+                    request,
+                )),
+            },
+        ),
     }
 }
 
@@ -664,6 +823,29 @@ fn handle_zk_request(
         ZkRequest::DecryptedSharesAggregation(req) => {
             timefunc("zk_decrypted_shares_aggregation", id, || {
                 handle_decrypted_shares_aggregation_proof(&prover, req, request.clone())
+            })
+        }
+        ZkRequest::EvalKeyGaloisShare(req) => timefunc("zk_eval_key_galois_share", id, || {
+            handle_eval_key_galois_share_proof(&prover, req, request.clone())
+        }),
+        ZkRequest::EvalKeyRelinRound1Share(_) => {
+            timefunc("zk_eval_key_relin_round1_share", id, || {
+                Err(ComputeRequestError::new(
+                    ComputeRequestErrorKind::Zk(ZkEventError::ProofGenerationFailed(
+                        "eval-key relin round1 share proofs not implemented yet".to_string(),
+                    )),
+                    request.clone(),
+                ))
+            })
+        }
+        ZkRequest::EvalKeyRelinRound2Share(_) => {
+            timefunc("zk_eval_key_relin_round2_share", id, || {
+                Err(ComputeRequestError::new(
+                    ComputeRequestErrorKind::Zk(ZkEventError::ProofGenerationFailed(
+                        "eval-key relin round2 share proofs not implemented yet".to_string(),
+                    )),
+                    request.clone(),
+                ))
             })
         }
         ZkRequest::FoldProofs {
@@ -930,6 +1112,108 @@ fn handle_pk_generation_proof(
     // 6. Return response
     Ok(ComputeResponse::zk(
         ZkResponse::PkGeneration(PkGenerationProofResponse::new(proof, wrapped_proof)),
+        request.correlation_id,
+        request.e3_id,
+    ))
+}
+
+fn handle_eval_key_galois_share_proof(
+    prover: &ZkProver,
+    req: EvalKeyGaloisShareProofRequest,
+    request: ComputeRequest,
+) -> Result<ComputeResponse, ComputeRequestError> {
+    let params = BfvParamSet::from(req.params_preset.clone()).build_arc();
+
+    let secret_key_share_poly = try_poly_from_bytes(&req.secret_key_share, &params)
+        .map_err(|e| make_zk_error(&request, format!("secret_key_share: {}", e)))?;
+    let substituted_secret_share_poly = try_poly_from_bytes(&req.substituted_secret_share, &params)
+        .map_err(|e| make_zk_error(&request, format!("substituted_secret_share: {}", e)))?;
+    let transformed_secret_share_poly = try_poly_from_bytes(&req.transformed_secret_share, &params)
+        .map_err(|e| make_zk_error(&request, format!("transformed_secret_share: {}", e)))?;
+    let c1_share_poly = try_poly_from_bytes(&req.c1_share, &params)
+        .map_err(|e| make_zk_error(&request, format!("c1_share: {}", e)))?;
+    let error_share_poly = try_poly_from_bytes(&req.error_share, &params)
+        .map_err(|e| make_zk_error(&request, format!("error_share: {}", e)))?;
+    if req.c0_share.is_empty() {
+        return Err(make_zk_error(&request, "c0_share is empty".to_string()));
+    }
+    let c0_share_limbs = req
+        .c0_share
+        .iter()
+        .enumerate()
+        .map(|(index, limb)| {
+            try_poly_from_bytes(limb, &params)
+                .map_err(|e| make_zk_error(&request, format!("c0_share[{index}]: {}", e)))
+                .map(|poly| CrtPolynomial::from_fhe_polynomial(&poly).limbs.into_iter().next())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let c0_share_poly = CrtPolynomial::new(
+        c0_share_limbs
+            .into_iter()
+            .enumerate()
+            .map(|(index, limb)| {
+                limb.ok_or_else(|| {
+                    make_zk_error(
+                        &request,
+                        format!("c0_share[{index}] did not contain a polynomial limb"),
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+    );
+    let component_index = usize::try_from(req.component_index)
+        .map_err(|e| make_zk_error(&request, format!("component_index conversion: {e}")))?;
+    if component_index >= c0_share_poly.limbs.len() {
+        return Err(make_zk_error(
+            &request,
+            format!(
+                "component_index {} out of range for c0_share with {} limbs",
+                req.component_index,
+                c0_share_poly.limbs.len()
+            ),
+        ));
+    }
+
+    let circuit_data = EvalKeyGaloisShareCircuitData {
+        secret_key_share: CrtPolynomial::from_fhe_polynomial(&secret_key_share_poly),
+        substituted_secret_share: CrtPolynomial::from_fhe_polynomial(&substituted_secret_share_poly),
+        transformed_secret_share: CrtPolynomial::from_fhe_polynomial(&transformed_secret_share_poly),
+        c1_share: CrtPolynomial::from_fhe_polynomial(&c1_share_poly),
+        error_share: CrtPolynomial::from_fhe_polynomial(&error_share_poly),
+        component_index: req.component_index,
+        garner_coefficient_decimal: req.garner_coefficient_decimal,
+        c0_share: c0_share_poly,
+        crs_binding_hash: req.crs_binding_hash,
+        additive_share_commitment_hash: req.additive_share_commitment_hash,
+        share_digest: req.share_digest,
+        exponent: req.exponent,
+        ciphertext_level: req.ciphertext_level,
+        evaluation_key_level: req.evaluation_key_level,
+    };
+
+    let circuit = EvalKeyGaloisShareCircuit;
+    let e3_id_str = request.e3_id.to_string();
+    let proof = circuit
+        .prove(prover, &req.params_preset, &circuit_data, &e3_id_str)
+        .map_err(|e| {
+            ComputeRequestError::new(
+                ComputeRequestErrorKind::Zk(ZkEventError::ProofGenerationFailed(e.to_string())),
+                request.clone(),
+            )
+        })?;
+
+    let wrapped_proof = generate_wrapper_proof(prover, &proof, &e3_id_str).map_err(|e| {
+        ComputeRequestError::new(
+            ComputeRequestErrorKind::Zk(ZkEventError::ProofGenerationFailed(e.to_string())),
+            request.clone(),
+        )
+    })?;
+
+    Ok(ComputeResponse::zk(
+        ZkResponse::EvalKeyGaloisShare(EvalKeyShareProofResponse {
+            proof,
+            wrapped_proof,
+        }),
         request.correlation_id,
         request.e3_id,
     ))

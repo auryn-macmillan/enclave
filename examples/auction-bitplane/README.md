@@ -70,13 +70,13 @@ The FHE program **never decrypts raw bids**.  The committee uses the ranking to 
 
 ## Production considerations
 
-### Eval key shortcut
+### Distributed evaluation keys
 
-The rotation reduce-tree requires a Galois (evaluation) key, and relinearization requires a relinearization key.  The `fhe` library can only build these from a full secret key — no multiparty key generation protocol exists in the library.
+The rotation reduce-tree requires a Galois (evaluation) key, and relinearization requires a relinearization key.
 
-This demo reconstructs the full secret key *temporarily* from all committee members' raw secret keys, builds both keys, and immediately discards the reconstructed key.  DKG and threshold decryption remain fully distributed.
+This demo now generates both keys with the repo's distributed eval-key MPC flow, reusing each committee member's additive BFV secret-key share. The joint BFV secret key is not reconstructed during eval-key generation.
 
-A production system would need an MPC protocol for Galois and relinearization key generation (e.g. the approach in Mouchet et al., "Multiparty Homomorphic Encryption from Ring-Learning-with-Errors").
+The current implementation is aligned with the repo's distributed Galois/relinearization protocols and public-verifiability work, rather than the old single-process shortcut.
 
 ### Smudging noise
 

@@ -83,6 +83,52 @@ impl<let N: u32> Polynomial<N> {
         result
     }
 
+    pub fn mul_negacyclic(self, other: Self) -> Self {
+        let mut result = Self::new([0; N]);
+
+        for i in 0..N {
+            let lhs_degree = N - 1 - i;
+            for j in 0..N {
+                let rhs_degree = N - 1 - j;
+                let product_degree = lhs_degree + rhs_degree;
+                let quotient = product_degree / N;
+                let remainder = product_degree % N;
+                let target_index = N - 1 - remainder;
+
+                let mut term = self.coefficients[i] * other.coefficients[j];
+                if quotient % 2 == 1 {
+                    term = -term;
+                }
+
+                result.coefficients[target_index] = result.coefficients[target_index] + term;
+            }
+        }
+
+        result
+    }
+
+    pub fn substitute_x_pow(self, exponent: u32) -> Self {
+        let mut result = Self::new([0; N]);
+
+        for i in 0..N {
+            let source_degree = N - 1 - i;
+            let substituted_degree = source_degree * exponent;
+
+            let quotient = substituted_degree / N;
+            let remainder = substituted_degree % N;
+            let target_index = N - 1 - remainder;
+
+            let mut coeff = self.coefficients[i];
+            if quotient % 2 == 1 {
+                coeff = -coeff;
+            }
+
+            result.coefficients[target_index] = result.coefficients[target_index] + coeff;
+        }
+
+        result
+    }
+
     /// Evaluates the polynomial at a given point using Horner's method.
     ///
     /// Horner's method computes P(x) = a_{N-1} * x^{N-1} + ... + a_1 * x + a_0
@@ -322,6 +368,41 @@ fn test_polynomial_mul_scalar_zero() {
     assert(result.coefficients[0] == 0);
     assert(result.coefficients[1] == 0);
     assert(result.coefficients[2] == 0);
+}
+
+#[test]
+fn test_polynomial_substitute_x_pow_identity() {
+    let poly = Polynomial::new([1, 2, 3, 4]);
+    let result = poly.substitute_x_pow(1);
+
+    assert(result.coefficients[0] == 1);
+    assert(result.coefficients[1] == 2);
+    assert(result.coefficients[2] == 3);
+    assert(result.coefficients[3] == 4);
+}
+
+#[test]
+fn test_polynomial_substitute_x_pow_negacyclic_sign_flip() {
+    let poly = Polynomial::new([1, 0, 0, 0]);
+    let result = poly.substitute_x_pow(3);
+
+    assert(result.coefficients[0] == 0);
+    assert(result.coefficients[1] == 0);
+    assert(result.coefficients[2] == -1);
+    assert(result.coefficients[3] == 0);
+}
+
+#[test]
+fn test_polynomial_mul_negacyclic_basic() {
+    let lhs = Polynomial::new([1, 0, 0, 0]);
+    let rhs = Polynomial::new([1, 0, 0, 0]);
+    let result = lhs.mul_negacyclic(rhs);
+
+    // x^3 * x^3 = x^6 = -x^2 in Z[X]/(X^4 + 1)
+    assert(result.coefficients[0] == 0);
+    assert(result.coefficients[1] == -1);
+    assert(result.coefficients[2] == 0);
+    assert(result.coefficients[3] == 0);
 }
 
 #[test]

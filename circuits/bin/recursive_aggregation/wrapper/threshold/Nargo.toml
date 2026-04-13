@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "eval_key_galois_share",
     "pk_generation",
     "pk_aggregation",
     "share_decryption",

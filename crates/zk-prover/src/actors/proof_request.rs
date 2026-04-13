@@ -15,11 +15,11 @@ use e3_events::{
     CorrelationId, DKGInnerProofReady, DecryptionKeyShared, DecryptionShareProofSigned,
     DecryptionShareProofsPending, DecryptionshareCreated, DkgProofSigned, E3Failed, E3Stage, E3id,
     EnclaveEvent, EnclaveEventData, EncryptionKey, EncryptionKeyCreated, EncryptionKeyPending,
-    EventContext, EventPublisher, EventSubscriber, EventType, FailureReason,
-    PkAggregationProofPending, PkAggregationProofSigned, PkBfvProofRequest,
-    PkGenerationProofSigned, Proof, ProofPayload, ProofType, Sequenced,
-    ShareDecryptionProofPending, SignedProofPayload, ThresholdShare, ThresholdShareCreated,
-    ThresholdSharePending, TypedEvent, ZkRequest, ZkResponse,
+    EvalKeyShareProofPending, EvalKeyShareProofPendingKind, EvalKeyShareProofSigned, EventContext,
+    EventPublisher, EventSubscriber, EventType, FailureReason, PkAggregationProofPending,
+    PkAggregationProofSigned, PkBfvProofRequest, PkGenerationProofSigned, Proof, ProofPayload,
+    ProofType, Sequenced, ShareDecryptionProofPending, SignedProofPayload, ThresholdShare,
+    ThresholdShareCreated, ThresholdSharePending, TypedEvent, ZkRequest, ZkResponse,
 };
 use e3_utils::utility_types::ArcBytes;
 use e3_utils::NotifySync;
@@ -198,6 +198,15 @@ struct PendingAggregationProof {
     ec: EventContext<Sequenced>,
 }
 
+#[derive(Clone, Debug)]
+struct PendingEvalKeyShareProof {
+    e3_id: E3id,
+    party_id: u64,
+    kind: EvalKeyShareProofPendingKind,
+    exponent: Option<u64>,
+    ec: EventContext<Sequenced>,
+}
+
 /// Core actor that handles encryption key proof requests.
 ///
 /// Proofs are always wrapped in a [`SignedProofPayload`] before being published,
@@ -227,6 +236,7 @@ pub struct ProofRequestActor {
     aggregation_correlation: HashMap<CorrelationId, E3id>,
     /// C7 pending proofs per E3
     pending_aggregation: HashMap<E3id, PendingAggregationProof>,
+    pending_eval_key_share_proofs: HashMap<CorrelationId, PendingEvalKeyShareProof>,
 }
 
 impl ProofRequestActor {
@@ -246,6 +256,7 @@ impl ProofRequestActor {
             pending_pk_aggregation: HashMap::new(),
             aggregation_correlation: HashMap::new(),
             pending_aggregation: HashMap::new(),
+            pending_eval_key_share_proofs: HashMap::new(),
         }
     }
 
@@ -259,7 +270,56 @@ impl ProofRequestActor {
         bus.subscribe(EventType::ShareDecryptionProofPending, addr.clone().into());
         bus.subscribe(EventType::PkAggregationProofPending, addr.clone().into());
         bus.subscribe(EventType::AggregationProofPending, addr.clone().into());
+        bus.subscribe(EventType::EvalKeyShareProofPending, addr.clone().into());
         addr
+    }
+
+    fn handle_eval_key_share_proof_pending(&mut self, msg: TypedEvent<EvalKeyShareProofPending>) {
+        let (msg, ec) = msg.into_components();
+        let e3_id = msg.e3_id.clone();
+        let correlation_id = CorrelationId::new();
+
+        let request = match msg.kind {
+            EvalKeyShareProofPendingKind::Galois => {
+                msg.galois_request.map(ZkRequest::EvalKeyGaloisShare)
+            }
+            EvalKeyShareProofPendingKind::RelinRound1 => msg
+                .relin_round1_request
+                .map(ZkRequest::EvalKeyRelinRound1Share),
+            EvalKeyShareProofPendingKind::RelinRound2 => msg
+                .relin_round2_request
+                .map(ZkRequest::EvalKeyRelinRound2Share),
+        };
+
+        let Some(request) = request else {
+            error!(
+                "Eval-key proof pending for E3 {} party {} kind {:?} missing request payload",
+                e3_id, msg.party_id, msg.kind
+            );
+            return;
+        };
+
+        self.pending_eval_key_share_proofs.insert(
+            correlation_id,
+            PendingEvalKeyShareProof {
+                e3_id: e3_id.clone(),
+                party_id: msg.party_id,
+                kind: msg.kind,
+                exponent: msg.exponent,
+                ec: ec.clone(),
+            },
+        );
+
+        if let Err(err) = self.bus.publish(
+            ComputeRequest::zk(request, correlation_id, e3_id.clone()),
+            ec,
+        ) {
+            error!(
+                "Failed to publish eval-key proof request for E3 {}: {err}",
+                e3_id
+            );
+            self.pending_eval_key_share_proofs.remove(&correlation_id);
+        }
     }
 
     /// Returns true if proof aggregation (wrapping/folding) is enabled for this E3.
@@ -542,7 +602,59 @@ impl ProofRequestActor {
             ComputeResponseKind::Zk(ZkResponse::DecryptedSharesAggregation(resp)) => {
                 self.handle_aggregation_proof_response(&msg.correlation_id, resp.proofs.clone());
             }
+            ComputeResponseKind::Zk(ZkResponse::EvalKeyGaloisShare(resp))
+            | ComputeResponseKind::Zk(ZkResponse::EvalKeyRelinRound1Share(resp))
+            | ComputeResponseKind::Zk(ZkResponse::EvalKeyRelinRound2Share(resp)) => {
+                self.handle_eval_key_share_proof_response(&msg.correlation_id, resp.proof.clone());
+            }
             _ => {}
+        }
+    }
+
+    fn handle_eval_key_share_proof_response(
+        &mut self,
+        correlation_id: &CorrelationId,
+        proof: Proof,
+    ) {
+        let Some(pending) = self.pending_eval_key_share_proofs.remove(correlation_id) else {
+            return;
+        };
+
+        let proof_type = match pending.kind {
+            EvalKeyShareProofPendingKind::Galois => ProofType::C8EvalKeyGaloisShare,
+            EvalKeyShareProofPendingKind::RelinRound1 => ProofType::C9EvalKeyRelinRound1Share,
+            EvalKeyShareProofPendingKind::RelinRound2 => ProofType::C10EvalKeyRelinRound2Share,
+        };
+
+        let Some(signed_proof) = self.sign_proof(&pending.e3_id, proof_type, proof) else {
+            error!(
+                "Failed to sign eval-key share proof for E3 {} party {}",
+                pending.e3_id, pending.party_id
+            );
+            return;
+        };
+
+        if let Err(err) = self.bus.publish(
+            EvalKeyShareProofSigned {
+                e3_id: pending.e3_id,
+                party_id: pending.party_id,
+                kind: match pending.kind {
+                    EvalKeyShareProofPendingKind::Galois => {
+                        e3_events::EvalKeyShareProofKind::Galois
+                    }
+                    EvalKeyShareProofPendingKind::RelinRound1 => {
+                        e3_events::EvalKeyShareProofKind::RelinRound1
+                    }
+                    EvalKeyShareProofPendingKind::RelinRound2 => {
+                        e3_events::EvalKeyShareProofKind::RelinRound2
+                    }
+                },
+                exponent: pending.exponent,
+                signed_proof,
+            },
+            pending.ec,
+        ) {
+            error!("Failed to publish EvalKeyShareProofSigned: {err}");
         }
     }
 
@@ -1496,6 +1608,17 @@ impl ProofRequestActor {
             ) {
                 error!("Failed to publish E3Failed for C7 error: {e}");
             }
+            return;
+        }
+
+        if let Some(pending) = self
+            .pending_eval_key_share_proofs
+            .remove(msg.correlation_id())
+        {
+            error!(
+                "Eval-key {:?} proof request failed for E3 {} party {}: {err}",
+                pending.kind, pending.e3_id, pending.party_id
+            );
         }
     }
 }
@@ -1533,6 +1656,9 @@ impl Handler<EnclaveEvent> for ProofRequestActor {
                 self.notify_sync(ctx, TypedEvent::new(data, ec))
             }
             EnclaveEventData::AggregationProofPending(data) => {
+                self.notify_sync(ctx, TypedEvent::new(data, ec))
+            }
+            EnclaveEventData::EvalKeyShareProofPending(data) => {
                 self.notify_sync(ctx, TypedEvent::new(data, ec))
             }
             _ => (),
@@ -1633,5 +1759,17 @@ impl Handler<TypedEvent<AggregationProofPending>> for ProofRequestActor {
         _ctx: &mut Self::Context,
     ) -> Self::Result {
         self.handle_aggregation_proof_pending(msg)
+    }
+}
+
+impl Handler<TypedEvent<EvalKeyShareProofPending>> for ProofRequestActor {
+    type Result = ();
+
+    fn handle(
+        &mut self,
+        msg: TypedEvent<EvalKeyShareProofPending>,
+        _ctx: &mut Self::Context,
+    ) -> Self::Result {
+        self.handle_eval_key_share_proof_pending(msg)
     }
 }

@@ -131,7 +131,10 @@ impl ShareVerificationActor {
         match msg.kind {
             VerificationKind::ShareProofs
             | VerificationKind::ThresholdDecryptionProofs
-            | VerificationKind::PkGenerationProofs => {
+            | VerificationKind::PkGenerationProofs
+            | VerificationKind::EvalKeyGaloisShareProofs
+            | VerificationKind::EvalKeyRelinRound1ShareProofs
+            | VerificationKind::EvalKeyRelinRound2ShareProofs => {
                 let kind = msg.kind.clone();
                 self.verify_proofs(
                     e3_id,
@@ -190,6 +193,9 @@ impl ShareVerificationActor {
             VerificationKind::ThresholdDecryptionProofs => "C6",
             VerificationKind::PkGenerationProofs => "C1",
             VerificationKind::DecryptionProofs => "C4",
+            VerificationKind::EvalKeyGaloisShareProofs => "C8",
+            VerificationKind::EvalKeyRelinRound1ShareProofs => "C9",
+            VerificationKind::EvalKeyRelinRound2ShareProofs => "C10",
         };
         let mut ecdsa_dishonest = HashSet::new();
         let mut ecdsa_passed_parties = Vec::new();
@@ -371,7 +377,10 @@ impl ShareVerificationActor {
             (
                 VerificationKind::ShareProofs
                 | VerificationKind::ThresholdDecryptionProofs
-                | VerificationKind::PkGenerationProofs,
+                | VerificationKind::PkGenerationProofs
+                | VerificationKind::EvalKeyGaloisShareProofs
+                | VerificationKind::EvalKeyRelinRound1ShareProofs
+                | VerificationKind::EvalKeyRelinRound2ShareProofs,
                 ComputeResponseKind::Zk(ZkResponse::VerifyShareProofs(r)),
             ) => r.party_results,
             (

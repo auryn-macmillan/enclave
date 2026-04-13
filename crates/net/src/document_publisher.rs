@@ -16,10 +16,11 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use e3_events::{
     prelude::*, trap, trap_fut, BusHandle, CiphernodeSelected, CorrelationId, DecryptionKeyShared,
-    DocumentKind, DocumentMeta, DocumentReceived, E3RequestComplete, E3id, EType, EnclaveEvent,
-    EnclaveEventData, EncryptionKeyCreated, EncryptionKeyReceived, Event, EventContext,
-    EventSource, EventType, Filter, PartyId, PublishDocumentRequested, Sequenced,
-    ThresholdShareCreated, TypedEvent,
+    DocumentKind, DocumentMeta, DocumentReceived, E3RequestComplete, E3id, EType,
+    EnclaveEvent, EnclaveEventData, EncryptionKeyCreated, EncryptionKeyReceived,
+    EvalKeyCrsDistributed, Event, EventContext, EventSource, EventType, Filter,
+    GaloisKeyShareCreated, PartyId, PublishDocumentRequested, RelinKeyShareRound1Created,
+    RelinKeyShareRound2Created, Sequenced, ThresholdShareCreated, TypedEvent,
 };
 use e3_utils::ArcBytes;
 use e3_utils::NotifySync;
@@ -87,6 +88,10 @@ impl DocumentPublisher {
             EnclaveEventData::ThresholdShareCreated(_) => true,
             EnclaveEventData::EncryptionKeyCreated(_) => true,
             EnclaveEventData::DecryptionKeyShared(_) => true,
+            EnclaveEventData::EvalKeyCrsDistributed(_) => true,
+            EnclaveEventData::GaloisKeyShareCreated(_) => true,
+            EnclaveEventData::RelinKeyShareRound1Created(_) => true,
+            EnclaveEventData::RelinKeyShareRound2Created(_) => true,
             _ => false,
         }
     }
@@ -433,6 +438,10 @@ enum ReceivableDocument {
     ThresholdShareCreated(ThresholdShareCreated),
     EncryptionKeyCreated(EncryptionKeyCreated),
     DecryptionKeyShared(DecryptionKeyShared),
+    EvalKeyCrsDistributed(EvalKeyCrsDistributed),
+    GaloisKeyShareCreated(GaloisKeyShareCreated),
+    RelinKeyShareRound1Created(RelinKeyShareRound1Created),
+    RelinKeyShareRound2Created(RelinKeyShareRound2Created),
 }
 
 impl ReceivableDocument {
@@ -455,6 +464,10 @@ impl EventConverter {
         bus.subscribe(EventType::ThresholdShareCreated, addr.clone().into());
         bus.subscribe(EventType::EncryptionKeyCreated, addr.clone().into());
         bus.subscribe(EventType::DecryptionKeyShared, addr.clone().into());
+        bus.subscribe(EventType::EvalKeyCrsDistributed, addr.clone().into());
+        bus.subscribe(EventType::GaloisKeyShareCreated, addr.clone().into());
+        bus.subscribe(EventType::RelinKeyShareRound1Created, addr.clone().into());
+        bus.subscribe(EventType::RelinKeyShareRound2Created, addr.clone().into());
         bus.subscribe(EventType::DocumentReceived, addr.clone().into());
         addr
     }
@@ -536,6 +549,68 @@ impl EventConverter {
         Ok(())
     }
 
+    fn handle_eval_key_crs_distributed(&self, msg: TypedEvent<EvalKeyCrsDistributed>) -> Result<()> {
+        let (msg, ctx) = msg.into_components();
+        if msg.external {
+            return Ok(());
+        }
+
+        let meta = DocumentMeta::new(msg.e3_id.clone(), DocumentKind::TrBFV, vec![], None);
+        let receivable = ReceivableDocument::EvalKeyCrsDistributed(msg);
+        let value = ArcBytes::from_bytes(&receivable.to_bytes()?);
+        self.bus
+            .publish(PublishDocumentRequested::new(meta, value), ctx)?;
+        Ok(())
+    }
+
+    fn handle_galois_key_share_created(&self, msg: TypedEvent<GaloisKeyShareCreated>) -> Result<()> {
+        let (msg, ctx) = msg.into_components();
+        if msg.external {
+            return Ok(());
+        }
+
+        let meta = DocumentMeta::new(msg.e3_id.clone(), DocumentKind::TrBFV, vec![], None);
+        let receivable = ReceivableDocument::GaloisKeyShareCreated(msg);
+        let value = ArcBytes::from_bytes(&receivable.to_bytes()?);
+        self.bus
+            .publish(PublishDocumentRequested::new(meta, value), ctx)?;
+        Ok(())
+    }
+
+    fn handle_relin_key_share_round1_created(
+        &self,
+        msg: TypedEvent<RelinKeyShareRound1Created>,
+    ) -> Result<()> {
+        let (msg, ctx) = msg.into_components();
+        if msg.external {
+            return Ok(());
+        }
+
+        let meta = DocumentMeta::new(msg.e3_id.clone(), DocumentKind::TrBFV, vec![], None);
+        let receivable = ReceivableDocument::RelinKeyShareRound1Created(msg);
+        let value = ArcBytes::from_bytes(&receivable.to_bytes()?);
+        self.bus
+            .publish(PublishDocumentRequested::new(meta, value), ctx)?;
+        Ok(())
+    }
+
+    fn handle_relin_key_share_round2_created(
+        &self,
+        msg: TypedEvent<RelinKeyShareRound2Created>,
+    ) -> Result<()> {
+        let (msg, ctx) = msg.into_components();
+        if msg.external {
+            return Ok(());
+        }
+
+        let meta = DocumentMeta::new(msg.e3_id.clone(), DocumentKind::TrBFV, vec![], None);
+        let receivable = ReceivableDocument::RelinKeyShareRound2Created(msg);
+        let value = ArcBytes::from_bytes(&receivable.to_bytes()?);
+        self.bus
+            .publish(PublishDocumentRequested::new(meta, value), ctx)?;
+        Ok(())
+    }
+
     // TODO: Split this off to a separate module/actor to make each component unidirectional
     /// Convert received document to internal events.
     /// Note: Filtering already happened in DocumentPublisher before DHT fetch.
@@ -586,6 +661,42 @@ impl EventConverter {
                     ctx,
                 )?;
             }
+            ReceivableDocument::EvalKeyCrsDistributed(evt) => {
+                self.bus.publish(
+                    EvalKeyCrsDistributed {
+                        external: true,
+                        ..evt
+                    },
+                    ctx,
+                )?;
+            }
+            ReceivableDocument::GaloisKeyShareCreated(evt) => {
+                self.bus.publish(
+                    GaloisKeyShareCreated {
+                        external: true,
+                        ..evt
+                    },
+                    ctx,
+                )?;
+            }
+            ReceivableDocument::RelinKeyShareRound1Created(evt) => {
+                self.bus.publish(
+                    RelinKeyShareRound1Created {
+                        external: true,
+                        ..evt
+                    },
+                    ctx,
+                )?;
+            }
+            ReceivableDocument::RelinKeyShareRound2Created(evt) => {
+                self.bus.publish(
+                    RelinKeyShareRound2Created {
+                        external: true,
+                        ..evt
+                    },
+                    ctx,
+                )?;
+            }
         }
         Ok(())
     }
@@ -607,6 +718,18 @@ impl Handler<EnclaveEvent> for EventConverter {
                 self.notify_sync(ctx, TypedEvent::new(data, ec))
             }
             EnclaveEventData::DecryptionKeyShared(data) => {
+                self.notify_sync(ctx, TypedEvent::new(data, ec))
+            }
+            EnclaveEventData::EvalKeyCrsDistributed(data) => {
+                self.notify_sync(ctx, TypedEvent::new(data, ec))
+            }
+            EnclaveEventData::GaloisKeyShareCreated(data) => {
+                self.notify_sync(ctx, TypedEvent::new(data, ec))
+            }
+            EnclaveEventData::RelinKeyShareRound1Created(data) => {
+                self.notify_sync(ctx, TypedEvent::new(data, ec))
+            }
+            EnclaveEventData::RelinKeyShareRound2Created(data) => {
                 self.notify_sync(ctx, TypedEvent::new(data, ec))
             }
             EnclaveEventData::DocumentReceived(data) => {
@@ -643,6 +766,66 @@ impl Handler<TypedEvent<EncryptionKeyCreated>> for EventConverter {
             EType::DocumentPublishing,
             &self.bus.with_ec(msg.get_ctx()),
             || self.handle_encryption_key_created(msg),
+        )
+    }
+}
+
+impl Handler<TypedEvent<EvalKeyCrsDistributed>> for EventConverter {
+    type Result = ();
+    fn handle(
+        &mut self,
+        msg: TypedEvent<EvalKeyCrsDistributed>,
+        _ctx: &mut Self::Context,
+    ) -> Self::Result {
+        trap(
+            EType::DocumentPublishing,
+            &self.bus.with_ec(msg.get_ctx()),
+            || self.handle_eval_key_crs_distributed(msg),
+        )
+    }
+}
+
+impl Handler<TypedEvent<GaloisKeyShareCreated>> for EventConverter {
+    type Result = ();
+    fn handle(
+        &mut self,
+        msg: TypedEvent<GaloisKeyShareCreated>,
+        _ctx: &mut Self::Context,
+    ) -> Self::Result {
+        trap(
+            EType::DocumentPublishing,
+            &self.bus.with_ec(msg.get_ctx()),
+            || self.handle_galois_key_share_created(msg),
+        )
+    }
+}
+
+impl Handler<TypedEvent<RelinKeyShareRound1Created>> for EventConverter {
+    type Result = ();
+    fn handle(
+        &mut self,
+        msg: TypedEvent<RelinKeyShareRound1Created>,
+        _ctx: &mut Self::Context,
+    ) -> Self::Result {
+        trap(
+            EType::DocumentPublishing,
+            &self.bus.with_ec(msg.get_ctx()),
+            || self.handle_relin_key_share_round1_created(msg),
+        )
+    }
+}
+
+impl Handler<TypedEvent<RelinKeyShareRound2Created>> for EventConverter {
+    type Result = ();
+    fn handle(
+        &mut self,
+        msg: TypedEvent<RelinKeyShareRound2Created>,
+        _ctx: &mut Self::Context,
+    ) -> Self::Result {
+        trap(
+            EType::DocumentPublishing,
+            &self.bus.with_ec(msg.get_ctx()),
+            || self.handle_relin_key_share_round2_created(msg),
         )
     }
 }

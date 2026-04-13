@@ -7,12 +7,14 @@
 pub mod calculate_decryption_key;
 pub mod calculate_decryption_share;
 pub mod calculate_threshold_decryption;
+pub mod distributed_eval_key;
 pub mod gen_esi_sss;
 pub mod gen_pk_share_and_sk_sss;
 pub mod helpers;
 pub mod shares;
 pub mod trbfv_config;
 pub mod trbfv_request;
+pub use distributed_eval_key::*;
 pub use trbfv_config::*;
 pub use trbfv_request::*;
 pub type PartyId = u64;

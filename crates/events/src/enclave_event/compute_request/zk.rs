@@ -36,6 +36,9 @@ pub enum ZkRequest {
     ThresholdShareDecryption(ThresholdShareDecryptionProofRequest),
     /// Generate proof for decrypted shares aggregation (C7).
     DecryptedSharesAggregation(DecryptedSharesAggregationProofRequest),
+    EvalKeyGaloisShare(EvalKeyGaloisShareProofRequest),
+    EvalKeyRelinRound1Share(EvalKeyRelinRound1ShareProofRequest),
+    EvalKeyRelinRound2Share(EvalKeyRelinRound2ShareProofRequest),
     /// Fold two proofs into one (incremental recursive aggregation).
     /// When `target_evm` is true, the output proof is generated for on-chain EVM verification.
     FoldProofs {
@@ -214,8 +217,79 @@ pub enum ZkResponse {
     ThresholdShareDecryption(ThresholdShareDecryptionProofResponse),
     /// Proof for decrypted shares aggregation (C7).
     DecryptedSharesAggregation(DecryptedSharesAggregationProofResponse),
+    EvalKeyGaloisShare(EvalKeyShareProofResponse),
+    EvalKeyRelinRound1Share(EvalKeyShareProofResponse),
+    EvalKeyRelinRound2Share(EvalKeyShareProofResponse),
     /// Folded proof (output of two-proof fold).
     FoldProofs(FoldProofsResponse),
+}
+
+#[derive(Derivative, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derivative(Debug)]
+pub struct EvalKeyGaloisShareProofRequest {
+    #[derivative(Debug(format_with = "e3_utils::formatters::hexf"))]
+    pub secret_key_share: ArcBytes,
+    #[derivative(Debug(format_with = "e3_utils::formatters::hexf"))]
+    pub substituted_secret_share: ArcBytes,
+    #[derivative(Debug(format_with = "e3_utils::formatters::hexf"))]
+    pub transformed_secret_share: ArcBytes,
+    #[derivative(Debug(format_with = "e3_utils::formatters::hexf"))]
+    pub c1_share: ArcBytes,
+    #[derivative(Debug(format_with = "e3_utils::formatters::hexf"))]
+    pub error_share: ArcBytes,
+    pub component_index: u64,
+    pub garner_coefficient_decimal: String,
+    pub exponent: u64,
+    pub ciphertext_level: u64,
+    pub evaluation_key_level: u64,
+    pub c0_share: Vec<ArcBytes>,
+    pub crs_binding_hash: [u8; 32],
+    pub additive_share_commitment_hash: [u8; 32],
+    pub share_digest: [u8; 32],
+    pub params_preset: BfvPreset,
+}
+
+#[derive(Derivative, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derivative(Debug)]
+pub struct EvalKeyRelinRound1ShareProofRequest {
+    #[derivative(Debug(format_with = "e3_utils::formatters::hexf"))]
+    pub secret_key_share: ArcBytes,
+    #[derivative(Debug(format_with = "e3_utils::formatters::hexf"))]
+    pub ephemeral_u_share: ArcBytes,
+    pub ciphertext_level: u64,
+    pub key_level: u64,
+    pub h0: Vec<ArcBytes>,
+    pub h1: Vec<ArcBytes>,
+    pub crs_binding_hash: [u8; 32],
+    pub additive_share_commitment_hash: [u8; 32],
+    pub relin_ephemeral_u_commitment_hash: [u8; 32],
+    pub share_digest: [u8; 32],
+    pub params_preset: BfvPreset,
+}
+
+#[derive(Derivative, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derivative(Debug)]
+pub struct EvalKeyRelinRound2ShareProofRequest {
+    #[derivative(Debug(format_with = "e3_utils::formatters::hexf"))]
+    pub secret_key_share: ArcBytes,
+    #[derivative(Debug(format_with = "e3_utils::formatters::hexf"))]
+    pub ephemeral_u_share: ArcBytes,
+    pub ciphertext_level: u64,
+    pub key_level: u64,
+    pub h0: Vec<ArcBytes>,
+    pub h1: Vec<ArcBytes>,
+    pub crs_binding_hash: [u8; 32],
+    pub additive_share_commitment_hash: [u8; 32],
+    pub relin_ephemeral_u_commitment_hash: [u8; 32],
+    pub round1_aggregate_digest: [u8; 32],
+    pub share_digest: [u8; 32],
+    pub params_preset: BfvPreset,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct EvalKeyShareProofResponse {
+    pub proof: Proof,
+    pub wrapped_proof: Proof,
 }
 
 /// Response containing a generated proof for public key aggregation (C5).

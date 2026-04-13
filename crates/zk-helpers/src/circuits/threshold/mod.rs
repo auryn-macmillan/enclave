@@ -5,6 +5,7 @@
 // or FITNESS FOR A PARTICULAR PURPOSE.
 
 pub mod decrypted_shares_aggregation;
+pub mod eval_key_galois_share;
 pub mod pk_aggregation;
 pub mod pk_generation;
 pub mod share_decryption;

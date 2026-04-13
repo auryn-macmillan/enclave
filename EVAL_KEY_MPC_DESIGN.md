@@ -8,9 +8,9 @@
 
 ## 1. Background and Motivation
 
-The auction-bitplane demo currently uses a **shortcut** for evaluation key generation (`build_eval_key_from_committee` in `lib.rs:237–289`): it temporarily reconstructs the full joint secret key `s = s_0 + s_1 + s_2` from all committee members' raw secret keys, builds the evaluation and relinearization keys using fhe.rs's `EvaluationKeyBuilder` and `RelinearizationKey::new()`, then discards the reconstructed key.
+This design was created to replace the original auction-bitplane eval-key **shortcut**: the demo used to reconstruct the full joint secret key `s = s_0 + s_1 + s_2` from all committee members' raw secret keys, build the evaluation and relinearization keys using fhe.rs's `EvaluationKeyBuilder` and `RelinearizationKey::new()`, then discard the reconstructed key.
 
-This defeats the purpose of the threshold DKG, since the full secret key is materialized — even if briefly — in a single process. A production system must generate these keys **distributedly**, so the joint secret key is never reconstructed.
+That shortcut has now been replaced in the demo path, but the motivation remains the same: the full secret key must never be materialized in a single process, so evaluation keys need to be generated **distributedly**.
 
 ### What We Need to Generate
 

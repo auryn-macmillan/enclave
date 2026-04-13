@@ -14,9 +14,15 @@ use e3_events::{
     DecryptionKeyShared, DecryptionShareProofSigned, DecryptionShareProofsPending, Die,
     DkgProofSigned, DkgShareDecryptionProofRequest, E3Failed, E3RequestComplete, E3Stage, E3id,
     EType, EnclaveEvent, EnclaveEventData, EncryptionKey, EncryptionKeyCollectionFailed,
-    EncryptionKeyCreated, EncryptionKeyPending, EventContext, FailureReason, KeyshareCreated,
-    PartyId, PartyProofsToVerify, PartyShareDecryptionProofsToVerify, PkGenerationProofRequest,
-    PkGenerationProofSigned, ProofType, Sequenced, ShareComputationProofRequest,
+    EncryptionKeyCreated, EncryptionKeyPending, EvalKeyCrsDistributed, EvalKeyGaloisShareProofRequest,
+    EvalKeyRelinRound1ShareProofRequest, EvalKeyRelinRound2ShareProofRequest,
+    EvalKeyShareProofKind, EvalKeyShareProofPending, EvalKeyShareProofPendingKind,
+    EvalKeyShareProofSigned, EvaluationKeyCreated, EventContext, FailureReason,
+    GaloisKeyArtifact, GaloisKeyShare, GaloisKeyShareCreated, KeyshareCreated, OrderedSet,
+    PartyId, PartyProofsToVerify, PublicKeyAggregated, PartyShareDecryptionProofsToVerify,
+    PkGenerationProofRequest, PkGenerationProofSigned, ProofType, RelinKeyShareRound1,
+    RelinKeyShareRound1Created, RelinKeyShareRound2, RelinKeyShareRound2Created,
+    RelinearizationKeyCreated, Seed, Sequenced, ShareComputationProofRequest,
     ShareDecryptionProofPending, ShareEncryptionProofRequest, ShareVerificationComplete,
     ShareVerificationDispatched, SignedProofPayload, ThresholdShare,
     ThresholdShareCollectionFailed, ThresholdShareCreated, ThresholdShareDecryptionProofRequest,
@@ -25,6 +31,15 @@ use e3_events::{
 use e3_fhe_params::create_deterministic_crp_from_default_seed;
 use e3_fhe_params::{build_pair_for_preset, BfvParamSet, BfvPreset};
 use e3_trbfv::{
+    distributed_eval_key::{
+        AggregateDistributedEvaluationKeyRequest, AggregateDistributedGaloisKeyRequest,
+        AggregateDistributedRelinKeyRequest, AggregateDistributedRelinRound1Request,
+        DistributedGaloisKeyShare, DistributedRelinRound1Aggregate,
+        DistributedRelinRound1SecretState, DistributedRelinRound1Share,
+        DistributedRelinRound2Share, EvalKeyRootSeed,
+        GenerateDistributedGaloisKeyShareRequest, GenerateDistributedRelinRound1Request,
+        GenerateDistributedRelinRound2Request,
+    },
     calculate_decryption_key::{CalculateDecryptionKeyRequest, CalculateDecryptionKeyResponse},
     calculate_decryption_share::{
         CalculateDecryptionShareRequest, CalculateDecryptionShareResponse,
@@ -55,6 +70,20 @@ use crate::decryption_key_shared_collector::{
 };
 use crate::encryption_key_collector::{
     AllEncryptionKeysCollected, EncryptionKeyCollector, ExpelPartyFromKeyCollection,
+};
+use crate::galois_key_share_collector::{
+    ExpelPartyFromGaloisKeyShareCollection, GaloisKeyShareCollector,
+};
+use crate::relin_key_share_round1_collector::{
+    ExpelPartyFromRelinKeyRound1ShareCollection, RelinKeyRound1ShareCollector,
+};
+use crate::relin_key_share_round2_collector::{
+    ExpelPartyFromRelinKeyRound2ShareCollection, RelinKeyRound2ShareCollector,
+};
+use crate::{
+    AllGaloisKeySharesCollected, AllRelinKeyRound1SharesCollected,
+    AllRelinKeyRound2SharesCollected, GaloisKeyShareCollectionFailed,
+    RelinKeyRound1ShareCollectionFailed, RelinKeyRound2ShareCollectionFailed,
 };
 use crate::threshold_share_collector::{
     ExpelPartyFromShareCollection, ReceivedShareProofs, ThresholdShareCollector,
@@ -255,6 +284,8 @@ pub struct ThresholdKeyshareState {
     pub threshold_m: u64,
     pub threshold_n: u64,
     pub params: ArcBytes,
+    pub additive_bfv_sk_share: Option<SensitiveBytes>,
+    pub committee_seed: Option<Seed>,
     /// Aggregated public key bytes, captured from PublicKeyAggregated event for C6 proof.
     pub aggregated_pk: Option<ArcBytes>,
     pub expelled_parties: HashSet<u64>,
@@ -286,6 +317,8 @@ impl ThresholdKeyshareState {
             threshold_m,
             threshold_n,
             params,
+            additive_bfv_sk_share: None,
+            committee_seed: None,
             aggregated_pk: None,
             expelled_parties: HashSet::new(),
             honest_parties: None,
@@ -407,6 +440,9 @@ pub struct ThresholdKeyshare {
     decryption_key_collector: Option<Addr<ThresholdShareCollector>>,
     encryption_key_collector: Option<Addr<EncryptionKeyCollector>>,
     decryption_key_shared_collector: Option<Addr<DecryptionKeySharedCollector>>,
+    galois_key_share_collector: Option<Addr<GaloisKeyShareCollector>>,
+    relin_key_round1_collector: Option<Addr<RelinKeyRound1ShareCollector>>,
+    relin_key_round2_collector: Option<Addr<RelinKeyRound2ShareCollector>>,
     state: Persistable<ThresholdKeyshareState>,
     share_enc_preset: BfvPreset,
     /// Transient coordination data bridging async gaps — not persisted.
@@ -419,6 +455,19 @@ pub struct ThresholdKeyshare {
     )>,
     /// Temporarily stores DecryptionKeyShared while C4 verification is in flight.
     pending_c4_verification_shares: Option<HashMap<u64, DecryptionKeyShared>>,
+    eval_key_root_seed: Option<Seed>,
+    eval_key_nodes: Option<OrderedSet<String>>,
+    pending_galois_exponents: Vec<u64>,
+    current_galois_exponent: Option<u64>,
+    aggregated_galois_keys: Vec<GaloisKeyArtifact>,
+    relin_round1_helper: Option<DistributedRelinRound1SecretState>,
+    relin_round1_aggregate: Option<DistributedRelinRound1Aggregate>,
+    pending_local_galois_shares: HashMap<u64, GaloisKeyShareCreated>,
+    pending_local_relin_round1_share: Option<RelinKeyShareRound1Created>,
+    pending_local_relin_round2_share: Option<RelinKeyShareRound2Created>,
+    pending_verified_galois_shares: HashMap<u64, HashMap<u64, GaloisKeyShareCreated>>,
+    pending_verified_relin_round1_shares: HashMap<u64, RelinKeyShareRound1Created>,
+    pending_verified_relin_round2_shares: HashMap<u64, RelinKeyShareRound2Created>,
 }
 
 impl ThresholdKeyshare {
@@ -429,11 +478,27 @@ impl ThresholdKeyshare {
             decryption_key_collector: None,
             encryption_key_collector: None,
             decryption_key_shared_collector: None,
+            galois_key_share_collector: None,
+            relin_key_round1_collector: None,
+            relin_key_round2_collector: None,
             state: params.state,
             share_enc_preset: params.share_enc_preset,
             pending_shares: Vec::new(),
             pending_share_decryption_data: None,
             pending_c4_verification_shares: None,
+            eval_key_root_seed: None,
+            eval_key_nodes: None,
+            pending_galois_exponents: Vec::new(),
+            current_galois_exponent: None,
+            aggregated_galois_keys: Vec::new(),
+            relin_round1_helper: None,
+            relin_round1_aggregate: None,
+            pending_local_galois_shares: HashMap::new(),
+            pending_local_relin_round1_share: None,
+            pending_local_relin_round2_share: None,
+            pending_verified_galois_shares: HashMap::new(),
+            pending_verified_relin_round1_shares: HashMap::new(),
+            pending_verified_relin_round2_shares: HashMap::new(),
         }
     }
 }
@@ -513,6 +578,206 @@ impl ThresholdKeyshare {
         Ok(addr.clone())
     }
 
+    fn eval_participants(state: &ThresholdKeyshareState) -> HashSet<u64> {
+        state
+            .honest_parties
+            .clone()
+            .unwrap_or_else(|| (0..state.threshold_n).collect())
+    }
+
+    fn ensure_galois_key_share_collector(
+        &mut self,
+        self_addr: Addr<Self>,
+        exponent: u64,
+    ) -> Result<Addr<GaloisKeyShareCollector>> {
+        let state = self.state.try_get()?;
+        let expected = Self::eval_participants(&state);
+        let e3_id = state.e3_id.clone();
+        let addr = self.galois_key_share_collector.get_or_insert_with(|| {
+            GaloisKeyShareCollector::setup(self_addr, expected, e3_id, exponent)
+        });
+        Ok(addr.clone())
+    }
+
+    fn ensure_relin_key_round1_collector(
+        &mut self,
+        self_addr: Addr<Self>,
+    ) -> Result<Addr<RelinKeyRound1ShareCollector>> {
+        let state = self.state.try_get()?;
+        let expected = Self::eval_participants(&state);
+        let e3_id = state.e3_id.clone();
+        let addr = self.relin_key_round1_collector.get_or_insert_with(|| {
+            RelinKeyRound1ShareCollector::setup(self_addr, expected, e3_id)
+        });
+        Ok(addr.clone())
+    }
+
+    fn ensure_relin_key_round2_collector(
+        &mut self,
+        self_addr: Addr<Self>,
+    ) -> Result<Addr<RelinKeyRound2ShareCollector>> {
+        let state = self.state.try_get()?;
+        let expected = Self::eval_participants(&state);
+        let e3_id = state.e3_id.clone();
+        let addr = self.relin_key_round2_collector.get_or_insert_with(|| {
+            RelinKeyRound2ShareCollector::setup(self_addr, expected, e3_id)
+        });
+        Ok(addr.clone())
+    }
+
+    fn required_galois_exponents(&self) -> Result<Vec<u64>> {
+        let params = self.state.try_get()?.get_trbfv_config().params();
+        let mut exponents = Vec::new();
+        let mut shift = 1usize;
+        while shift < params.degree() / 2 {
+            exponents.push(Self::mod_pow_u64(
+                3,
+                shift as u64,
+                (params.degree() * 2) as u64,
+            ));
+            shift *= 2;
+        }
+        exponents.push((params.degree() * 2 - 1) as u64);
+        Ok(exponents)
+    }
+
+    fn eval_key_root_seed(&self) -> Result<EvalKeyRootSeed> {
+        let seed = self
+            .eval_key_root_seed
+            .ok_or_else(|| anyhow!("eval key root seed not initialized"))?;
+        Ok(EvalKeyRootSeed::new(seed.0))
+    }
+
+    fn additive_secret_key_share_bytes(&self) -> Result<ArcBytes> {
+        let state = self.state.try_get()?;
+        let bytes = state
+            .additive_bfv_sk_share
+            .as_ref()
+            .ok_or_else(|| anyhow!("missing additive BFV secret key share"))?
+            .access(&self.cipher)?;
+        Ok(ArcBytes::from_bytes(&bytes))
+    }
+
+    fn mod_pow_u64(base: u64, exponent: u64, modulus: u64) -> u64 {
+        let mut result = 1u128;
+        let mut base_acc = (base % modulus) as u128;
+        let modulus = modulus as u128;
+        let mut exp = exponent;
+        while exp > 0 {
+            if exp & 1 == 1 {
+                result = (result * base_acc) % modulus;
+            }
+            base_acc = (base_acc * base_acc) % modulus;
+            exp >>= 1;
+        }
+        result as u64
+    }
+
+    fn start_next_galois_round(
+        &mut self,
+        ec: EventContext<Sequenced>,
+        self_addr: Addr<Self>,
+    ) -> Result<()> {
+        let Some(exponent) = self.pending_galois_exponents.first().copied() else {
+            let state = self.state.try_get()?;
+            let request = AggregateDistributedEvaluationKeyRequest {
+                trbfv_config: state.get_trbfv_config(),
+                ciphertext_level: 0,
+                evaluation_key_level: 0,
+                galois_keys: self
+                    .aggregated_galois_keys
+                    .iter()
+                    .map(|artifact| artifact.data.clone())
+                    .collect(),
+            };
+            self.bus.publish(
+                ComputeRequest::trbfv(
+                    TrBFVRequest::AggregateDistributedEvaluationKey(request),
+                    CorrelationId::new(),
+                    state.e3_id.clone(),
+                ),
+                ec,
+            )?;
+            return Ok(());
+        };
+
+        self.current_galois_exponent = Some(exponent);
+        let _ = self.ensure_galois_key_share_collector(self_addr, exponent)?;
+        let state = self.state.try_get()?;
+        let request = GenerateDistributedGaloisKeyShareRequest {
+            trbfv_config: state.get_trbfv_config(),
+            root_seed: self.eval_key_root_seed()?,
+            secret_key_share: self.additive_secret_key_share_bytes()?,
+            exponent,
+            ciphertext_level: 0,
+            evaluation_key_level: 0,
+        };
+        self.bus.publish(
+            ComputeRequest::trbfv(
+                TrBFVRequest::GenerateDistributedGaloisKeyShare(request),
+                CorrelationId::new(),
+                state.e3_id.clone(),
+            ),
+            ec,
+        )?;
+        Ok(())
+    }
+
+    fn start_relin_round1(
+        &mut self,
+        ec: EventContext<Sequenced>,
+        self_addr: Addr<Self>,
+    ) -> Result<()> {
+        let _ = self.ensure_relin_key_round1_collector(self_addr)?;
+        let state = self.state.try_get()?;
+        let request = GenerateDistributedRelinRound1Request {
+            trbfv_config: state.get_trbfv_config(),
+            root_seed: self.eval_key_root_seed()?,
+            secret_key_share: self.additive_secret_key_share_bytes()?,
+            ciphertext_level: 0,
+            key_level: 0,
+        };
+        self.bus.publish(
+            ComputeRequest::trbfv(
+                TrBFVRequest::GenerateDistributedRelinRound1(request),
+                CorrelationId::new(),
+                state.e3_id.clone(),
+            ),
+            ec,
+        )?;
+        Ok(())
+    }
+
+    fn start_relin_round2(
+        &mut self,
+        ec: EventContext<Sequenced>,
+        self_addr: Addr<Self>,
+    ) -> Result<()> {
+        let _ = self.ensure_relin_key_round2_collector(self_addr)?;
+        let state = self.state.try_get()?;
+        let request = GenerateDistributedRelinRound2Request {
+            trbfv_config: state.get_trbfv_config(),
+            secret_key_share: self.additive_secret_key_share_bytes()?,
+            helper: self
+                .relin_round1_helper
+                .clone()
+                .ok_or_else(|| anyhow!("missing relin round1 helper state"))?,
+            round1_aggregate: self
+                .relin_round1_aggregate
+                .clone()
+                .ok_or_else(|| anyhow!("missing relin round1 aggregate"))?,
+        };
+        self.bus.publish(
+            ComputeRequest::trbfv(
+                TrBFVRequest::GenerateDistributedRelinRound2(request),
+                CorrelationId::new(),
+                state.e3_id.clone(),
+            ),
+            ec,
+        )?;
+        Ok(())
+    }
+
     fn handle_committee_member_expelled(
         &mut self,
         data: CommitteeMemberExpelled,
@@ -564,8 +829,218 @@ impl ThresholdKeyshare {
         }
 
         if let Some(ref collector) = self.decryption_key_shared_collector {
-            collector.do_send(ExpelPartyFromDecryptionKeySharedCollection { party_id, ec });
+            collector.do_send(ExpelPartyFromDecryptionKeySharedCollection {
+                party_id,
+                ec: ec.clone(),
+            });
         }
+
+        if let Some(ref collector) = self.galois_key_share_collector {
+            collector.do_send(ExpelPartyFromGaloisKeyShareCollection {
+                party_id,
+                ec: ec.clone(),
+            });
+        }
+
+        if let Some(ref collector) = self.relin_key_round1_collector {
+            collector.do_send(ExpelPartyFromRelinKeyRound1ShareCollection {
+                party_id,
+                ec: ec.clone(),
+            });
+        }
+
+        if let Some(ref collector) = self.relin_key_round2_collector {
+            collector.do_send(ExpelPartyFromRelinKeyRound2ShareCollection { party_id, ec });
+        }
+    }
+
+    fn handle_public_key_aggregated(
+        &mut self,
+        msg: TypedEvent<PublicKeyAggregated>,
+        self_addr: Addr<Self>,
+    ) -> Result<()> {
+        let (msg, ec) = msg.into_components();
+        let pk = ArcBytes::from_bytes(&msg.pubkey);
+        self.state.try_mutate(&ec, |mut s| {
+            s.aggregated_pk = Some(pk);
+            Ok(s)
+        })?;
+
+        self.eval_key_nodes = Some(msg.nodes.clone());
+
+        let root_seed = self
+            .state
+            .try_get()?
+            .committee_seed
+            .ok_or_else(|| anyhow!("missing committee seed for eval-key CRS"))?;
+        let galois_exponents = self.required_galois_exponents()?;
+        let e3_id = self.state.try_get()?.e3_id.clone();
+        let nodes = self
+            .eval_key_nodes
+            .clone()
+            .unwrap_or_else(|| OrderedSet::from(vec![self.state.try_get().unwrap().address.clone()]));
+        let crs_msg = EvalKeyCrsDistributed {
+            e3_id,
+            seed: root_seed,
+            galois_exponents,
+            nodes,
+            ciphertext_level: 0,
+            evaluation_key_level: 0,
+            relin_key_level: 0,
+            crs_binding_hash: [0u8; 32],
+            external: false,
+        };
+        self.bus.publish(crs_msg.clone(), ec.clone())?;
+        self.handle_eval_key_crs_distributed(
+            TypedEvent::new(crs_msg, ec),
+            self_addr,
+        )
+    }
+
+    fn handle_galois_key_share_created(
+        &mut self,
+        msg: TypedEvent<GaloisKeyShareCreated>,
+        self_addr: Addr<Self>,
+    ) -> Result<()> {
+        let (msg, ec) = msg.into_components();
+        let state = self.state.try_get()?;
+        if state.expelled_parties.contains(&msg.party_id) {
+            return Ok(());
+        }
+        if msg.party_id == state.party_id {
+            return Ok(());
+        }
+        let Some(signed_proof) = msg.signed_proof.clone() else {
+            return Ok(());
+        };
+        let exponent = msg.exponent;
+        self.pending_verified_galois_shares
+            .entry(exponent)
+            .or_default()
+            .insert(msg.party_id, msg.clone());
+        self.bus.publish(
+            ShareVerificationDispatched {
+                e3_id: state.e3_id.clone(),
+                kind: VerificationKind::EvalKeyGaloisShareProofs,
+                share_proofs: vec![PartyProofsToVerify {
+                    sender_party_id: msg.party_id,
+                    signed_proofs: vec![signed_proof],
+                }],
+                decryption_proofs: Vec::new(),
+                pre_dishonest: BTreeSet::new(),
+            },
+            ec,
+        )?;
+        Ok(())
+    }
+
+    fn handle_relin_key_share_round1_created(
+        &mut self,
+        msg: TypedEvent<RelinKeyShareRound1Created>,
+        self_addr: Addr<Self>,
+    ) -> Result<()> {
+        let (msg, ec) = msg.into_components();
+        let state = self.state.try_get()?;
+        if state.expelled_parties.contains(&msg.party_id) {
+            return Ok(());
+        }
+        if msg.party_id == state.party_id {
+            return Ok(());
+        }
+        let Some(signed_proof) = msg.signed_proof.clone() else {
+            return Ok(());
+        };
+        self.pending_verified_relin_round1_shares
+            .insert(msg.party_id, msg.clone());
+        self.bus.publish(
+            ShareVerificationDispatched {
+                e3_id: state.e3_id.clone(),
+                kind: VerificationKind::EvalKeyRelinRound1ShareProofs,
+                share_proofs: vec![PartyProofsToVerify {
+                    sender_party_id: msg.party_id,
+                    signed_proofs: vec![signed_proof],
+                }],
+                decryption_proofs: Vec::new(),
+                pre_dishonest: BTreeSet::new(),
+            },
+            ec,
+        )?;
+        Ok(())
+    }
+
+    fn handle_relin_key_share_round2_created(
+        &mut self,
+        msg: TypedEvent<RelinKeyShareRound2Created>,
+        self_addr: Addr<Self>,
+    ) -> Result<()> {
+        let (msg, ec) = msg.into_components();
+        let state = self.state.try_get()?;
+        if state.expelled_parties.contains(&msg.party_id) {
+            return Ok(());
+        }
+        if msg.party_id == state.party_id {
+            return Ok(());
+        }
+        let Some(signed_proof) = msg.signed_proof.clone() else {
+            return Ok(());
+        };
+        self.pending_verified_relin_round2_shares
+            .insert(msg.party_id, msg.clone());
+        self.bus.publish(
+            ShareVerificationDispatched {
+                e3_id: state.e3_id.clone(),
+                kind: VerificationKind::EvalKeyRelinRound2ShareProofs,
+                share_proofs: vec![PartyProofsToVerify {
+                    sender_party_id: msg.party_id,
+                    signed_proofs: vec![signed_proof],
+                }],
+                decryption_proofs: Vec::new(),
+                pre_dishonest: BTreeSet::new(),
+            },
+            ec,
+        )?;
+        Ok(())
+    }
+
+    fn handle_eval_key_share_proof_signed(
+        &mut self,
+        msg: TypedEvent<EvalKeyShareProofSigned>,
+        self_addr: Addr<Self>,
+    ) -> Result<()> {
+        let (msg, ec) = msg.into_components();
+        let state = self.state.try_get()?;
+        if msg.party_id != state.party_id {
+            return Ok(());
+        }
+
+        match msg.kind {
+            EvalKeyShareProofKind::Galois => {
+                let exponent = msg.exponent.ok_or_else(|| anyhow!("missing galois exponent"))?;
+                if let Some(mut event) = self.pending_local_galois_shares.remove(&exponent) {
+                    event.signed_proof = Some(msg.signed_proof);
+                    let collector = self.ensure_galois_key_share_collector(self_addr, exponent)?;
+                    collector.do_send(TypedEvent::new(event.clone(), ec.clone()));
+                    self.bus.publish(event, ec)?;
+                }
+            }
+            EvalKeyShareProofKind::RelinRound1 => {
+                if let Some(mut event) = self.pending_local_relin_round1_share.take() {
+                    event.signed_proof = Some(msg.signed_proof);
+                    let collector = self.ensure_relin_key_round1_collector(self_addr)?;
+                    collector.do_send(TypedEvent::new(event.clone(), ec.clone()));
+                    self.bus.publish(event, ec)?;
+                }
+            }
+            EvalKeyShareProofKind::RelinRound2 => {
+                if let Some(mut event) = self.pending_local_relin_round2_share.take() {
+                    event.signed_proof = Some(msg.signed_proof);
+                    let collector = self.ensure_relin_key_round2_collector(self_addr)?;
+                    collector.do_send(TypedEvent::new(event.clone(), ec.clone()));
+                    self.bus.publish(event, ec)?;
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn handle_threshold_share_created(
@@ -723,7 +1198,28 @@ impl ThresholdKeyshare {
                 TrBFVResponse::CalculateDecryptionShare(_) => {
                     self.handle_calculate_decryption_share_response(msg)
                 }
-                _ => Ok(()),
+                TrBFVResponse::GenerateDistributedGaloisKeyShare(_) => {
+                    self.handle_generate_distributed_galois_key_share_response(msg, self_addr)
+                }
+                TrBFVResponse::AggregateDistributedGaloisKey(_) => {
+                    self.handle_aggregate_distributed_galois_key_response(msg, self_addr)
+                }
+                TrBFVResponse::AggregateDistributedEvaluationKey(_) => {
+                    self.handle_aggregate_distributed_evaluation_key_response(msg, self_addr)
+                }
+                TrBFVResponse::GenerateDistributedRelinRound1(_) => {
+                    self.handle_generate_distributed_relin_round1_response(msg, self_addr)
+                }
+                TrBFVResponse::AggregateDistributedRelinRound1(_) => {
+                    self.handle_aggregate_distributed_relin_round1_response(msg, self_addr)
+                }
+                TrBFVResponse::GenerateDistributedRelinRound2(_) => {
+                    self.handle_generate_distributed_relin_round2_response(msg, self_addr)
+                }
+                TrBFVResponse::AggregateDistributedRelinKey(_) => {
+                    self.handle_aggregate_distributed_relin_key_response(msg)
+                }
+                TrBFVResponse::CalculateThresholdDecryption(_) => Ok(()),
             },
             // ZK responses: proofs and verification are handled by
             // ProofRequestActor and ShareVerificationActor respectively.
@@ -755,7 +1251,8 @@ impl ThresholdKeyshare {
         let state = self.state.try_get()?;
         let e3_id = state.e3_id.clone();
 
-        self.state.try_mutate(&ec, |s| {
+        self.state.try_mutate(&ec, |mut s| {
+            s.committee_seed = Some(msg.seed);
             s.new_state(KeyshareState::CollectingEncryptionKeys(
                 CollectingEncryptionKeysData {
                     sk_bfv: sk_bfv_encrypted.clone(),
@@ -775,6 +1272,21 @@ impl ThresholdKeyshare {
         )?;
 
         Ok(())
+    }
+
+    fn handle_eval_key_crs_distributed(
+        &mut self,
+        msg: TypedEvent<EvalKeyCrsDistributed>,
+        self_addr: Addr<Self>,
+    ) -> Result<()> {
+        let (msg, ec) = msg.into_components();
+        self.eval_key_root_seed = Some(msg.seed);
+        self.pending_galois_exponents = msg.galois_exponents;
+        self.aggregated_galois_keys.clear();
+        self.current_galois_exponent = None;
+        self.relin_round1_helper = None;
+        self.relin_round1_aggregate = None;
+        self.start_next_galois_round(ec, self_addr)
     }
 
     /// 1a. AllEncryptionKeysCollected - All BFV keys received, start share generation
@@ -890,14 +1402,14 @@ impl ThresholdKeyshare {
         // Store proof request data for later use by ProofRequestActor
         let proof_request_data = ProofRequestData {
             pk0_share_raw: output.pk0_share_raw,
-            sk_raw: output.sk_raw,
+            sk_raw: output.sk_raw.clone(),
             eek_raw: output.eek_raw,
         };
 
         self.state.try_mutate(&ec, |s| {
             info!("try_store_pk_share_and_sk_sss");
             let current: GeneratingThresholdShareData = s.clone().try_into()?;
-            s.new_state(KeyshareState::GeneratingThresholdShare(
+            let mut next = s.new_state(KeyshareState::GeneratingThresholdShare(
                 GeneratingThresholdShareData {
                     pk_share: Some(pk_share),
                     sk_sss: Some(sk_sss),
@@ -905,7 +1417,9 @@ impl ThresholdKeyshare {
                     proof_request_data: Some(proof_request_data),
                     ..current
                 },
-            ))
+            ))?;
+            next.additive_bfv_sk_share = Some(output.sk_raw.clone());
+            Ok(next)
         })?;
 
         // Fire gen_esi_sss with the e_sm_raw
@@ -922,6 +1436,297 @@ impl ThresholdKeyshare {
             ))?;
         }
 
+        Ok(())
+    }
+
+    fn handle_generate_distributed_galois_key_share_response(
+        &mut self,
+        res: TypedEvent<ComputeResponse>,
+        self_addr: Addr<Self>,
+    ) -> Result<()> {
+        let (res, ec) = res.into_components();
+        let output = match res.response {
+            ComputeResponseKind::TrBFV(TrBFVResponse::GenerateDistributedGaloisKeyShare(data)) => {
+                data
+            }
+            _ => bail!("unexpected compute response for distributed galois share"),
+        };
+
+        let state = self.state.try_get()?;
+        let share = GaloisKeyShare {
+            c0_share: output.share.c0_share,
+            crs_binding_hash: output.share.audit.crs_binding_hash.bytes,
+            additive_share_commitment_hash: output.share.audit.additive_share_commitment_hash.bytes,
+            share_digest: output.share.audit.galois_share_digest.bytes,
+        };
+        let event = GaloisKeyShareCreated {
+            e3_id: state.e3_id.clone(),
+            party_id: state.party_id,
+            node: state.address.clone(),
+            exponent: output.share.exponent,
+            share: Arc::new(share),
+            signed_proof: None,
+            external: false,
+        };
+        self.pending_local_galois_shares
+            .insert(output.share.exponent, event.clone());
+        self.bus.publish(
+            EvalKeyShareProofPending {
+                e3_id: state.e3_id.clone(),
+                party_id: state.party_id,
+                kind: EvalKeyShareProofPendingKind::Galois,
+                exponent: Some(output.share.exponent),
+                galois_request: Some(EvalKeyGaloisShareProofRequest {
+                    secret_key_share: output.proof_witness.secret_key_share,
+                    substituted_secret_share: output.proof_witness.substituted_secret_share,
+                    transformed_secret_share: output.proof_witness.transformed_secret_share,
+                    c1_share: output.proof_witness.c1_share,
+                    error_share: output.proof_witness.error_share,
+                    component_index: output.proof_witness.component_index,
+                    garner_coefficient_decimal: output.proof_witness.garner_coefficient_decimal,
+                    exponent: output.share.exponent,
+                    ciphertext_level: 0,
+                    evaluation_key_level: 0,
+                    c0_share: event.share.c0_share.clone(),
+                    crs_binding_hash: event.share.crs_binding_hash,
+                    additive_share_commitment_hash: event.share.additive_share_commitment_hash,
+                    share_digest: event.share.share_digest,
+                    params_preset: self.share_enc_preset,
+                }),
+                relin_round1_request: None,
+                relin_round2_request: None,
+            },
+            ec,
+        )?;
+        Ok(())
+    }
+
+    fn handle_aggregate_distributed_galois_key_response(
+        &mut self,
+        res: TypedEvent<ComputeResponse>,
+        self_addr: Addr<Self>,
+    ) -> Result<()> {
+        let (res, ec) = res.into_components();
+        let output = match res.response {
+            ComputeResponseKind::TrBFV(TrBFVResponse::AggregateDistributedGaloisKey(data)) => data,
+            _ => bail!("unexpected compute response for aggregated galois key"),
+        };
+
+        self.galois_key_share_collector = None;
+        self.current_galois_exponent = None;
+        self.pending_galois_exponents.retain(|exp| *exp != output.exponent);
+        self.aggregated_galois_keys.push(GaloisKeyArtifact {
+            exponent: output.exponent,
+            data: output.galois_key,
+            galois_key_digest: output.audit.galois_key_digest.bytes,
+        });
+        self.start_next_galois_round(ec, self_addr)
+    }
+
+    fn handle_aggregate_distributed_evaluation_key_response(
+        &mut self,
+        res: TypedEvent<ComputeResponse>,
+        self_addr: Addr<Self>,
+    ) -> Result<()> {
+        let (res, ec) = res.into_components();
+        let output = match res.response {
+            ComputeResponseKind::TrBFV(TrBFVResponse::AggregateDistributedEvaluationKey(data)) => {
+                data
+            }
+            _ => bail!("unexpected compute response for aggregated evaluation key"),
+        };
+
+        let state = self.state.try_get()?;
+        self.bus.publish(
+            EvaluationKeyCreated {
+                e3_id: state.e3_id.clone(),
+                galois_keys: self.aggregated_galois_keys.clone(),
+                evaluation_key: output.evaluation_key,
+                nodes: self
+                    .eval_key_nodes
+                    .clone()
+                    .unwrap_or_else(|| OrderedSet::from(vec![state.address.clone()])),
+                crs_binding_hash: self
+                    .aggregated_galois_keys
+                    .first()
+                    .map(|artifact| artifact.galois_key_digest)
+                    .unwrap_or([0u8; 32]),
+                evaluation_key_digest: output.audit.evaluation_key_digest.bytes,
+            },
+            ec.clone(),
+        )?;
+        self.start_relin_round1(ec, self_addr)
+    }
+
+    fn handle_generate_distributed_relin_round1_response(
+        &mut self,
+        res: TypedEvent<ComputeResponse>,
+        self_addr: Addr<Self>,
+    ) -> Result<()> {
+        let (res, ec) = res.into_components();
+        let output = match res.response {
+            ComputeResponseKind::TrBFV(TrBFVResponse::GenerateDistributedRelinRound1(data)) => data,
+            _ => bail!("unexpected compute response for relin round1"),
+        };
+
+        self.relin_round1_helper = Some(output.helper.clone());
+        let state = self.state.try_get()?;
+        let event = RelinKeyShareRound1Created {
+            e3_id: state.e3_id.clone(),
+            party_id: state.party_id,
+            node: state.address.clone(),
+            share: Arc::new(RelinKeyShareRound1 {
+                h0: output.share.h0,
+                h1: output.share.h1,
+                crs_binding_hash: output.share.audit.crs_binding_hash.bytes,
+                additive_share_commitment_hash: output.share.audit.additive_share_commitment_hash.bytes,
+                relin_ephemeral_u_commitment_hash: output
+                    .share
+                    .audit
+                    .relin_ephemeral_u_commitment_hash
+                    .bytes,
+                share_digest: output.share.audit.relin_round1_share_digest.bytes,
+            }),
+            signed_proof: None,
+            external: false,
+        };
+        self.pending_local_relin_round1_share = Some(event.clone());
+        self.bus.publish(
+            EvalKeyShareProofPending {
+                e3_id: state.e3_id.clone(),
+                party_id: state.party_id,
+                kind: EvalKeyShareProofPendingKind::RelinRound1,
+                exponent: None,
+                galois_request: None,
+                relin_round1_request: Some(EvalKeyRelinRound1ShareProofRequest {
+                    secret_key_share: output.proof_witness.secret_key_share,
+                    ephemeral_u_share: output.proof_witness.ephemeral_u_share,
+                    ciphertext_level: 0,
+                    key_level: 0,
+                    h0: event.share.h0.clone(),
+                    h1: event.share.h1.clone(),
+                    crs_binding_hash: event.share.crs_binding_hash,
+                    additive_share_commitment_hash: event.share.additive_share_commitment_hash,
+                    relin_ephemeral_u_commitment_hash: event
+                        .share
+                        .relin_ephemeral_u_commitment_hash,
+                    share_digest: event.share.share_digest,
+                    params_preset: self.share_enc_preset,
+                }),
+                relin_round2_request: None,
+            },
+            ec,
+        )?;
+        Ok(())
+    }
+
+    fn handle_aggregate_distributed_relin_round1_response(
+        &mut self,
+        res: TypedEvent<ComputeResponse>,
+        self_addr: Addr<Self>,
+    ) -> Result<()> {
+        let (res, ec) = res.into_components();
+        let output = match res.response {
+            ComputeResponseKind::TrBFV(TrBFVResponse::AggregateDistributedRelinRound1(data)) => {
+                data
+            }
+            _ => bail!("unexpected compute response for aggregated relin round1"),
+        };
+
+        self.relin_key_round1_collector = None;
+        self.relin_round1_aggregate = Some(output.aggregate);
+        self.start_relin_round2(ec, self_addr)
+    }
+
+    fn handle_generate_distributed_relin_round2_response(
+        &mut self,
+        res: TypedEvent<ComputeResponse>,
+        self_addr: Addr<Self>,
+    ) -> Result<()> {
+        let (res, ec) = res.into_components();
+        let output = match res.response {
+            ComputeResponseKind::TrBFV(TrBFVResponse::GenerateDistributedRelinRound2(data)) => data,
+            _ => bail!("unexpected compute response for relin round2"),
+        };
+
+        let state = self.state.try_get()?;
+        let event = RelinKeyShareRound2Created {
+            e3_id: state.e3_id.clone(),
+            party_id: state.party_id,
+            node: state.address.clone(),
+            share: Arc::new(RelinKeyShareRound2 {
+                r0: output.share.h0,
+                r1: output.share.h1,
+                crs_binding_hash: output.share.audit.crs_binding_hash.bytes,
+                additive_share_commitment_hash: output.share.audit.additive_share_commitment_hash.bytes,
+                relin_ephemeral_u_commitment_hash: output
+                    .share
+                    .audit
+                    .relin_ephemeral_u_commitment_hash
+                    .bytes,
+                round1_aggregate_digest: output.share.audit.round1_aggregate_digest.bytes,
+                share_digest: output.share.audit.relin_round2_share_digest.bytes,
+            }),
+            signed_proof: None,
+            external: false,
+        };
+        self.pending_local_relin_round2_share = Some(event.clone());
+        self.bus.publish(
+            EvalKeyShareProofPending {
+                e3_id: state.e3_id.clone(),
+                party_id: state.party_id,
+                kind: EvalKeyShareProofPendingKind::RelinRound2,
+                exponent: None,
+                galois_request: None,
+                relin_round1_request: None,
+                relin_round2_request: Some(EvalKeyRelinRound2ShareProofRequest {
+                    secret_key_share: output.proof_witness.secret_key_share,
+                    ephemeral_u_share: output.proof_witness.ephemeral_u_share,
+                    ciphertext_level: 0,
+                    key_level: 0,
+                    h0: event.share.r0.clone(),
+                    h1: event.share.r1.clone(),
+                    crs_binding_hash: event.share.crs_binding_hash,
+                    additive_share_commitment_hash: event.share.additive_share_commitment_hash,
+                    relin_ephemeral_u_commitment_hash: event
+                        .share
+                        .relin_ephemeral_u_commitment_hash,
+                    round1_aggregate_digest: event.share.round1_aggregate_digest,
+                    share_digest: event.share.share_digest,
+                    params_preset: self.share_enc_preset,
+                }),
+            },
+            ec,
+        )?;
+        Ok(())
+    }
+
+    fn handle_aggregate_distributed_relin_key_response(
+        &mut self,
+        res: TypedEvent<ComputeResponse>,
+    ) -> Result<()> {
+        let (res, ec) = res.into_components();
+        let output = match res.response {
+            ComputeResponseKind::TrBFV(TrBFVResponse::AggregateDistributedRelinKey(data)) => data,
+            _ => bail!("unexpected compute response for aggregated relin key"),
+        };
+
+        self.relin_key_round2_collector = None;
+        let state = self.state.try_get()?;
+        self.bus.publish(
+            RelinearizationKeyCreated {
+                e3_id: state.e3_id.clone(),
+                relin_key: output.relinearization_key,
+                nodes: self
+                    .eval_key_nodes
+                    .clone()
+                    .unwrap_or_else(|| OrderedSet::from(vec![state.address.clone()])),
+                crs_binding_hash: output.audit.crs_binding_hash.bytes,
+                round1_aggregate_digest: output.audit.relin_round1_aggregate_digest.bytes,
+                relin_key_digest: output.audit.relinearization_key_digest.bytes,
+            },
+            ec,
+        )?;
         Ok(())
     }
 
@@ -1392,6 +2197,7 @@ impl ThresholdKeyshare {
     pub fn handle_share_verification_complete(
         &mut self,
         msg: TypedEvent<ShareVerificationComplete>,
+        self_addr: Addr<Self>,
     ) -> Result<()> {
         let (msg, ec) = msg.into_components();
         let state = self.state.try_get()?;
@@ -1488,6 +2294,53 @@ impl ThresholdKeyshare {
                 }
 
                 self.publish_keyshare_created(ec)
+            }
+            VerificationKind::EvalKeyGaloisShareProofs => {
+                let exponent = self
+                    .current_galois_exponent
+                    .ok_or_else(|| anyhow!("missing current galois exponent"))?;
+                let collector = self.ensure_galois_key_share_collector(self_addr, exponent)?;
+                let shares = self.pending_verified_galois_shares.entry(exponent).or_default();
+                for party_id in &msg.dishonest_parties {
+                    shares.remove(party_id);
+                }
+                for share in shares.values().cloned().collect::<Vec<_>>() {
+                    collector.do_send(TypedEvent::new(share, ec.clone()));
+                }
+                shares.clear();
+                Ok(())
+            }
+            VerificationKind::EvalKeyRelinRound1ShareProofs => {
+                let collector = self.ensure_relin_key_round1_collector(self_addr)?;
+                for party_id in &msg.dishonest_parties {
+                    self.pending_verified_relin_round1_shares.remove(party_id);
+                }
+                for share in self
+                    .pending_verified_relin_round1_shares
+                    .values()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                {
+                    collector.do_send(TypedEvent::new(share, ec.clone()));
+                }
+                self.pending_verified_relin_round1_shares.clear();
+                Ok(())
+            }
+            VerificationKind::EvalKeyRelinRound2ShareProofs => {
+                let collector = self.ensure_relin_key_round2_collector(self_addr)?;
+                for party_id in &msg.dishonest_parties {
+                    self.pending_verified_relin_round2_shares.remove(party_id);
+                }
+                for share in self
+                    .pending_verified_relin_round2_shares
+                    .values()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                {
+                    collector.do_send(TypedEvent::new(share, ec.clone()));
+                }
+                self.pending_verified_relin_round2_shares.clear();
+                Ok(())
             }
             _ => Ok(()),
         }
@@ -2198,11 +3051,19 @@ impl Handler<EnclaveEvent> for ThresholdKeyshare {
                 self.notify_sync(ctx, TypedEvent::new(data, ec))
             }
             EnclaveEventData::PublicKeyAggregated(data) => {
-                let pk = ArcBytes::from_bytes(&data.pubkey);
-                let _ = self.state.try_mutate(&ec, |mut s| {
-                    s.aggregated_pk = Some(pk);
-                    Ok(s)
-                });
+                let _ = self.handle_public_key_aggregated(TypedEvent::new(data, ec), ctx.address());
+            }
+            EnclaveEventData::EvalKeyCrsDistributed(data) => {
+                let _ = self.handle_eval_key_crs_distributed(TypedEvent::new(data, ec), ctx.address());
+            }
+            EnclaveEventData::GaloisKeyShareCreated(data) => {
+                let _ = self.handle_galois_key_share_created(TypedEvent::new(data, ec), ctx.address());
+            }
+            EnclaveEventData::RelinKeyShareRound1Created(data) => {
+                let _ = self.handle_relin_key_share_round1_created(TypedEvent::new(data, ec), ctx.address());
+            }
+            EnclaveEventData::RelinKeyShareRound2Created(data) => {
+                let _ = self.handle_relin_key_share_round2_created(TypedEvent::new(data, ec), ctx.address());
             }
             EnclaveEventData::ThresholdShareCreated(data) => {
                 let _ =
@@ -2217,6 +3078,9 @@ impl Handler<EnclaveEvent> for ThresholdKeyshare {
             }
             EnclaveEventData::DkgProofSigned(data) => {
                 let _ = self.handle_share_computation_proof_signed(TypedEvent::new(data, ec));
+            }
+            EnclaveEventData::EvalKeyShareProofSigned(data) => {
+                let _ = self.handle_eval_key_share_proof_signed(TypedEvent::new(data, ec), ctx.address());
             }
             EnclaveEventData::E3RequestComplete(data) => self.notify_sync(ctx, data),
             EnclaveEventData::E3Failed(data) => {
@@ -2390,12 +3254,12 @@ impl Handler<TypedEvent<ShareVerificationComplete>> for ThresholdKeyshare {
     fn handle(
         &mut self,
         msg: TypedEvent<ShareVerificationComplete>,
-        _: &mut Self::Context,
+        ctx: &mut Self::Context,
     ) -> Self::Result {
         trap(
             EType::KeyGeneration,
             &self.bus.with_ec(msg.get_ctx()),
-            || self.handle_share_verification_complete(msg),
+            || self.handle_share_verification_complete(msg, ctx.address()),
         )
     }
 }
@@ -2533,6 +3397,197 @@ impl Handler<DecryptionKeySharedCollectionFailed> for ThresholdKeyshare {
     }
 }
 
+impl Handler<TypedEvent<AllGaloisKeySharesCollected>> for ThresholdKeyshare {
+    type Result = ();
+    fn handle(
+        &mut self,
+        msg: TypedEvent<AllGaloisKeySharesCollected>,
+        _ctx: &mut Self::Context,
+    ) -> Self::Result {
+        trap(
+            EType::KeyGeneration,
+            &self.bus.with_ec(msg.get_ctx()),
+            || {
+                let (msg, ec) = msg.into_components();
+                let state = self.state.try_get()?;
+                let request = AggregateDistributedGaloisKeyRequest {
+                    trbfv_config: state.get_trbfv_config(),
+                    root_seed: self.eval_key_root_seed()?,
+                    exponent: msg.exponent,
+                    ciphertext_level: 0,
+                    evaluation_key_level: 0,
+                    shares: msg
+                        .shares
+                        .into_iter()
+                        .map(|share| DistributedGaloisKeyShare {
+                            exponent: share.exponent,
+                            ciphertext_level: 0,
+                            evaluation_key_level: 0,
+                            c0_share: share.share.c0_share.clone(),
+                            audit: e3_trbfv::distributed_eval_key::DistributedGaloisKeyShareAuditV1 {
+                                crs_binding_hash: e3_trbfv::distributed_eval_key::DistributedEvalKeyAuditHash::new(share.share.crs_binding_hash),
+                                additive_share_commitment_hash: e3_trbfv::distributed_eval_key::DistributedEvalKeyAuditHash::new(share.share.additive_share_commitment_hash),
+                                galois_share_digest: e3_trbfv::distributed_eval_key::DistributedEvalKeyAuditHash::new(share.share.share_digest),
+                            },
+                        })
+                        .collect(),
+                };
+                self.bus.publish(
+                    ComputeRequest::trbfv(
+                        TrBFVRequest::AggregateDistributedGaloisKey(request),
+                        CorrelationId::new(),
+                        state.e3_id.clone(),
+                    ),
+                    ec,
+                )
+            },
+        )
+    }
+}
+
+impl Handler<GaloisKeyShareCollectionFailed> for ThresholdKeyshare {
+    type Result = ();
+    fn handle(
+        &mut self,
+        msg: GaloisKeyShareCollectionFailed,
+        _ctx: &mut Self::Context,
+    ) -> Self::Result {
+        warn!(
+            e3_id = %msg.e3_id,
+            exponent = msg.exponent,
+            reason = %msg.reason,
+            "Galois key share collection failed"
+        );
+    }
+}
+
+impl Handler<TypedEvent<AllRelinKeyRound1SharesCollected>> for ThresholdKeyshare {
+    type Result = ();
+    fn handle(
+        &mut self,
+        msg: TypedEvent<AllRelinKeyRound1SharesCollected>,
+        _ctx: &mut Self::Context,
+    ) -> Self::Result {
+        trap(
+            EType::KeyGeneration,
+            &self.bus.with_ec(msg.get_ctx()),
+            || {
+                let (msg, ec) = msg.into_components();
+                let state = self.state.try_get()?;
+                let request = AggregateDistributedRelinRound1Request {
+                    trbfv_config: state.get_trbfv_config(),
+                    ciphertext_level: 0,
+                    key_level: 0,
+                    shares: msg
+                        .shares
+                        .into_iter()
+                        .map(|share| DistributedRelinRound1Share {
+                            ciphertext_level: 0,
+                            key_level: 0,
+                            h0: share.share.h0.clone(),
+                            h1: share.share.h1.clone(),
+                            audit: e3_trbfv::distributed_eval_key::DistributedRelinRound1ShareAuditV1 {
+                                crs_binding_hash: e3_trbfv::distributed_eval_key::DistributedEvalKeyAuditHash::new(share.share.crs_binding_hash),
+                                additive_share_commitment_hash: e3_trbfv::distributed_eval_key::DistributedEvalKeyAuditHash::new(share.share.additive_share_commitment_hash),
+                                relin_ephemeral_u_commitment_hash: e3_trbfv::distributed_eval_key::DistributedEvalKeyAuditHash::new(share.share.relin_ephemeral_u_commitment_hash),
+                                relin_round1_share_digest: e3_trbfv::distributed_eval_key::DistributedEvalKeyAuditHash::new(share.share.share_digest),
+                            },
+                        })
+                        .collect(),
+                };
+                self.bus.publish(
+                    ComputeRequest::trbfv(
+                        TrBFVRequest::AggregateDistributedRelinRound1(request),
+                        CorrelationId::new(),
+                        state.e3_id.clone(),
+                    ),
+                    ec,
+                )
+            },
+        )
+    }
+}
+
+impl Handler<RelinKeyRound1ShareCollectionFailed> for ThresholdKeyshare {
+    type Result = ();
+    fn handle(
+        &mut self,
+        msg: RelinKeyRound1ShareCollectionFailed,
+        _ctx: &mut Self::Context,
+    ) -> Self::Result {
+        warn!(
+            e3_id = %msg.e3_id,
+            reason = %msg.reason,
+            "Relin round1 share collection failed"
+        );
+    }
+}
+
+impl Handler<TypedEvent<AllRelinKeyRound2SharesCollected>> for ThresholdKeyshare {
+    type Result = ();
+    fn handle(
+        &mut self,
+        msg: TypedEvent<AllRelinKeyRound2SharesCollected>,
+        _ctx: &mut Self::Context,
+    ) -> Self::Result {
+        trap(
+            EType::KeyGeneration,
+            &self.bus.with_ec(msg.get_ctx()),
+            || {
+                let (msg, ec) = msg.into_components();
+                let state = self.state.try_get()?;
+                let request = AggregateDistributedRelinKeyRequest {
+                    trbfv_config: state.get_trbfv_config(),
+                    round1_aggregate: self
+                        .relin_round1_aggregate
+                        .clone()
+                        .ok_or_else(|| anyhow!("missing relin round1 aggregate"))?,
+                    shares: msg
+                        .shares
+                        .into_iter()
+                        .map(|share| DistributedRelinRound2Share {
+                            ciphertext_level: 0,
+                            key_level: 0,
+                            h0: share.share.r0.clone(),
+                            h1: share.share.r1.clone(),
+                            audit: e3_trbfv::distributed_eval_key::DistributedRelinRound2ShareAuditV1 {
+                                crs_binding_hash: e3_trbfv::distributed_eval_key::DistributedEvalKeyAuditHash::new(share.share.crs_binding_hash),
+                                additive_share_commitment_hash: e3_trbfv::distributed_eval_key::DistributedEvalKeyAuditHash::new(share.share.additive_share_commitment_hash),
+                                relin_ephemeral_u_commitment_hash: e3_trbfv::distributed_eval_key::DistributedEvalKeyAuditHash::new(share.share.relin_ephemeral_u_commitment_hash),
+                                round1_aggregate_digest: e3_trbfv::distributed_eval_key::DistributedEvalKeyAuditHash::new(share.share.round1_aggregate_digest),
+                                relin_round2_share_digest: e3_trbfv::distributed_eval_key::DistributedEvalKeyAuditHash::new(share.share.share_digest),
+                            },
+                        })
+                        .collect(),
+                };
+                self.bus.publish(
+                    ComputeRequest::trbfv(
+                        TrBFVRequest::AggregateDistributedRelinKey(request),
+                        CorrelationId::new(),
+                        state.e3_id.clone(),
+                    ),
+                    ec,
+                )
+            },
+        )
+    }
+}
+
+impl Handler<RelinKeyRound2ShareCollectionFailed> for ThresholdKeyshare {
+    type Result = ();
+    fn handle(
+        &mut self,
+        msg: RelinKeyRound2ShareCollectionFailed,
+        _ctx: &mut Self::Context,
+    ) -> Self::Result {
+        warn!(
+            e3_id = %msg.e3_id,
+            reason = %msg.reason,
+            "Relin round2 share collection failed"
+        );
+    }
+}
+
 impl Handler<E3RequestComplete> for ThresholdKeyshare {
     type Result = ();
     fn handle(&mut self, _: E3RequestComplete, ctx: &mut Self::Context) -> Self::Result {
@@ -2551,5 +3606,58 @@ impl Handler<Die> for ThresholdKeyshare {
     fn handle(&mut self, _: Die, ctx: &mut Self::Context) -> Self::Result {
         warn!("ThresholdKeyshare is shutting down");
         ctx.stop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use e3_crypto::Cipher;
+    use e3_events::Seed;
+
+    #[tokio::test]
+    async fn persists_additive_bfv_secret_share_across_state_transitions() -> Result<()> {
+        let cipher = Cipher::from_password("keyshare-test-password").await?;
+        let additive_bfv_sk_share = SensitiveBytes::new(b"additive-secret-share".to_vec(), &cipher)?;
+
+        let state = ThresholdKeyshareState {
+            e3_id: E3id::new("1", 1),
+            address: "node-1".to_owned(),
+            party_id: 0,
+            state: KeyshareState::Init,
+            threshold_m: 1,
+            threshold_n: 3,
+            params: ArcBytes::from_bytes(b"params"),
+            additive_bfv_sk_share: Some(additive_bfv_sk_share.clone()),
+            committee_seed: None,
+            aggregated_pk: None,
+            expelled_parties: HashSet::new(),
+            honest_parties: None,
+            proof_aggregation_enabled: true,
+        };
+
+        let next = state.new_state(KeyshareState::CollectingEncryptionKeys(
+            CollectingEncryptionKeysData {
+                sk_bfv: SensitiveBytes::new(b"sk-bfv".to_vec(), &cipher)?,
+                pk_bfv: ArcBytes::from_bytes(b"pk-bfv"),
+                ciphernode_selected: CiphernodeSelected {
+                    e3_id: E3id::new("1", 1),
+                    threshold_m: 1,
+                    threshold_n: 3,
+                    seed: Seed([0u8; 32]),
+                    error_size: ArcBytes::from_bytes(b"error-size"),
+                    esi_per_ct: 1,
+                    params: ArcBytes::from_bytes(b"params"),
+                    party_id: 0,
+                },
+            },
+        ))?;
+
+        let persisted_share = next
+            .additive_bfv_sk_share
+            .expect("additive BFV share should remain persisted");
+        assert_eq!(persisted_share.access(&cipher)?.as_slice(), b"additive-secret-share");
+
+        Ok(())
     }
 }

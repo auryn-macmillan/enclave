@@ -79,6 +79,27 @@ impl ToString for ComputeRequest {
                 e3_trbfv::TrBFVRequest::CalculateThresholdDecryption(_) => {
                     "CalculateThresholdDecryption"
                 }
+                e3_trbfv::TrBFVRequest::GenerateDistributedGaloisKeyShare(_) => {
+                    "GenerateDistributedGaloisKeyShare"
+                }
+                e3_trbfv::TrBFVRequest::AggregateDistributedGaloisKey(_) => {
+                    "AggregateDistributedGaloisKey"
+                }
+                e3_trbfv::TrBFVRequest::AggregateDistributedEvaluationKey(_) => {
+                    "AggregateDistributedEvaluationKey"
+                }
+                e3_trbfv::TrBFVRequest::GenerateDistributedRelinRound1(_) => {
+                    "GenerateDistributedRelinRound1"
+                }
+                e3_trbfv::TrBFVRequest::AggregateDistributedRelinRound1(_) => {
+                    "AggregateDistributedRelinRound1"
+                }
+                e3_trbfv::TrBFVRequest::GenerateDistributedRelinRound2(_) => {
+                    "GenerateDistributedRelinRound2"
+                }
+                e3_trbfv::TrBFVRequest::AggregateDistributedRelinKey(_) => {
+                    "AggregateDistributedRelinKey"
+                }
             },
             ComputeRequestKind::Zk(req) => match req {
                 ZkRequest::PkBfv(_) => "ZkPkBfv",
@@ -91,6 +112,9 @@ impl ToString for ComputeRequest {
                 ZkRequest::PkAggregation(_) => "ZkPkAggregation",
                 ZkRequest::ThresholdShareDecryption(_) => "ZkThresholdShareDecryption",
                 ZkRequest::DecryptedSharesAggregation(_) => "ZkDecryptedSharesAggregation",
+                ZkRequest::EvalKeyGaloisShare(_) => "ZkEvalKeyGaloisShare",
+                ZkRequest::EvalKeyRelinRound1Share(_) => "ZkEvalKeyRelinRound1Share",
+                ZkRequest::EvalKeyRelinRound2Share(_) => "ZkEvalKeyRelinRound2Share",
                 ZkRequest::FoldProofs { .. } => "ZkFoldProofs",
             },
         }

@@ -101,6 +101,9 @@ pub enum CircuitName {
     ThresholdShareDecryption,
     /// Decrypted shares aggregation proof (C7).
     DecryptedSharesAggregation,
+    EvalKeyGaloisShare,
+    EvalKeyRelinRound1Share,
+    EvalKeyRelinRound2Share,
     /// Recursive aggregation fold circuit (independent; lives at recursive_aggregation/fold).
     Fold,
 }
@@ -120,6 +123,9 @@ impl CircuitName {
             CircuitName::PkAggregation => "pk_aggregation",
             CircuitName::ThresholdShareDecryption => "share_decryption",
             CircuitName::DecryptedSharesAggregation => "decrypted_shares_aggregation",
+            CircuitName::EvalKeyGaloisShare => "eval_key_galois_share",
+            CircuitName::EvalKeyRelinRound1Share => "eval_key_relin_round1_share",
+            CircuitName::EvalKeyRelinRound2Share => "eval_key_relin_round2_share",
             CircuitName::Fold => "fold",
         }
     }
@@ -138,6 +144,9 @@ impl CircuitName {
             CircuitName::ThresholdShareDecryption => "threshold",
             CircuitName::PkAggregation => "threshold",
             CircuitName::DecryptedSharesAggregation => "threshold",
+            CircuitName::EvalKeyGaloisShare => "threshold",
+            CircuitName::EvalKeyRelinRound1Share => "threshold",
+            CircuitName::EvalKeyRelinRound2Share => "threshold",
             CircuitName::Fold => "recursive_aggregation",
         }
     }

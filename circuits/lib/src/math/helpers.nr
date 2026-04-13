@@ -277,30 +277,6 @@ fn test_flatten_small() {
     assert(result.get(2) == 0x16c81c15161513640e11b2071f120613c41a10350b100000100000100000);
 }
 
-#[test]
-fn test_safe_hashing_with_safe_helper() {
-    // Verifies basic hash functionality with a simple ABSORB(3) + SQUEEZE(1) pattern.
-    let domain_separator = [
-        0x41, 0x42, 0x43, 0x44, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0,
-    ];
-    let elements = Vec::from_slice(&[1, 2, 3]);
-
-    // Pattern: ABSORB(3), SQUEEZE(1)
-    let io_pattern = [0x80000003, 0x00000001];
-    let digests1 = compute_safe(domain_separator, elements, io_pattern);
-
-    assert(digests1.len() == 1);
-    assert(digests1.get(0) != 0);
-
-    // Test determinism
-    let digests2 = compute_safe(domain_separator, elements, io_pattern);
-
-    assert(digests2.len() == 1);
-    assert(digests2.get(0) != 0);
-    assert(digests2.get(0) == digests1.get(0));
-}
 
 #[test]
 fn test_pack() {

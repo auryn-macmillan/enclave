@@ -65,16 +65,13 @@
 //!
 //! ## Production Considerations
 //!
-//! **Eval key shortcut.**  The rotation reduce-tree requires a Galois
-//! (evaluation) key, and relinearization after the ct × ct multiply
-//! requires a relinearization key.  The `fhe` library can only build
-//! these from a full secret key — no multiparty key generation protocol
-//! exists in the library.  This demo reconstructs the full secret key
-//! *temporarily* to build both keys, then immediately discards it.  DKG
-//! and threshold decryption remain fully distributed.  A production
-//! system would need an MPC protocol for these keys (e.g. the approach
-//! in Mouchet et al., "Multiparty Homomorphic Encryption from
-//! Ring-Learning-with-Errors").
+//! **Distributed eval keys.**  The rotation reduce-tree requires Galois
+//! (evaluation) keys, and relinearization after the ct × ct multiply
+//! requires a relinearization key.  This example now generates both via a
+//! distributed MPC flow over the committee's additive BFV secret shares,
+//! so the joint secret key is never reconstructed.  The implementation
+//! follows the repo design in `EVAL_KEY_MPC_DESIGN.md` and the underlying
+//! `trbfv::distributed_eval_key` helpers.
 //!
 //! **Smudging noise.**  Each BFV decryption leaks a small amount of
 //! information about the secret key through the noise term.  Each
@@ -82,17 +79,34 @@
 //! that statistically drowns the key-dependent component — generated
 //! via [`TRBFV::generate_smudging_error`].
 
+use e3_fhe_params::encode_bfv_params;
+use e3_trbfv::{
+    distributed_eval_key::{
+        aggregate_distributed_evaluation_key, aggregate_distributed_galois_key,
+        aggregate_distributed_relin_key, aggregate_distributed_relin_round1,
+        deserialize_evaluation_key, deserialize_relinearization_key,
+        generate_distributed_galois_key_share, generate_distributed_relin_round1,
+        generate_distributed_relin_round2, serialize_secret_key_share,
+        AggregateDistributedEvaluationKeyRequest, AggregateDistributedGaloisKeyRequest,
+        AggregateDistributedRelinKeyRequest, AggregateDistributedRelinRound1Request,
+        EvalKeyRootSeed, GenerateDistributedGaloisKeyShareRequest,
+        GenerateDistributedRelinRound1Request, GenerateDistributedRelinRound2Request,
+    },
+    TrBFVConfig,
+};
+use e3_utils::ArcBytes;
 use fhe::bfv::{
-    BfvParameters, BfvParametersBuilder, Ciphertext, Encoding, EvaluationKey, EvaluationKeyBuilder,
-    Plaintext, PublicKey, RelinearizationKey, SecretKey,
+    BfvParameters, BfvParametersBuilder, Ciphertext, Encoding, EvaluationKey, Plaintext, PublicKey,
+    RelinearizationKey, SecretKey,
 };
 use fhe::mbfv::{Aggregate, CommonRandomPoly, PublicKeyShare};
 use fhe::trbfv::{ShareManager, TRBFV};
-use fhe_math::rq::{traits::TryConvertFrom, Poly, Representation};
+use fhe_math::rq::Poly;
 use fhe_traits::{FheDecoder, FheEncoder, FheEncrypter};
 use ndarray::Array2;
 use num_bigint::BigInt;
 use rand::rngs::OsRng;
+use rand::RngCore;
 use std::sync::Arc;
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -138,6 +152,17 @@ pub fn build_params() -> Arc<BfvParameters> {
 /// it randomly.
 pub fn generate_crp(params: &Arc<BfvParameters>) -> CommonRandomPoly {
     CommonRandomPoly::new(params, &mut OsRng).expect("CRP generation")
+}
+
+/// Generate the shared root seed used to derive distributed eval-key CRS data.
+///
+/// In production this would be distributed as an explicit protocol step after
+/// DKG.  Here we sample it locally once and pass it to every committee member
+/// to simulate that broadcast.
+pub fn generate_eval_key_root_seed() -> EvalKeyRootSeed {
+    let mut root_seed_bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut root_seed_bytes);
+    EvalKeyRootSeed::new(root_seed_bytes)
 }
 
 /// One committee member's keygen output: a secret key share, its public key
@@ -219,73 +244,156 @@ pub fn aggregate_sk_shares_for_party(
         .expect("share aggregation")
 }
 
-// ── Eval Key (Option C — reconstruct full SK temporarily) ────────────────────
-
-/// Build an evaluation key and relinearization key by temporarily
-/// reconstructing the full secret key from all committee members' raw
-/// secret keys.
-///
-/// **This is a demo shortcut.**  The full secret key is summed, used to
-/// build both keys, and immediately dropped.  In production, an MPC
-/// Galois key generation protocol would be used instead.
-///
-/// The all-slot sum needs column rotations by every power of two from 1
-/// up to `SLOTS / 2` (exclusive), plus a **row rotation** (row swap) to
-/// combine both row halves.  With `SLOTS = 2048` that means column shifts
-/// of 1, 2, 4, 8, …, 512 plus one row swap — eleven rotations per
-/// bitplane.
 pub fn build_eval_key_from_committee(
     member_sks: &[&SecretKey],
     params: &Arc<BfvParameters>,
+    root_seed: &EvalKeyRootSeed,
 ) -> (EvaluationKey, RelinearizationKey) {
-    // Sum all secret key polynomials to reconstruct the joint secret key.
-    // The joint SK = Σ sk_i, matching the aggregated public key PK = Σ pk_i.
-    let ctx = params.ctx_at_level(0).expect("context at level 0");
+    let trbfv_config = TrBFVConfig::new(
+        ArcBytes::from_bytes(&encode_bfv_params(params)),
+        member_sks.len() as u64,
+        THRESHOLD as u64,
+    );
 
-    let mut combined = Poly::zero(ctx, Representation::PowerBasis);
-    for sk in member_sks {
-        let sk_poly =
-            Poly::try_convert_from(sk.coeffs.as_ref(), ctx, false, Representation::PowerBasis)
-                .expect("sk → poly");
-        combined = &combined + &sk_poly;
+    let mut rng = OsRng;
+
+    let modulus = (params.degree() * 2) as u64;
+    let mut galois_exponents = Vec::new();
+    let mut shift = 1usize;
+    while shift < SLOTS / 2 {
+        galois_exponents.push(mod_pow_u64(3, shift as u64, modulus));
+        shift *= 2;
+    }
+    galois_exponents.push((params.degree() * 2 - 1) as u64);
+
+    let secret_key_shares: Vec<_> = member_sks
+        .iter()
+        .map(|sk| serialize_secret_key_share(sk).expect("serialize secret key share"))
+        .collect();
+
+    let mut galois_keys = Vec::new();
+    for exponent in galois_exponents {
+        let shares = secret_key_shares
+            .iter()
+            .map(|secret_key_share| {
+                generate_distributed_galois_key_share(
+                    &mut rng,
+                    GenerateDistributedGaloisKeyShareRequest {
+                        trbfv_config: trbfv_config.clone(),
+                        root_seed: root_seed.clone(),
+                        secret_key_share: secret_key_share.clone(),
+                        exponent,
+                        ciphertext_level: 0,
+                        evaluation_key_level: 0,
+                    },
+                )
+                .expect("generate distributed galois share")
+                .share
+            })
+            .collect();
+
+        let galois_key = aggregate_distributed_galois_key(AggregateDistributedGaloisKeyRequest {
+            trbfv_config: trbfv_config.clone(),
+            root_seed: root_seed.clone(),
+            exponent,
+            ciphertext_level: 0,
+            evaluation_key_level: 0,
+            shares,
+        })
+        .expect("aggregate distributed galois key")
+        .galois_key;
+        galois_keys.push(galois_key);
     }
 
-    // Reconstruct a SecretKey from the combined polynomial's coefficients.
-    let combined_coeffs = combined.coefficients();
-    // The coefficients matrix is [n_moduli × degree]; we need just the
-    // first modulus row as i64 values for SecretKey construction.
-    let row = combined_coeffs.row(0);
-    let degree = params.degree();
-    let modulus = params.moduli()[0];
-    let coeffs_i64: Box<[i64]> = row
+    let eval_key = deserialize_evaluation_key(
+        &aggregate_distributed_evaluation_key(AggregateDistributedEvaluationKeyRequest {
+            trbfv_config: trbfv_config.clone(),
+            ciphertext_level: 0,
+            evaluation_key_level: 0,
+            galois_keys,
+        })
+        .expect("aggregate distributed evaluation key")
+        .evaluation_key,
+        params,
+    )
+    .expect("deserialize evaluation key");
+
+    let round1_outputs: Vec<_> = secret_key_shares
         .iter()
-        .take(degree)
-        .map(|&v| {
-            // Map unsigned residue back to centered representation.
-            if v > modulus / 2 {
-                v as i64 - modulus as i64
-            } else {
-                v as i64
-            }
+        .map(|secret_key_share| {
+            generate_distributed_relin_round1(
+                &mut rng,
+                GenerateDistributedRelinRound1Request {
+                    trbfv_config: trbfv_config.clone(),
+                    root_seed: root_seed.clone(),
+                    secret_key_share: secret_key_share.clone(),
+                    ciphertext_level: 0,
+                    key_level: 0,
+                },
+            )
+            .expect("generate distributed relin round1")
+        })
+        .collect::<Vec<_>>();
+
+    let round1_aggregate =
+        aggregate_distributed_relin_round1(AggregateDistributedRelinRound1Request {
+            trbfv_config: trbfv_config.clone(),
+            ciphertext_level: 0,
+            key_level: 0,
+            shares: round1_outputs
+                .iter()
+                .map(|output| output.share.clone())
+                .collect(),
+        })
+        .expect("aggregate distributed relin round1")
+        .aggregate;
+
+    let round2_shares = secret_key_shares
+        .iter()
+        .zip(round1_outputs.iter())
+        .map(|(secret_key_share, round1_output)| {
+            generate_distributed_relin_round2(
+                &mut rng,
+                GenerateDistributedRelinRound2Request {
+                    trbfv_config: trbfv_config.clone(),
+                    secret_key_share: secret_key_share.clone(),
+                    helper: round1_output.helper.clone(),
+                    round1_aggregate: round1_aggregate.clone(),
+                },
+            )
+            .expect("generate distributed relin round2")
+            .share
         })
         .collect();
 
-    let combined_sk = SecretKey::new(coeffs_i64.into_vec(), params);
+    let relin_key = deserialize_relinearization_key(
+        &aggregate_distributed_relin_key(AggregateDistributedRelinKeyRequest {
+            trbfv_config,
+            round1_aggregate,
+            shares: round2_shares,
+        })
+        .expect("aggregate distributed relin key")
+        .relinearization_key,
+        params,
+    )
+    .expect("deserialize relin key");
 
-    let mut builder = EvaluationKeyBuilder::new(&combined_sk).expect("eval key builder");
-    let mut shift = 1;
-    while shift < SLOTS / 2 {
-        builder
-            .enable_column_rotation(shift)
-            .expect("enable column rotation");
-        shift *= 2;
-    }
-    builder.enable_row_rotation().expect("enable row rotation");
-    let eval_key = builder.build(&mut OsRng).expect("build evaluation key");
-    let relin_key =
-        RelinearizationKey::new(&combined_sk, &mut OsRng).expect("build relinearization key");
     (eval_key, relin_key)
-    // `combined_sk` is dropped here — the full secret key no longer exists.
+}
+
+fn mod_pow_u64(base: u64, exponent: u64, modulus: u64) -> u64 {
+    let mut result = 1u128;
+    let mut base_acc = (base % modulus) as u128;
+    let modulus = modulus as u128;
+    let mut exp = exponent;
+    while exp > 0 {
+        if exp & 1 == 1 {
+            result = (result * base_acc) % modulus;
+        }
+        base_acc = (base_acc * base_acc) % modulus;
+        exp >>= 1;
+    }
+    result as u64
 }
 
 // ── Encoding & Encryption ────────────────────────────────────────────────────
@@ -866,7 +974,9 @@ mod tests {
             .collect();
 
         let member_sk_refs: Vec<&_> = members.iter().map(|m| &m.sk).collect();
-        let (eval_key, relin_key) = build_eval_key_from_committee(&member_sk_refs, &params);
+        let eval_key_root_seed = generate_eval_key_root_seed();
+        let (eval_key, relin_key) =
+            build_eval_key_from_committee(&member_sk_refs, &params, &eval_key_root_seed);
 
         let bid: u64 = 7_500_000_000_000_000_000; // 7.5 ETH in wei
         let slot = 0;
@@ -954,7 +1064,9 @@ mod tests {
             .collect();
 
         let member_sk_refs: Vec<&_> = members.iter().map(|m| &m.sk).collect();
-        let (eval_key, relin_key) = build_eval_key_from_committee(&member_sk_refs, &params);
+        let eval_key_root_seed = generate_eval_key_root_seed();
+        let (eval_key, relin_key) =
+            build_eval_key_from_committee(&member_sk_refs, &params, &eval_key_root_seed);
 
         // Winner in row 1 (slot 1024), runner-up in row 0 (slot 500).
         // All other bidders bid 0 → all-zero tally rows → they lose.
@@ -1034,7 +1146,9 @@ mod tests {
             .collect();
 
         let member_sk_refs: Vec<&_> = members.iter().map(|m| &m.sk).collect();
-        let (eval_key, relin_key) = build_eval_key_from_committee(&member_sk_refs, &params);
+        let eval_key_root_seed = generate_eval_key_root_seed();
+        let (eval_key, relin_key) =
+            build_eval_key_from_committee(&member_sk_refs, &params, &eval_key_root_seed);
 
         let mut bids = vec![0u64; N_BIDDERS];
         bids[1024] = 500;

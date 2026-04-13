@@ -29,12 +29,17 @@ mod e3_failed;
 mod e3_request_complete;
 mod e3_requested;
 mod e3_stage_changed;
+mod eval_key_share_proof_pending;
+mod eval_key_share_proof_signed;
+mod eval_key_crs_distributed;
 mod enable_effects;
 mod enclave_error;
 mod encryption_key_collection_failed;
 mod encryption_key_created;
 mod encryption_key_pending;
 mod encryption_key_received;
+mod evaluation_key_created;
+mod galois_key_share_created;
 mod keyshare_created;
 mod net_ready;
 mod operator_activation_changed;
@@ -56,6 +61,9 @@ mod share_verification;
 mod shutdown;
 mod signed_proof;
 mod slash_executed;
+mod relin_key_share_round1_created;
+mod relin_key_share_round2_created;
+mod relinearization_key_created;
 mod sync_effect;
 mod sync_end;
 mod sync_start;
@@ -93,13 +101,18 @@ pub use e3_failed::*;
 pub use e3_request_complete::*;
 pub use e3_requested::*;
 pub use e3_stage_changed::*;
+pub use eval_key_share_proof_pending::*;
+pub use eval_key_share_proof_signed::*;
 use e3_utils::{colorize, colorize_event_ids, Color};
+pub use eval_key_crs_distributed::*;
 pub use enable_effects::*;
 pub use enclave_error::*;
 pub use encryption_key_collection_failed::*;
 pub use encryption_key_created::*;
 pub use encryption_key_pending::*;
 pub use encryption_key_received::*;
+pub use evaluation_key_created::*;
+pub use galois_key_share_created::*;
 pub use keyshare_created::*;
 pub use net_ready::*;
 pub use operator_activation_changed::*;
@@ -121,6 +134,9 @@ pub use share_verification::*;
 pub use shutdown::*;
 pub use signed_proof::*;
 pub use slash_executed::*;
+pub use relin_key_share_round1_created::*;
+pub use relin_key_share_round2_created::*;
+pub use relinearization_key_created::*;
 use strum::IntoStaticStr;
 pub use sync_effect::*;
 pub use sync_end::*;
@@ -262,6 +278,9 @@ pub enum EnclaveEventData {
     E3RequestComplete(E3RequestComplete),
     E3Failed(E3Failed),
     E3StageChanged(E3StageChanged),
+    EvalKeyShareProofPending(EvalKeyShareProofPending),
+    EvalKeyShareProofSigned(EvalKeyShareProofSigned),
+    EvalKeyCrsDistributed(EvalKeyCrsDistributed),
     Shutdown(Shutdown),
     DocumentReceived(DocumentReceived),
     ThresholdShareCreated(ThresholdShareCreated),
@@ -269,6 +288,11 @@ pub enum EnclaveEventData {
     EncryptionKeyPending(EncryptionKeyPending),
     EncryptionKeyReceived(EncryptionKeyReceived),
     EncryptionKeyCreated(EncryptionKeyCreated),
+    GaloisKeyShareCreated(GaloisKeyShareCreated),
+    RelinKeyShareRound1Created(RelinKeyShareRound1Created),
+    RelinKeyShareRound2Created(RelinKeyShareRound2Created),
+    EvaluationKeyCreated(EvaluationKeyCreated),
+    RelinearizationKeyCreated(RelinearizationKeyCreated),
     EncryptionKeyCollectionFailed(EncryptionKeyCollectionFailed),
     ThresholdShareCollectionFailed(ThresholdShareCollectionFailed),
     ComputeRequest(ComputeRequest),           // ComputeRequested
@@ -545,6 +569,10 @@ impl EnclaveEventData {
             EnclaveEventData::ThresholdSharePending(ref data) => Some(data.e3_id.clone()),
             EnclaveEventData::EncryptionKeyPending(ref data) => Some(data.e3_id.clone()),
             EnclaveEventData::EncryptionKeyReceived(ref data) => Some(data.e3_id.clone()),
+            EnclaveEventData::EvalKeyCrsDistributed(ref data) => Some(data.e3_id.clone()),
+            EnclaveEventData::GaloisKeyShareCreated(ref data) => Some(data.e3_id.clone()),
+            EnclaveEventData::RelinKeyShareRound1Created(ref data) => Some(data.e3_id.clone()),
+            EnclaveEventData::RelinKeyShareRound2Created(ref data) => Some(data.e3_id.clone()),
             EnclaveEventData::CommitteePublished(ref data) => Some(data.e3_id.clone()),
             EnclaveEventData::CommitteeRequested(ref data) => Some(data.e3_id.clone()),
             EnclaveEventData::CommitteeFinalizeRequested(ref data) => Some(data.e3_id.clone()),
@@ -553,6 +581,8 @@ impl EnclaveEventData {
             EnclaveEventData::TicketGenerated(ref data) => Some(data.e3_id.clone()),
             EnclaveEventData::TicketSubmitted(ref data) => Some(data.e3_id.clone()),
             EnclaveEventData::EncryptionKeyCreated(ref data) => Some(data.e3_id.clone()),
+            EnclaveEventData::EvaluationKeyCreated(ref data) => Some(data.e3_id.clone()),
+            EnclaveEventData::RelinearizationKeyCreated(ref data) => Some(data.e3_id.clone()),
             EnclaveEventData::ComputeResponse(ref data) => Some(data.e3_id.clone()),
             EnclaveEventData::TestEvent(ref data) => data.e3_id.clone(),
             EnclaveEventData::SignedProofFailed(ref data) => Some(data.e3_id.clone()),
@@ -611,9 +641,12 @@ impl_event_types!(
     PublishDocumentRequested,
     PkGenerationProofSigned,
     DkgProofSigned,
+    EvalKeyShareProofPending,
+    EvalKeyShareProofSigned,
     E3RequestComplete,
     E3Failed,
     E3StageChanged,
+    EvalKeyCrsDistributed,
     CiphernodeSelected,
     CiphernodeAdded,
     CiphernodeRemoved,
@@ -636,6 +669,11 @@ impl_event_types!(
     EncryptionKeyPending,
     EncryptionKeyReceived,
     EncryptionKeyCreated,
+    GaloisKeyShareCreated,
+    RelinKeyShareRound1Created,
+    RelinKeyShareRound2Created,
+    EvaluationKeyCreated,
+    RelinearizationKeyCreated,
     EncryptionKeyCollectionFailed,
     ThresholdShareCollectionFailed,
     ComputeRequest,

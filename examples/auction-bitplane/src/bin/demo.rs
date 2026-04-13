@@ -6,8 +6,8 @@ use auction_bitplane_example::{
     accumulate_bitplanes, aggregate_public_key, aggregate_sk_shares_for_party,
     build_eval_key_from_committee, build_params, compute_decryption_shares, compute_tallies,
     decode_bid, decode_tally_matrix, encode_bid_into_planes, encrypt_bitplanes, generate_crp,
-    generate_smudging_noise, member_keygen, rank_bidders, threshold_decrypt, BID_BITS, COMMITTEE_N,
-    SLOTS,
+    generate_eval_key_root_seed, generate_smudging_noise, member_keygen, rank_bidders,
+    threshold_decrypt, BID_BITS, COMMITTEE_N, SLOTS,
 };
 use fhe::bfv::Ciphertext;
 use rand::rngs::OsRng;
@@ -57,6 +57,10 @@ fn main() {
     let pk_shares: Vec<_> = members.iter().map(|m| m.pk_share.clone()).collect();
     let joint_pk = aggregate_public_key(pk_shares);
     println!("The committee aggregates those shares into one joint public key.");
+    let eval_key_root_seed = generate_eval_key_root_seed();
+    println!(
+        "The committee also agrees on shared eval-key randomness for distributed key generation."
+    );
 
     let all_sk_shares: Vec<_> = members.iter().map(|m| m.sk_shares.clone()).collect();
     let sk_poly_sums: Vec<_> = (0..COMMITTEE_N)
@@ -64,8 +68,9 @@ fn main() {
         .collect();
 
     let member_sk_refs: Vec<&_> = members.iter().map(|m| &m.sk).collect();
-    let (eval_key, relin_key) = build_eval_key_from_committee(&member_sk_refs, &params);
-    println!("An evaluation key is built with a demo shortcut so the encrypted tally can run.");
+    let (eval_key, relin_key) =
+        build_eval_key_from_committee(&member_sk_refs, &params, &eval_key_root_seed);
+    println!("The committee generates distributed Galois and relinearization keys without reconstructing the joint secret key.");
 
     act("Act 3 — The Bids");
     let mut rng = OsRng;

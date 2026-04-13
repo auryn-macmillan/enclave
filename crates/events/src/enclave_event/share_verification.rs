@@ -28,6 +28,9 @@ pub enum VerificationKind {
     ThresholdDecryptionProofs,
     /// C1 PK generation proof verification (after all KeyshareCreated collected).
     PkGenerationProofs,
+    EvalKeyGaloisShareProofs,
+    EvalKeyRelinRound1ShareProofs,
+    EvalKeyRelinRound2ShareProofs,
 }
 
 /// ThresholdKeyshare → ShareVerificationActor: verify party proofs.

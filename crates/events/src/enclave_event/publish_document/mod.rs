@@ -24,6 +24,8 @@ const DEFAULT_KADEMLIA_EXPIRY_DAYS: i64 = 30;
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum DocumentKind {
     TrBFV,
+    EvaluationKey,
+    RelinearizationKey,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]

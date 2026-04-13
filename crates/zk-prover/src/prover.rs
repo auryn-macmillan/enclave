@@ -214,7 +214,6 @@ impl ZkProver {
             vk_path_s.as_ref(),
             "-o",
             output_dir_s.as_ref(),
-            "-v",
             "-t",
             verifier_target,
         ];
