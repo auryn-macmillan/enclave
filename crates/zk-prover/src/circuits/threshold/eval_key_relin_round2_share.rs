@@ -7,18 +7,18 @@
 use crate::traits::Provable;
 use e3_events::CircuitName;
 use e3_fhe_params::BfvPreset;
-use e3_zk_helpers::circuits::threshold::eval_key_galois_share::circuit::{
-    EvalKeyGaloisShareCircuit, EvalKeyGaloisShareCircuitData,
+use e3_zk_helpers::circuits::threshold::eval_key_relin_round2_share::circuit::{
+    EvalKeyRelinRound2ShareCircuit, EvalKeyRelinRound2ShareCircuitData,
 };
-use e3_zk_helpers::circuits::threshold::eval_key_galois_share::computation::Inputs;
+use e3_zk_helpers::circuits::threshold::eval_key_relin_round2_share::computation::Inputs;
 
-impl Provable for EvalKeyGaloisShareCircuit {
+impl Provable for EvalKeyRelinRound2ShareCircuit {
     type Params = BfvPreset;
-    type Input = EvalKeyGaloisShareCircuitData;
+    type Input = EvalKeyRelinRound2ShareCircuitData;
     type Inputs = Inputs;
 
     fn circuit(&self) -> CircuitName {
-        CircuitName::EvalKeyGaloisShare
+        CircuitName::EvalKeyRelinRound2Share
     }
 }
 
@@ -129,10 +129,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_c8_prove_smoke() {
+    async fn test_c10_prove_smoke() {
         let Some(bb) = discover_compatible_bb().await else {
             eprintln!(
-                "skipping C8 smoke test: compatible bb binary not found (need {})",
+                "skipping C10 smoke test: compatible bb binary not found (need {})",
                 REQUIRED_BB_VERSION
             );
             return;
@@ -157,7 +157,7 @@ mod tests {
             circuits_dir
                 .join("recursive")
                 .join("threshold")
-                .join("eval_key_galois_share"),
+                .join("eval_key_relin_round2_share"),
         )
         .await
         .unwrap();
@@ -166,35 +166,44 @@ mod tests {
         let target = circuits_dir
             .join("recursive")
             .join("threshold")
-            .join("eval_key_galois_share");
+            .join("eval_key_relin_round2_share");
 
         let target_build = threshold_target_path();
-        let json_src = if target_build.join("eval_key_galois_share.json").exists() {
-            target_build.join("eval_key_galois_share.json")
+        let json_src = if target_build.join("eval_key_relin_round2_share.json").exists() {
+            target_build.join("eval_key_relin_round2_share.json")
         } else {
             dist.join("recursive")
                 .join("threshold")
-                .join("eval_key_galois_share")
-                .join("eval_key_galois_share.json")
+                .join("eval_key_relin_round2_share")
+                .join("eval_key_relin_round2_share.json")
         };
-        let vk_src = if target_build.join("eval_key_galois_share.vk_noir").exists() {
-            target_build.join("eval_key_galois_share.vk_noir")
-        } else if target_build.join("eval_key_galois_share.vk_recursive").exists() {
-            target_build.join("eval_key_galois_share.vk_recursive")
-        } else if target_build.join("eval_key_galois_share.vk").exists() {
-            target_build.join("eval_key_galois_share.vk")
+        let vk_src = if target_build
+            .join("eval_key_relin_round2_share.vk_noir")
+            .exists()
+        {
+            target_build.join("eval_key_relin_round2_share.vk_noir")
+        } else if target_build
+            .join("eval_key_relin_round2_share.vk_recursive")
+            .exists()
+        {
+            target_build.join("eval_key_relin_round2_share.vk_recursive")
+        } else if target_build.join("eval_key_relin_round2_share.vk").exists() {
+            target_build.join("eval_key_relin_round2_share.vk")
         } else {
             dist.join("recursive")
                 .join("threshold")
-                .join("eval_key_galois_share")
-                .join("eval_key_galois_share.vk")
+                .join("eval_key_relin_round2_share")
+                .join("eval_key_relin_round2_share.vk")
         };
 
         if json_src.exists() && vk_src.exists() {
-            fs::copy(&json_src, target.join("eval_key_galois_share.json"))
-                .await
-                .unwrap();
-            fs::copy(&vk_src, target.join("eval_key_galois_share.vk"))
+            fs::copy(
+                &json_src,
+                target.join("eval_key_relin_round2_share.json"),
+            )
+            .await
+            .unwrap();
+            fs::copy(&vk_src, target.join("eval_key_relin_round2_share.vk"))
                 .await
                 .unwrap();
         }
@@ -202,29 +211,29 @@ mod tests {
         let prover = ZkProver::new(&backend);
         let circuit_dir = prover
             .circuits_dir(e3_events::CircuitVariant::Recursive)
-            .join(CircuitName::EvalKeyGaloisShare.dir_path());
-        if !circuit_dir.join("eval_key_galois_share.json").exists()
-            || !circuit_dir.join("eval_key_galois_share.vk").exists()
+            .join(CircuitName::EvalKeyRelinRound2Share.dir_path());
+        if !circuit_dir.join("eval_key_relin_round2_share.json").exists()
+            || !circuit_dir.join("eval_key_relin_round2_share.vk").exists()
         {
             panic!(
-                "C8 circuit not found at {} — build circuits and ensure dist/circuits includes threshold/eval_key_galois_share",
+                "C10 circuit not found at {} — build circuits and ensure dist/circuits includes threshold/eval_key_relin_round2_share",
                 circuit_dir.display()
             );
         }
 
         let preset = BfvPreset::InsecureThreshold512;
-        let sample =
-            EvalKeyGaloisShareCircuitData::generate_sample(preset).expect("sample generation");
-        let proof = EvalKeyGaloisShareCircuit
-            .prove(&prover, &preset, &sample, "c8-smoke")
-            .expect("C8 prove should succeed");
+        let sample = EvalKeyRelinRound2ShareCircuitData::generate_sample(preset)
+            .expect("sample generation");
+        let proof = EvalKeyRelinRound2ShareCircuit
+            .prove(&prover, &preset, &sample, "c10-smoke")
+            .expect("C10 prove should succeed");
 
         assert!(!proof.data.is_empty());
         assert!(!proof.public_signals.is_empty());
 
-        let verified = EvalKeyGaloisShareCircuit
-            .verify(&prover, &proof, "c8-smoke", 0)
-            .expect("C8 verify should succeed");
-        assert!(verified, "C8 proof verification must pass");
+        let verified = EvalKeyRelinRound2ShareCircuit
+            .verify(&prover, &proof, "c10-smoke", 0)
+            .expect("C10 verify should succeed");
+        assert!(verified, "C10 proof verification must pass");
     }
 }

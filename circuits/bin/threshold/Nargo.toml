@@ -1,6 +1,8 @@
 [workspace]
 members = [
     "eval_key_galois_share",
+    "eval_key_relin_round1_share",
+    "eval_key_relin_round2_share",
     "pk_generation",
     "pk_aggregation",
     "user_data_encryption",

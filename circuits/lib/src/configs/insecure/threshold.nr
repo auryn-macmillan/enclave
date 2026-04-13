@@ -1178,6 +1178,31 @@ pub global THRESHOLD_SHARE_DECRYPTION_CONFIGS: ShareDecryptionConfigs<L> = Share
 
 /************************************
 -------------------------------------
+eval_key_relin_round1_share (CIRCUIT 9 - THRESHOLD BFV EVAL KEY RELIN ROUND1 SHARE)
+-------------------------------------
+************************************/
+
+pub global EVAL_KEY_RELIN_ROUND1_SHARE_BIT_SK: u32 = 35;
+pub global EVAL_KEY_RELIN_ROUND1_SHARE_BIT_U: u32 = 5;
+pub global EVAL_KEY_RELIN_ROUND1_SHARE_BIT_ERROR: u32 = 5;
+pub global EVAL_KEY_RELIN_ROUND1_SHARE_BIT_H: u32 = 35;
+pub global EVAL_KEY_RELIN_ROUND1_SHARE_ERROR_BOUND: Field = 20;
+pub global EVAL_KEY_RELIN_ROUND1_SHARE_EPHEMERAL_U_BOUND: Field = 20;
+
+/************************************
+-------------------------------------
+eval_key_relin_round2_share (CIRCUIT 10 - THRESHOLD BFV EVAL KEY RELIN ROUND2 SHARE)
+-------------------------------------
+************************************/
+
+pub global EVAL_KEY_RELIN_ROUND2_SHARE_BIT_SK: u32 = 35;
+pub global EVAL_KEY_RELIN_ROUND2_SHARE_BIT_U: u32 = 35;
+pub global EVAL_KEY_RELIN_ROUND2_SHARE_BIT_ERROR: u32 = 5;
+pub global EVAL_KEY_RELIN_ROUND2_SHARE_BIT_R: u32 = 35;
+pub global EVAL_KEY_RELIN_ROUND2_SHARE_ERROR_BOUND: Field = 20;
+
+/************************************
+-------------------------------------
 decrypted_shares_aggregation (CIRCUIT 7)
 -------------------------------------
 ************************************/

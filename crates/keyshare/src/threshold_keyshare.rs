@@ -1601,6 +1601,8 @@ impl ThresholdKeyshare {
                 relin_round1_request: Some(EvalKeyRelinRound1ShareProofRequest {
                     secret_key_share: output.proof_witness.secret_key_share,
                     ephemeral_u_share: output.proof_witness.ephemeral_u_share,
+                    root_seed: self.eval_key_root_seed()?.bytes,
+                    component_index: 0,
                     ciphertext_level: 0,
                     key_level: 0,
                     h0: event.share.h0.clone(),
@@ -1682,10 +1684,23 @@ impl ThresholdKeyshare {
                 relin_round2_request: Some(EvalKeyRelinRound2ShareProofRequest {
                     secret_key_share: output.proof_witness.secret_key_share,
                     ephemeral_u_share: output.proof_witness.ephemeral_u_share,
+                    component_index: 0,
                     ciphertext_level: 0,
                     key_level: 0,
                     h0: event.share.r0.clone(),
                     h1: event.share.r1.clone(),
+                    round1_h0_aggregate: self
+                        .relin_round1_aggregate
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("missing relin round1 aggregate for round2 proof request"))?
+                        .h0
+                        .clone(),
+                    round1_h1_aggregate: self
+                        .relin_round1_aggregate
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("missing relin round1 aggregate for round2 proof request"))?
+                        .h1
+                        .clone(),
                     crs_binding_hash: event.share.crs_binding_hash,
                     additive_share_commitment_hash: event.share.additive_share_commitment_hash,
                     relin_ephemeral_u_commitment_hash: event

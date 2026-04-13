@@ -256,6 +256,8 @@ pub struct EvalKeyRelinRound1ShareProofRequest {
     pub secret_key_share: ArcBytes,
     #[derivative(Debug(format_with = "e3_utils::formatters::hexf"))]
     pub ephemeral_u_share: ArcBytes,
+    pub root_seed: [u8; 32],
+    pub component_index: u64,
     pub ciphertext_level: u64,
     pub key_level: u64,
     pub h0: Vec<ArcBytes>,
@@ -274,10 +276,13 @@ pub struct EvalKeyRelinRound2ShareProofRequest {
     pub secret_key_share: ArcBytes,
     #[derivative(Debug(format_with = "e3_utils::formatters::hexf"))]
     pub ephemeral_u_share: ArcBytes,
+    pub component_index: u64,
     pub ciphertext_level: u64,
     pub key_level: u64,
     pub h0: Vec<ArcBytes>,
     pub h1: Vec<ArcBytes>,
+    pub round1_h0_aggregate: Vec<ArcBytes>,
+    pub round1_h1_aggregate: Vec<ArcBytes>,
     pub crs_binding_hash: [u8; 32],
     pub additive_share_commitment_hash: [u8; 32],
     pub relin_ephemeral_u_commitment_hash: [u8; 32],

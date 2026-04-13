@@ -27,7 +27,8 @@ use e3_events::{
     ComputeResponse, DecryptedSharesAggregationProofRequest,
     DecryptedSharesAggregationProofResponse, DkgShareDecryptionProofRequest,
     DkgShareDecryptionProofResponse, EnclaveEvent, EnclaveEventData,
-    EvalKeyGaloisShareProofRequest, EvalKeyShareProofResponse, EventPublisher,
+    EvalKeyGaloisShareProofRequest, EvalKeyRelinRound1ShareProofRequest,
+    EvalKeyRelinRound2ShareProofRequest, EvalKeyShareProofResponse, EventPublisher,
     EventSubscriber, EventType, FoldProofsResponse, PartyVerificationResult,
     PkAggregationProofRequest, PkAggregationProofResponse, PkBfvProofRequest, PkBfvProofResponse,
     PkGenerationProofRequest, PkGenerationProofResponse, ShareComputationProofRequest,
@@ -66,6 +67,12 @@ use e3_zk_helpers::circuits::threshold::decrypted_shares_aggregation::circuit::{
 };
 use e3_zk_helpers::circuits::threshold::eval_key_galois_share::circuit::{
     EvalKeyGaloisShareCircuit, EvalKeyGaloisShareCircuitData,
+};
+use e3_zk_helpers::circuits::threshold::eval_key_relin_round1_share::circuit::{
+    EvalKeyRelinRound1ShareCircuit, EvalKeyRelinRound1ShareCircuitData,
+};
+use e3_zk_helpers::circuits::threshold::eval_key_relin_round2_share::circuit::{
+    EvalKeyRelinRound2ShareCircuit, EvalKeyRelinRound2ShareCircuitData,
 };
 use e3_zk_helpers::circuits::threshold::pk_generation::circuit::{
     PkGenerationCircuit, PkGenerationCircuitData,
@@ -828,24 +835,14 @@ fn handle_zk_request(
         ZkRequest::EvalKeyGaloisShare(req) => timefunc("zk_eval_key_galois_share", id, || {
             handle_eval_key_galois_share_proof(&prover, req, request.clone())
         }),
-        ZkRequest::EvalKeyRelinRound1Share(_) => {
+        ZkRequest::EvalKeyRelinRound1Share(req) => {
             timefunc("zk_eval_key_relin_round1_share", id, || {
-                Err(ComputeRequestError::new(
-                    ComputeRequestErrorKind::Zk(ZkEventError::ProofGenerationFailed(
-                        "eval-key relin round1 share proofs not implemented yet".to_string(),
-                    )),
-                    request.clone(),
-                ))
+                handle_eval_key_relin_round1_share_proof(&prover, req, request.clone())
             })
         }
-        ZkRequest::EvalKeyRelinRound2Share(_) => {
+        ZkRequest::EvalKeyRelinRound2Share(req) => {
             timefunc("zk_eval_key_relin_round2_share", id, || {
-                Err(ComputeRequestError::new(
-                    ComputeRequestErrorKind::Zk(ZkEventError::ProofGenerationFailed(
-                        "eval-key relin round2 share proofs not implemented yet".to_string(),
-                    )),
-                    request.clone(),
-                ))
+                handle_eval_key_relin_round2_share_proof(&prover, req, request.clone())
             })
         }
         ZkRequest::FoldProofs {
@@ -1211,6 +1208,211 @@ fn handle_eval_key_galois_share_proof(
 
     Ok(ComputeResponse::zk(
         ZkResponse::EvalKeyGaloisShare(EvalKeyShareProofResponse {
+            proof,
+            wrapped_proof,
+        }),
+        request.correlation_id,
+        request.e3_id,
+    ))
+}
+
+fn handle_eval_key_relin_round1_share_proof(
+    prover: &ZkProver,
+    req: EvalKeyRelinRound1ShareProofRequest,
+    request: ComputeRequest,
+) -> Result<ComputeResponse, ComputeRequestError> {
+    let params = BfvParamSet::from(req.params_preset.clone()).build_arc();
+
+    let secret_key_share_poly = try_poly_from_bytes(&req.secret_key_share, &params)
+        .map_err(|e| make_zk_error(&request, format!("secret_key_share: {}", e)))?;
+    let ephemeral_u_share_poly = try_poly_from_bytes(&req.ephemeral_u_share, &params)
+        .map_err(|e| make_zk_error(&request, format!("ephemeral_u_share: {}", e)))?;
+    if req.h0.is_empty() {
+        return Err(make_zk_error(&request, "h0 is empty".to_string()));
+    }
+    if req.h1.is_empty() {
+        return Err(make_zk_error(&request, "h1 is empty".to_string()));
+    }
+
+    let component_index = usize::try_from(req.component_index)
+        .map_err(|e| make_zk_error(&request, format!("component_index conversion: {e}")))?;
+    if component_index >= req.h0.len() || component_index >= req.h1.len() {
+        return Err(make_zk_error(
+            &request,
+            format!(
+                "component_index {} out of range for h0/h1 with sizes {}/{}",
+                req.component_index,
+                req.h0.len(),
+                req.h1.len()
+            ),
+        ));
+    }
+
+    let h0_poly = try_poly_from_bytes(&req.h0[component_index], &params)
+        .map_err(|e| make_zk_error(&request, format!("h0[{}]: {}", component_index, e)))?;
+    let h1_poly = try_poly_from_bytes(&req.h1[component_index], &params)
+        .map_err(|e| make_zk_error(&request, format!("h1[{}]: {}", component_index, e)))?;
+
+    let root_seed = e3_trbfv::EvalKeyRootSeed::new(req.root_seed);
+    let crs_binding_hash = e3_trbfv::compute_relin_crs_binding_hash(
+        &params,
+        &root_seed,
+        req.ciphertext_level,
+        req.key_level,
+    )
+    .map_err(|e| make_zk_error(&request, format!("compute_relin_crs_binding_hash: {e}")))?;
+    if crs_binding_hash != req.crs_binding_hash {
+        return Err(make_zk_error(
+            &request,
+            "relin round1 CRS binding hash mismatch".to_string(),
+        ));
+    }
+
+    let a_share_bytes = e3_trbfv::derive_relin_crp_component(&params, &root_seed, component_index)
+        .map_err(|e| make_zk_error(&request, format!("derive_relin_crp_component: {e}")))?;
+    let a_share_poly = try_poly_from_bytes(&a_share_bytes, &params)
+        .map_err(|e| make_zk_error(&request, format!("relin CRP component: {e}")))?;
+    let garner_coefficient_decimal =
+        e3_trbfv::compute_relin_garner_coefficient_decimal(&params, component_index).map_err(
+            |e| make_zk_error(&request, format!("compute_relin_garner_coefficient_decimal: {e}")),
+        )?;
+
+    let circuit_data = EvalKeyRelinRound1ShareCircuitData {
+        secret_key_share: CrtPolynomial::from_fhe_polynomial(&secret_key_share_poly),
+        ephemeral_u_share: CrtPolynomial::from_fhe_polynomial(&ephemeral_u_share_poly),
+        a_share: CrtPolynomial::from_fhe_polynomial(&a_share_poly),
+        h0_share: CrtPolynomial::from_fhe_polynomial(&h0_poly),
+        h1_share: CrtPolynomial::from_fhe_polynomial(&h1_poly),
+        component_index: req.component_index,
+        garner_coefficient_decimal,
+        crs_binding_hash: req.crs_binding_hash,
+        additive_share_commitment_hash: req.additive_share_commitment_hash,
+        relin_ephemeral_u_commitment_hash: req.relin_ephemeral_u_commitment_hash,
+        share_digest: req.share_digest,
+        ciphertext_level: req.ciphertext_level,
+        key_level: req.key_level,
+    };
+
+    let circuit = EvalKeyRelinRound1ShareCircuit;
+    let e3_id_str = request.e3_id.to_string();
+    let proof = circuit
+        .prove(prover, &req.params_preset, &circuit_data, &e3_id_str)
+        .map_err(|e| {
+            ComputeRequestError::new(
+                ComputeRequestErrorKind::Zk(ZkEventError::ProofGenerationFailed(e.to_string())),
+                request.clone(),
+            )
+        })?;
+
+    let wrapped_proof = generate_wrapper_proof(prover, &proof, &e3_id_str).map_err(|e| {
+        ComputeRequestError::new(
+            ComputeRequestErrorKind::Zk(ZkEventError::ProofGenerationFailed(e.to_string())),
+            request.clone(),
+        )
+    })?;
+
+    Ok(ComputeResponse::zk(
+        ZkResponse::EvalKeyRelinRound1Share(EvalKeyShareProofResponse {
+            proof,
+            wrapped_proof,
+        }),
+        request.correlation_id,
+        request.e3_id,
+    ))
+}
+
+fn handle_eval_key_relin_round2_share_proof(
+    prover: &ZkProver,
+    req: EvalKeyRelinRound2ShareProofRequest,
+    request: ComputeRequest,
+) -> Result<ComputeResponse, ComputeRequestError> {
+    let params = BfvParamSet::from(req.params_preset.clone()).build_arc();
+
+    let secret_key_share_poly = try_poly_from_bytes(&req.secret_key_share, &params)
+        .map_err(|e| make_zk_error(&request, format!("secret_key_share: {}", e)))?;
+    let ephemeral_u_share_poly = try_poly_from_bytes(&req.ephemeral_u_share, &params)
+        .map_err(|e| make_zk_error(&request, format!("ephemeral_u_share: {}", e)))?;
+
+    let component_index = usize::try_from(req.component_index)
+        .map_err(|e| make_zk_error(&request, format!("component_index conversion: {e}")))?;
+    for (name, shares) in [
+        ("h0", &req.h0),
+        ("h1", &req.h1),
+        ("round1_h0_aggregate", &req.round1_h0_aggregate),
+        ("round1_h1_aggregate", &req.round1_h1_aggregate),
+    ] {
+        if shares.is_empty() {
+            return Err(make_zk_error(&request, format!("{name} is empty")));
+        }
+        if component_index >= shares.len() {
+            return Err(make_zk_error(
+                &request,
+                format!(
+                    "component_index {} out of range for {} with {} elements",
+                    req.component_index,
+                    name,
+                    shares.len()
+                ),
+            ));
+        }
+    }
+
+    let r0_poly = try_poly_from_bytes(&req.h0[component_index], &params)
+        .map_err(|e| make_zk_error(&request, format!("h0[{}]: {}", component_index, e)))?;
+    let r1_poly = try_poly_from_bytes(&req.h1[component_index], &params)
+        .map_err(|e| make_zk_error(&request, format!("h1[{}]: {}", component_index, e)))?;
+    let h0_agg_poly = try_poly_from_bytes(&req.round1_h0_aggregate[component_index], &params)
+        .map_err(|e| {
+            make_zk_error(
+                &request,
+                format!("round1_h0_aggregate[{}]: {}", component_index, e),
+            )
+        })?;
+    let h1_agg_poly = try_poly_from_bytes(&req.round1_h1_aggregate[component_index], &params)
+        .map_err(|e| {
+            make_zk_error(
+                &request,
+                format!("round1_h1_aggregate[{}]: {}", component_index, e),
+            )
+        })?;
+
+    let circuit_data = EvalKeyRelinRound2ShareCircuitData {
+        secret_key_share: CrtPolynomial::from_fhe_polynomial(&secret_key_share_poly),
+        ephemeral_u_share: CrtPolynomial::from_fhe_polynomial(&ephemeral_u_share_poly),
+        h0_aggregate: CrtPolynomial::from_fhe_polynomial(&h0_agg_poly),
+        h1_aggregate: CrtPolynomial::from_fhe_polynomial(&h1_agg_poly),
+        r0_share: CrtPolynomial::from_fhe_polynomial(&r0_poly),
+        r1_share: CrtPolynomial::from_fhe_polynomial(&r1_poly),
+        component_index: req.component_index,
+        crs_binding_hash: req.crs_binding_hash,
+        additive_share_commitment_hash: req.additive_share_commitment_hash,
+        relin_ephemeral_u_commitment_hash: req.relin_ephemeral_u_commitment_hash,
+        round1_aggregate_digest: req.round1_aggregate_digest,
+        share_digest: req.share_digest,
+        ciphertext_level: req.ciphertext_level,
+        key_level: req.key_level,
+    };
+
+    let circuit = EvalKeyRelinRound2ShareCircuit;
+    let e3_id_str = request.e3_id.to_string();
+    let proof = circuit
+        .prove(prover, &req.params_preset, &circuit_data, &e3_id_str)
+        .map_err(|e| {
+            ComputeRequestError::new(
+                ComputeRequestErrorKind::Zk(ZkEventError::ProofGenerationFailed(e.to_string())),
+                request.clone(),
+            )
+        })?;
+
+    let wrapped_proof = generate_wrapper_proof(prover, &proof, &e3_id_str).map_err(|e| {
+        ComputeRequestError::new(
+            ComputeRequestErrorKind::Zk(ZkEventError::ProofGenerationFailed(e.to_string())),
+            request.clone(),
+        )
+    })?;
+
+    Ok(ComputeResponse::zk(
+        ZkResponse::EvalKeyRelinRound2Share(EvalKeyShareProofResponse {
             proof,
             wrapped_proof,
         }),

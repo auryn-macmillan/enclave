@@ -1350,6 +1350,30 @@ pub fn compute_relin_crs_binding_hash(
     Ok(relin_crs_binding_hash(params, root_seed, ciphertext_level, key_level)?.bytes)
 }
 
+pub fn derive_relin_crp_component(
+    params: &Arc<BfvParameters>,
+    root_seed: &EvalKeyRootSeed,
+    index: usize,
+) -> Result<ArcBytes> {
+    let crp = derive_relin_crp_vector(params, root_seed)?;
+    let poly = crp
+        .get(index)
+        .ok_or_else(|| anyhow!("missing relin CRP component at index {index}"))?;
+    Ok(ArcBytes::from_bytes(&poly.poly().to_bytes()))
+}
+
+pub fn compute_relin_garner_coefficient_decimal(
+    params: &Arc<BfvParameters>,
+    index: usize,
+) -> Result<String> {
+    let ctx = params.ctx_at_level(SUPPORTED_LEVEL as usize)?;
+    let rns = RnsContext::new(&params.moduli()[..ctx.moduli().len()])?;
+    let garner = rns
+        .get_garner(index)
+        .ok_or_else(|| anyhow!("missing Garner coefficient at index {index}"))?;
+    Ok(garner.to_string())
+}
+
 pub fn serialize_secret_key_share(sk: &SecretKey) -> Result<ArcBytes> {
     Ok(ArcBytes::from_bytes(&crate::helpers::serialize_secret_key(
         sk,

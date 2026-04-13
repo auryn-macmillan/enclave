@@ -4,10 +4,9 @@
 // without even the implied warranty of MERCHANTABILITY
 // or FITNESS FOR A PARTICULAR PURPOSE.
 
-mod decrypted_shares_aggregation;
-mod eval_key_galois_share;
-mod eval_key_relin_round1_share;
-mod eval_key_relin_round2_share;
-mod pk_aggregation;
-mod pk_generation;
-mod share_decryption;
+pub mod circuit;
+pub mod codegen;
+pub mod computation;
+pub mod sample;
+pub use circuit::*;
+pub use computation::*;

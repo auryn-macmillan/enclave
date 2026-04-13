@@ -32851,6 +32851,31 @@ pub global EVAL_KEY_GALOIS_SHARE_BIT_C0: u32 = 52;
 
 /************************************
 -------------------------------------
+eval_key_relin_round1_share (CIRCUIT 9 - THRESHOLD BFV EVAL KEY RELIN ROUND1 SHARE)
+-------------------------------------
+************************************/
+
+pub global EVAL_KEY_RELIN_ROUND1_SHARE_BIT_SK: u32 = 52;
+pub global EVAL_KEY_RELIN_ROUND1_SHARE_BIT_U: u32 = 4;
+pub global EVAL_KEY_RELIN_ROUND1_SHARE_BIT_ERROR: u32 = 4;
+pub global EVAL_KEY_RELIN_ROUND1_SHARE_BIT_H: u32 = 52;
+pub global EVAL_KEY_RELIN_ROUND1_SHARE_ERROR_BOUND: Field = 8;
+pub global EVAL_KEY_RELIN_ROUND1_SHARE_EPHEMERAL_U_BOUND: Field = 8;
+
+/************************************
+-------------------------------------
+eval_key_relin_round2_share (CIRCUIT 10 - THRESHOLD BFV EVAL KEY RELIN ROUND2 SHARE)
+-------------------------------------
+************************************/
+
+pub global EVAL_KEY_RELIN_ROUND2_SHARE_BIT_SK: u32 = 52;
+pub global EVAL_KEY_RELIN_ROUND2_SHARE_BIT_U: u32 = 52;
+pub global EVAL_KEY_RELIN_ROUND2_SHARE_BIT_ERROR: u32 = 4;
+pub global EVAL_KEY_RELIN_ROUND2_SHARE_BIT_R: u32 = 52;
+pub global EVAL_KEY_RELIN_ROUND2_SHARE_ERROR_BOUND: Field = 8;
+
+/************************************
+-------------------------------------
 pk_aggregation (CIRCUIT 5)
 -------------------------------------
 ************************************/
