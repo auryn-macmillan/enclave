@@ -93,29 +93,28 @@ pub fn build_classification_masks(
         "price ladder × SLOT_WIDTH exceeds polynomial degree"
     );
 
-    let mut winner_coeffs = vec![0u64; params.degree()];
-    let mut loser_coeffs = vec![0u64; params.degree()];
-    let mut marginal_coeffs = vec![0u64; params.degree()];
+    let mut winner_slots = vec![0u64; params.degree()];
+    let mut loser_slots = vec![0u64; params.degree()];
+    let mut marginal_slots = vec![0u64; params.degree()];
 
     for level in (clearing_idx + 1)..PRICE_LEVELS {
         for bit in 0..SLOT_WIDTH {
-            winner_coeffs[level * SLOT_WIDTH + bit] = 1;
+            winner_slots[level * SLOT_WIDTH + bit] = 1;
         }
     }
     for level in 0..clearing_idx {
         for bit in 0..SLOT_WIDTH {
-            loser_coeffs[level * SLOT_WIDTH + bit] = 1;
+            loser_slots[level * SLOT_WIDTH + bit] = 1;
         }
     }
     for bit in 0..SLOT_WIDTH {
-        marginal_coeffs[clearing_idx * SLOT_WIDTH + bit] = 1;
+        marginal_slots[clearing_idx * SLOT_WIDTH + bit] = 1;
     }
 
     (
-        Plaintext::try_encode(&winner_coeffs, Encoding::poly(), params)
-            .expect("encode winner mask"),
-        Plaintext::try_encode(&loser_coeffs, Encoding::poly(), params).expect("encode loser mask"),
-        Plaintext::try_encode(&marginal_coeffs, Encoding::poly(), params)
+        Plaintext::try_encode(&winner_slots, Encoding::simd(), params).expect("encode winner mask"),
+        Plaintext::try_encode(&loser_slots, Encoding::simd(), params).expect("encode loser mask"),
+        Plaintext::try_encode(&marginal_slots, Encoding::simd(), params)
             .expect("encode marginal mask"),
     )
 }
@@ -153,11 +152,11 @@ pub fn decrypt_demand_slot_qty(
         .collect();
 
     let plaintexts = threshold_decrypt(&party_shares, std::slice::from_ref(ct), params);
-    let coeffs = Vec::<u64>::try_decode(&plaintexts[0], Encoding::poly()).expect("decode coeffs");
+    let slots = Vec::<u64>::try_decode(&plaintexts[0], Encoding::simd()).expect("decode slots");
 
     let mut qty = 0u64;
     for bit in 0..SLOT_WIDTH {
-        let raw = coeffs[level_idx * SLOT_WIDTH + bit];
+        let raw = slots[level_idx * SLOT_WIDTH + bit];
         let count = decode_demand_slot(raw, params.plaintext());
         qty += count * (1u64 << bit);
     }
@@ -321,11 +320,11 @@ mod tests {
         }
     }
 
-    fn decode_plaintext_coeffs(pt: &Plaintext) -> Vec<u64> {
-        Vec::<u64>::try_decode(pt, Encoding::poly()).expect("decode plaintext")
+    fn decode_plaintext_slots(pt: &Plaintext) -> Vec<u64> {
+        Vec::<u64>::try_decode(pt, Encoding::simd()).expect("decode plaintext")
     }
 
-    fn threshold_decrypt_coeffs(
+    fn threshold_decrypt_slots(
         ct: &Ciphertext,
         participating: &[usize],
         sk_poly_sums: &[Poly],
@@ -346,7 +345,7 @@ mod tests {
             .collect();
 
         let plaintexts = threshold_decrypt(&party_shares, std::slice::from_ref(ct), params);
-        decode_plaintext_coeffs(&plaintexts[0])
+        decode_plaintext_slots(&plaintexts[0])
     }
 
     fn order(order_id: usize, qty: u64, price: u64, epoch: usize) -> Order {
@@ -400,27 +399,27 @@ mod tests {
             let (winner_mask, loser_mask, marginal_mask) =
                 build_classification_masks(clearing_idx, &params);
 
-            let winner_coeffs = decode_plaintext_coeffs(&winner_mask);
-            let loser_coeffs = decode_plaintext_coeffs(&loser_mask);
-            let marginal_coeffs = decode_plaintext_coeffs(&marginal_mask);
+            let winner_slots = decode_plaintext_slots(&winner_mask);
+            let loser_slots = decode_plaintext_slots(&loser_mask);
+            let marginal_slots = decode_plaintext_slots(&marginal_mask);
 
             for idx in 0..PRICE_LEVELS {
                 for bit in 0..SLOT_WIDTH {
-                    let coeff_idx = idx * SLOT_WIDTH + bit;
-                    assert_eq!(winner_coeffs[coeff_idx], u64::from(idx > clearing_idx));
-                    assert_eq!(loser_coeffs[coeff_idx], u64::from(idx < clearing_idx));
-                    assert_eq!(marginal_coeffs[coeff_idx], u64::from(idx == clearing_idx));
+                    let slot_idx = idx * SLOT_WIDTH + bit;
+                    assert_eq!(winner_slots[slot_idx], u64::from(idx > clearing_idx));
+                    assert_eq!(loser_slots[slot_idx], u64::from(idx < clearing_idx));
+                    assert_eq!(marginal_slots[slot_idx], u64::from(idx == clearing_idx));
                 }
             }
-            assert!(winner_coeffs[PRICE_LEVELS * SLOT_WIDTH..]
+            assert!(winner_slots[PRICE_LEVELS * SLOT_WIDTH..]
                 .iter()
-                .all(|&coeff| coeff == 0));
-            assert!(loser_coeffs[PRICE_LEVELS * SLOT_WIDTH..]
+                .all(|&slot| slot == 0));
+            assert!(loser_slots[PRICE_LEVELS * SLOT_WIDTH..]
                 .iter()
-                .all(|&coeff| coeff == 0));
-            assert!(marginal_coeffs[PRICE_LEVELS * SLOT_WIDTH..]
+                .all(|&slot| slot == 0));
+            assert!(marginal_slots[PRICE_LEVELS * SLOT_WIDTH..]
                 .iter()
-                .all(|&coeff| coeff == 0));
+                .all(|&slot| slot == 0));
         }
     }
 
@@ -438,7 +437,7 @@ mod tests {
             &fixture.params,
             &fixture.joint_pk,
         );
-        let coeffs = threshold_decrypt_coeffs(
+        let slots = threshold_decrypt_slots(
             &ct,
             &fixture.participating,
             &fixture.sk_poly_sums,
@@ -448,7 +447,7 @@ mod tests {
         for idx in 0..PRICE_LEVELS {
             let mut decoded_qty = 0u64;
             for bit in 0..SLOT_WIDTH {
-                let raw = coeffs[idx * SLOT_WIDTH + bit];
+                let raw = slots[idx * SLOT_WIDTH + bit];
                 let count = decode_demand_slot(raw, fixture.params.plaintext());
                 decoded_qty += count * (1u64 << bit);
             }

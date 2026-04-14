@@ -149,14 +149,14 @@ mod tests {
         }
     }
 
-    fn decode_coeffs(pt: &Plaintext) -> Vec<u64> {
-        Vec::<u64>::try_decode(pt, Encoding::poly()).expect("decode demand vector")
+    fn decode_slots(pt: &Plaintext) -> Vec<u64> {
+        Vec::<u64>::try_decode(pt, Encoding::simd()).expect("decode demand vector")
     }
 
-    fn reconstruct_qty(coeffs: &[u64], level_idx: usize) -> u64 {
+    fn reconstruct_qty(slots: &[u64], level_idx: usize) -> u64 {
         let slot_width = 16usize;
         (0..slot_width)
-            .map(|bit| coeffs[level_idx * slot_width + bit] * (1u64 << bit))
+            .map(|bit| slots[level_idx * slot_width + bit] * (1u64 << bit))
             .sum()
     }
 
@@ -169,9 +169,9 @@ mod tests {
 
         for &(lots, price) in bids {
             let pt = encode_capped_demand_vector(lots, price, config, params);
-            let coeffs = decode_coeffs(&pt);
+            let slots = decode_slots(&pt);
             for (idx, value) in aggregate.iter_mut().enumerate() {
-                *value += reconstruct_qty(&coeffs, idx);
+                *value += reconstruct_qty(&slots, idx);
             }
         }
 
@@ -187,10 +187,10 @@ mod tests {
         bids.iter()
             .map(|&(lots, price)| {
                 let pt = encode_capped_demand_vector(lots, price, config, params);
-                let coeffs = decode_coeffs(&pt);
-                let at_clear = reconstruct_qty(&coeffs, clearing_idx);
+                let slots = decode_slots(&pt);
+                let at_clear = reconstruct_qty(&slots, clearing_idx);
                 let above_clear = if clearing_idx + 1 < config.price_ladder.len() {
-                    reconstruct_qty(&coeffs, clearing_idx + 1)
+                    reconstruct_qty(&slots, clearing_idx + 1)
                 } else {
                     0
                 };
@@ -204,10 +204,10 @@ mod tests {
         let params = build_params();
         let config = test_config(vec![100, 200, 300, 400, 500], 500, 1_000);
         let pt = encode_capped_demand_vector(300, 300, &config, &params);
-        let coeffs = decode_coeffs(&pt);
+        let slots = decode_slots(&pt);
 
         let quantities: Vec<u64> = (0..config.price_ladder.len())
-            .map(|idx| reconstruct_qty(&coeffs, idx))
+            .map(|idx| reconstruct_qty(&slots, idx))
             .collect();
         assert_eq!(&quantities[..5], &[300, 300, 300, 0, 0]);
     }
@@ -217,10 +217,10 @@ mod tests {
         let params = build_params();
         let config = test_config(vec![100, 200, 300, 400, 500], 500, 1_000);
         let pt = encode_capped_demand_vector(500, 400, &config, &params);
-        let coeffs = decode_coeffs(&pt);
+        let slots = decode_slots(&pt);
 
         let quantities: Vec<u64> = (0..config.price_ladder.len())
-            .map(|idx| reconstruct_qty(&coeffs, idx))
+            .map(|idx| reconstruct_qty(&slots, idx))
             .collect();
         assert_eq!(&quantities[..5], &[500, 500, 500, 500, 0]);
     }
@@ -230,10 +230,10 @@ mod tests {
         let params = build_params();
         let config = test_config(vec![100, 200, 300, 400, 500], 500, 1_000);
         let pt = encode_capped_demand_vector(1_000, 500, &config, &params);
-        let coeffs = decode_coeffs(&pt);
+        let slots = decode_slots(&pt);
 
         let quantities: Vec<u64> = (0..config.price_ladder.len())
-            .map(|idx| reconstruct_qty(&coeffs, idx))
+            .map(|idx| reconstruct_qty(&slots, idx))
             .collect();
         assert_eq!(&quantities[..5], &[500, 500, 500, 500, 500]);
     }
@@ -243,9 +243,9 @@ mod tests {
         let params = build_params();
         let config = test_config(vec![100, 200, 300, 400, 500], 500, 1_000);
         let pt = encode_capped_demand_vector(0, 500, &config, &params);
-        let coeffs = decode_coeffs(&pt);
+        let slots = decode_slots(&pt);
 
-        assert!(coeffs[..config.price_ladder.len() * 16]
+        assert!(slots[..config.price_ladder.len() * 16]
             .iter()
             .all(|&value| value == 0));
     }
@@ -340,9 +340,9 @@ mod tests {
             .collect();
 
         let pts = threshold_decrypt(&party_shares, std::slice::from_ref(&ct), &params);
-        let coeffs = decode_coeffs(&pts[0]);
+        let slots = decode_slots(&pts[0]);
         let quantities: Vec<u64> = (0..config.price_ladder.len())
-            .map(|idx| reconstruct_qty(&coeffs, idx))
+            .map(|idx| reconstruct_qty(&slots, idx))
             .collect();
         assert_eq!(&quantities[..4], &[500, 500, 500, 0]);
     }

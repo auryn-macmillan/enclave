@@ -29,16 +29,16 @@ pub fn encode_buy_demand_vector(
         "price ladder × SLOT_WIDTH exceeds polynomial degree"
     );
 
-    let mut coeffs = vec![0u64; params.degree()];
+    let mut slots = vec![0u64; params.degree()];
     for (level_idx, &ladder_price) in price_ladder.iter().enumerate() {
         if ladder_price <= max_price {
             for bit in 0..SLOT_WIDTH {
-                coeffs[level_idx * SLOT_WIDTH + bit] = ((qty >> bit) & 1) as u64;
+                slots[level_idx * SLOT_WIDTH + bit] = ((qty >> bit) & 1) as u64;
             }
         }
     }
 
-    Plaintext::try_encode(&coeffs, Encoding::poly(), params).expect("encode buy demand vector")
+    Plaintext::try_encode(&slots, Encoding::simd(), params).expect("encode buy demand vector")
 }
 
 pub fn encode_sell_supply_vector(
@@ -52,24 +52,24 @@ pub fn encode_sell_supply_vector(
         "price ladder × SLOT_WIDTH exceeds polynomial degree"
     );
 
-    let mut coeffs = vec![0u64; params.degree()];
+    let mut slots = vec![0u64; params.degree()];
     for (level_idx, &ladder_price) in price_ladder.iter().enumerate() {
         if ladder_price >= min_price {
             for bit in 0..SLOT_WIDTH {
-                coeffs[level_idx * SLOT_WIDTH + bit] = ((qty >> bit) & 1) as u64;
+                slots[level_idx * SLOT_WIDTH + bit] = ((qty >> bit) & 1) as u64;
             }
         }
     }
 
-    Plaintext::try_encode(&coeffs, Encoding::poly(), params).expect("encode sell supply vector")
+    Plaintext::try_encode(&slots, Encoding::simd(), params).expect("encode sell supply vector")
 }
 
-pub fn decode_demand_curve(coeffs: &[u64], num_levels: usize, plaintext_modulus: u64) -> Vec<u64> {
+pub fn decode_demand_curve(slots: &[u64], num_levels: usize, plaintext_modulus: u64) -> Vec<u64> {
     (0..num_levels)
         .map(|level| {
             let mut qty = 0u64;
             for bit in 0..SLOT_WIDTH {
-                let raw = coeffs[level * SLOT_WIDTH + bit];
+                let raw = slots[level * SLOT_WIDTH + bit];
                 let count = decode_demand_slot(raw, plaintext_modulus);
                 qty += count * (1u64 << bit);
             }
@@ -260,7 +260,7 @@ mod tests {
     use fhe_traits::FheDecoder;
 
     fn decode_slots(pt: &Plaintext) -> Vec<u64> {
-        Vec::<u64>::try_decode(pt, Encoding::poly()).expect("decode vector")
+        Vec::<u64>::try_decode(pt, Encoding::simd()).expect("decode vector")
     }
 
     #[test]
@@ -268,16 +268,16 @@ mod tests {
         let params = build_params();
         let ladder = vec![100, 200, 300, 400, 500];
         let pt = encode_buy_demand_vector(25, 300, &ladder, &params);
-        let coeffs = decode_slots(&pt);
+        let slots = decode_slots(&pt);
 
         for (level_idx, &price) in ladder.iter().enumerate() {
             let qty = (0..SLOT_WIDTH)
-                .map(|bit| coeffs[level_idx * SLOT_WIDTH + bit] * (1u64 << bit))
+                .map(|bit| slots[level_idx * SLOT_WIDTH + bit] * (1u64 << bit))
                 .sum::<u64>();
             let expected = if price <= 300 { 25 } else { 0 };
             assert_eq!(qty, expected, "unexpected qty at level {level_idx}");
         }
-        assert!(coeffs[ladder.len() * SLOT_WIDTH..]
+        assert!(slots[ladder.len() * SLOT_WIDTH..]
             .iter()
             .all(|&value| value == 0));
     }
@@ -287,16 +287,16 @@ mod tests {
         let params = build_params();
         let ladder = vec![100, 200, 300, 400, 500];
         let pt = encode_sell_supply_vector(40, 300, &ladder, &params);
-        let coeffs = decode_slots(&pt);
+        let slots = decode_slots(&pt);
 
         for (level_idx, &price) in ladder.iter().enumerate() {
             let qty = (0..SLOT_WIDTH)
-                .map(|bit| coeffs[level_idx * SLOT_WIDTH + bit] * (1u64 << bit))
+                .map(|bit| slots[level_idx * SLOT_WIDTH + bit] * (1u64 << bit))
                 .sum::<u64>();
             let expected = if price >= 300 { 40 } else { 0 };
             assert_eq!(qty, expected, "unexpected qty at level {level_idx}");
         }
-        assert!(coeffs[ladder.len() * SLOT_WIDTH..]
+        assert!(slots[ladder.len() * SLOT_WIDTH..]
             .iter()
             .all(|&value| value == 0));
     }

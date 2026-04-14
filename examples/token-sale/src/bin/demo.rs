@@ -258,9 +258,9 @@ fn main() {
         std::slice::from_ref(&aggregate_ct),
         &params,
     );
-    let demand_coeffs =
-        Vec::<u64>::try_decode(&demand_pts[0], Encoding::poly()).expect("decode demand");
-    let demand_curve = decode_demand_curve(&demand_coeffs, PRICE_LEVELS, params.plaintext());
+    let demand_slots =
+        Vec::<u64>::try_decode(&demand_pts[0], Encoding::simd()).expect("decode demand");
+    let demand_curve = decode_demand_curve(&demand_slots, PRICE_LEVELS, params.plaintext());
     let (clearing_idx, clearing_price) = find_clearing_price(
         &demand_curve,
         config.total_supply_lots,
@@ -294,12 +294,12 @@ fn main() {
             std::slice::from_ref(bidder_ct),
             &params,
         );
-        let bidder_coeffs =
-            Vec::<u64>::try_decode(&bidder_pts[0], Encoding::poly()).expect("decode masked bidder");
+        let bidder_slots =
+            Vec::<u64>::try_decode(&bidder_pts[0], Encoding::simd()).expect("decode masked bidder");
         let at_clearing = (0..SLOT_WIDTH)
             .map(|bit| {
                 decode_demand_slot(
-                    bidder_coeffs[clearing_idx * SLOT_WIDTH + bit],
+                    bidder_slots[clearing_idx * SLOT_WIDTH + bit],
                     params.plaintext(),
                 ) * (1u64 << bit)
             })
@@ -308,7 +308,7 @@ fn main() {
             (0..SLOT_WIDTH)
                 .map(|bit| {
                     decode_demand_slot(
-                        bidder_coeffs[(clearing_idx + 1) * SLOT_WIDTH + bit],
+                        bidder_slots[(clearing_idx + 1) * SLOT_WIDTH + bit],
                         params.plaintext(),
                     ) * (1u64 << bit)
                 })

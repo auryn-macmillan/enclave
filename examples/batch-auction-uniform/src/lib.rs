@@ -3,7 +3,7 @@
 //! # Uniform-Price Batch Auction — Threshold FHE Library
 //!
 //! A sealed-bid **uniform-price** batch auction built on threshold BFV
-//! fully-homomorphic encryption with polynomial-coefficient demand encoding.
+//! fully-homomorphic encryption with SIMD bit-decomposed demand encoding.
 //!
 //! ## Committee & Key Generation
 //!
@@ -14,10 +14,12 @@
 //!
 //! ## Encoding
 //!
-//! Each bidder encodes their `(quantity, price)` pair as a coefficient-packed
-//! **cumulative demand vector** over a public ascending price ladder. Each
-//! logical price level occupies `SLOT_WIDTH` consecutive polynomial
-//! coefficients containing a bit decomposition of the bidder quantity.
+//! Each bidder encodes their `(quantity, price)` pair as a SIMD-packed
+//! **cumulative demand vector** over a public ascending price ladder.  Each
+//! logical price level occupies `SLOT_WIDTH` consecutive SIMD slots
+//! containing a bit decomposition of the bidder quantity.  Uses
+//! `Encoding::simd()` so that multiplication is slot-wise (Hadamard),
+//! enabling ct×ct mask-multiply for privacy-preserving extraction.
 //!
 //! ## Demand Accumulation (FHE Phase — Depth 0)
 //!
@@ -43,9 +45,11 @@
 //! ## Privacy Surface
 //!
 //! The core auction reveals only the aggregate demand curve needed to derive
-//! the clearing price.  Exact per-bidder allocations can be computed from the
-//! two relevant ladder slots (`k` and `k + 1`) of each bidder's masked demand
-//! vector, without revealing the bidder's full `(quantity, price)` pair.
+//! the clearing price.  Per-bidder allocations are extracted using ct×ct
+//! mask-multiply: the committee encrypts a mask ciphertext with 1s at the
+//! target slot range and 0s elsewhere, multiplies with the bidder's
+//! ciphertext (depth 1), relinearizes, and threshold-decrypts.  Only the
+//! isolated slot values are revealed, not the bidder's full demand vector.
 
 pub use auction_bitplane_example::{
     aggregate_public_key, aggregate_sk_shares_for_party, build_eval_key_from_committee,
@@ -63,7 +67,7 @@ use std::sync::Arc;
 /// Number of discrete price levels in the public ladder.
 pub const PRICE_LEVELS: usize = 64;
 
-/// Number of polynomial coefficients used per logical price level.
+/// Number of SIMD slots used per logical price level (bit-decomposed quantity).
 pub const SLOT_WIDTH: usize = 16;
 
 /// Build an ascending public price ladder with `levels` evenly-spaced values.
@@ -87,8 +91,8 @@ pub fn build_price_ladder(min_price: u64, max_price: u64, levels: usize) -> Vec<
 
 /// Encode one bidder's `(quantity, price)` pair as a cumulative demand vector.
 ///
-/// Each logical price level `p` spans `SLOT_WIDTH` polynomial coefficients.
-/// When `price_ladder[p] <= price`, those coefficients store the bit
+/// Each logical price level `p` spans `SLOT_WIDTH` consecutive SIMD slots.
+/// When `price_ladder[p] <= price`, those slots store the bit
 /// decomposition of `qty`; otherwise the whole block is zero-filled.
 pub fn encode_demand_vector(
     qty: u64,
@@ -101,16 +105,16 @@ pub fn encode_demand_vector(
         "price ladder × SLOT_WIDTH exceeds polynomial degree"
     );
 
-    let mut coeffs = vec![0u64; params.degree()];
+    let mut slots = vec![0u64; params.degree()];
     for (level_idx, &ladder_price) in price_ladder.iter().enumerate() {
         if ladder_price <= price {
             for bit in 0..SLOT_WIDTH {
-                coeffs[level_idx * SLOT_WIDTH + bit] = ((qty >> bit) & 1) as u64;
+                slots[level_idx * SLOT_WIDTH + bit] = ((qty >> bit) & 1) as u64;
             }
         }
     }
 
-    Plaintext::try_encode(&coeffs, Encoding::poly(), params).expect("encode demand vector")
+    Plaintext::try_encode(&slots, Encoding::simd(), params).expect("encode demand vector")
 }
 
 /// Encrypt a cumulative-demand plaintext with the joint public key.
@@ -237,7 +241,7 @@ pub fn compute_allocations(
     allocations
 }
 
-/// Decode a single decrypted coefficient count, treating large values (> `t / 2`)
+/// Decode a single decrypted SIMD slot count, treating large values (> `t / 2`)
 /// as zero.
 ///
 /// BFV arithmetic is mod `t`.  A true zero can decrypt as `t − ε` due to
@@ -250,16 +254,16 @@ pub fn decode_demand_slot(raw: u64, plaintext_modulus: u64) -> u64 {
     }
 }
 
-/// Reconstruct the aggregate demand curve from decrypted polynomial coefficients.
+/// Reconstruct the aggregate demand curve from decrypted SIMD slots.
 ///
-/// Each logical price level spans `SLOT_WIDTH` consecutive coefficients.
+/// Each logical price level spans `SLOT_WIDTH` consecutive SIMD slots.
 /// The aggregate quantity at level `p` is `Σ_{j=0}^{SLOT_WIDTH-1} count[p*SLOT_WIDTH + j] * 2^j`.
-pub fn decode_demand_curve(coeffs: &[u64], num_levels: usize, plaintext_modulus: u64) -> Vec<u64> {
+pub fn decode_demand_curve(slots: &[u64], num_levels: usize, plaintext_modulus: u64) -> Vec<u64> {
     (0..num_levels)
         .map(|level| {
             let mut qty = 0u64;
             for bit in 0..SLOT_WIDTH {
-                let raw = coeffs[level * SLOT_WIDTH + bit];
+                let raw = slots[level * SLOT_WIDTH + bit];
                 let count = decode_demand_slot(raw, plaintext_modulus);
                 qty += count * (1u64 << bit);
             }
@@ -274,7 +278,7 @@ mod tests {
     use fhe_traits::FheDecoder;
 
     fn decode_slots(pt: &Plaintext) -> Vec<u64> {
-        Vec::<u64>::try_decode(pt, Encoding::poly()).expect("decode demand vector")
+        Vec::<u64>::try_decode(pt, Encoding::simd()).expect("decode demand vector")
     }
 
     #[test]
@@ -296,19 +300,19 @@ mod tests {
         let params = build_params();
         let ladder = build_price_ladder(100, 1000, 10);
         let pt = encode_demand_vector(100, 500, &ladder, &params);
-        let coeffs = decode_slots(&pt);
+        let slots = decode_slots(&pt);
 
         for (idx, &level) in ladder.iter().enumerate() {
             let expected = if level <= 500 { 100 } else { 0 };
             let qty = (0..SLOT_WIDTH)
                 .map(|bit| {
-                    decode_demand_slot(coeffs[idx * SLOT_WIDTH + bit], params.plaintext())
+                    decode_demand_slot(slots[idx * SLOT_WIDTH + bit], params.plaintext())
                         * (1u64 << bit)
                 })
                 .sum::<u64>();
             assert_eq!(qty, expected, "level {idx} mismatch at price level {level}");
         }
-        assert!(coeffs[ladder.len() * SLOT_WIDTH..]
+        assert!(slots[ladder.len() * SLOT_WIDTH..]
             .iter()
             .all(|&value| value == 0));
     }
@@ -318,12 +322,12 @@ mod tests {
         let params = build_params();
         let ladder = vec![100, 200, 300, 400, 500];
         let pt = encode_demand_vector(55, 300, &ladder, &params);
-        let coeffs = decode_slots(&pt);
+        let slots = decode_slots(&pt);
         let curve: Vec<u64> = (0..ladder.len())
             .map(|level| {
                 (0..SLOT_WIDTH)
                     .map(|bit| {
-                        decode_demand_slot(coeffs[level * SLOT_WIDTH + bit], params.plaintext())
+                        decode_demand_slot(slots[level * SLOT_WIDTH + bit], params.plaintext())
                             * (1u64 << bit)
                     })
                     .sum()
@@ -338,9 +342,9 @@ mod tests {
         let params = build_params();
         let ladder = vec![100, 200, 300, 400];
         let pt = encode_demand_vector(25, 99, &ladder, &params);
-        let coeffs = decode_slots(&pt);
+        let slots = decode_slots(&pt);
 
-        assert!(coeffs[..ladder.len() * SLOT_WIDTH]
+        assert!(slots[..ladder.len() * SLOT_WIDTH]
             .iter()
             .all(|&value| value == 0));
     }

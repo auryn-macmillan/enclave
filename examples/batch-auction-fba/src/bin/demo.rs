@@ -89,7 +89,7 @@ fn threshold_decrypt_ciphertext(
         .collect();
 
     let plaintexts = threshold_decrypt(&party_shares, std::slice::from_ref(ct), params);
-    Vec::<u64>::try_decode(&plaintexts[0], Encoding::poly()).expect("decode ciphertext")
+    Vec::<u64>::try_decode(&plaintexts[0], Encoding::simd()).expect("decode ciphertext")
 }
 
 fn decrypt_demand_curve(
@@ -98,12 +98,12 @@ fn decrypt_demand_curve(
     sk_poly_sums: &[Poly],
     params: &Arc<BfvParameters>,
 ) -> Vec<u64> {
-    let coeffs = threshold_decrypt_ciphertext(aggregate_ct, participating, sk_poly_sums, params);
+    let slots = threshold_decrypt_ciphertext(aggregate_ct, participating, sk_poly_sums, params);
     (0..PRICE_LEVELS)
         .map(|level| {
             let mut qty = 0u64;
             for bit in 0..SLOT_WIDTH {
-                let raw = coeffs[level * SLOT_WIDTH + bit];
+                let raw = slots[level * SLOT_WIDTH + bit];
                 qty += decode_demand_slot(raw, params.plaintext()) * (1u64 << bit);
             }
             qty
