@@ -16,44 +16,40 @@ This runs a 3-round simulation with 10 bidders, including order carry-forward an
 
 Three committee members run a distributed key generation protocol to create a **joint public key** without a trusted dealer. Each member samples a secret key, computes a public key share, and Shamir-splits their secret for distribution. Bidders encrypt only once to the joint key; no single member can decrypt individual orders.
 
-### 2. Encoding: cumulative demand vectors
+### 2. Encoding: multi-coefficient demand vectors
 
-Bidders encode their `(quantity, price)` pair as a step-function vector in SIMD slots 0..63. Slot `p` holds the quantity if the bidder's price is at or above price level `p`, and zero otherwise. This allows the aggregator to sum all ciphertexts into a single aggregate demand curve with zero multiplicative depth.
+Bidders encode their `(quantity, price)` pair using a high-throughput **multi-coefficient polynomial encoding** (`Encoding::poly()`). Each price level spans `SLOT_WIDTH = 16` polynomial coefficients, where each coefficient holds one bit of the quantity's binary representation. This allows for massive aggregation while maintaining a constant multiplicative depth of zero.
 
-### 3. Adjacent-difference transform: one-hot conversion
+### 3. Aggregation and clearing
 
-To support carry-forward, the aggregator homomorphically converts cumulative demand ciphertexts into **one-hot price-quantity vectors**. The transform `B_i[p] = V_i[p] - V_i[p+1]` isolates the quantity at the specific price slot. This is computed via one column rotation and a zero-guard mask to prevent cyclic wraparound, consuming zero multiplicative depth.
+The aggregator sums all active ciphertexts into an **aggregate demand curve**. Because each coefficient represents a bit-count across all bidders, the committee can threshold-decrypt this aggregate and decode the total demand at every price level using `decode_demand_curve()`. The clearing price $P^*$ is the highest price where total demand meets or exceeds supply.
 
-### 4. Aggregation and clearing
-
-The aggregator sums the one-hot ciphertexts into an **aggregate histogram**. The committee threshold-decrypts this histogram to find the clearing price $P^*$—the highest price where total demand meets or exceeds supply. Plaintext suffix-sums on the decrypted histogram recover the full demand curve.
-
-### 5. Order classification and allocation
+### 4. Order classification and allocation
 
 Using the public clearing index $k$, the committee classifies each order:
-1. **Strict winners** (price > $P^*$): Fully filled. Committee decrypts one slot for allocation reporting and drops the ciphertext.
+1. **Strict winners** (price > $P^*$): Fully filled. Committee threshold-decrypts the relevant price-level block for allocation reporting and drops the ciphertext.
 2. **Strict losers** (price < $P^*$): Unfilled. Ciphertext is carried forward untouched with zero per-order information revealed.
-3. **Marginal** (price = $P^*$): Partially filled. Committee decrypts the quantity slot, computes pro-rata in plaintext, and re-encrypts the residual.
+3. **Marginal** (price = $P^*$): Partially filled. Committee threshold-decrypts the marginal quantity block, computes pro-rata in plaintext, and re-encrypts the residual.
 
-### 6. Multi-round carry-forward
+### 5. Multi-round carry-forward
 
-FBA uses **epoch-based priority** where earlier-round orders fill first at the marginal price. The committee re-encrypts marginal residuals for the next epoch's book. Bidders never interact after their initial submission, enabling a "submit once, match eventually" workflow.
+FBA uses **epoch-based priority** where earlier-round orders fill first at the marginal price. The committee re-encrypts marginal residuals for the next epoch's book using `encrypt_residual`. Bidders never interact after their initial submission, enabling a "submit once, match eventually" workflow.
 
 ## Production considerations
 
 ### Distributed evaluation keys
 
-The adjacent-difference transform requires column rotations, which depend on a joint Galois key. This demo uses the repo's distributed eval-key MPC protocol, ensuring the committee generates rotation and relinearization keys without ever reconstructing the joint secret key.
+While the core FBA pipeline under poly-encoding uses pure ciphertext additions and threshold decryption, the repository's distributed eval-key MPC infrastructure remains fully integrated. This ensures that any additional mechanisms requiring Galois rotations or relinearization can be securely executed without ever reconstructing the joint secret key.
 
 ### Smudging noise
 
-Threshold decryption shares include **80-bit smudging noise** to protect the secret key from leakage during the multi-round process. While each operation is depth 0, the noise budget is monitored over rounds to ensure long-lived loser ciphertexts remain decryptable.
+Threshold decryption shares include **80-bit smudging noise** to protect the secret key from leakage during the multi-round process. Because the pipeline avoids depth-consuming operations like rotations and multiplications, the noise growth is minimal, allowing for a large number of carry-forward rounds.
 
 ## Project structure
 
 ```
 src/
-├── lib.rs          Core library: one-hot transform, masks, FBA allocation logic
+├── lib.rs          Core library: classification masks, allocation logic, decryption/encryption helpers
 └── bin/
     └── demo.rs     3-round FBA demo with carry-forward, cancellation, and shadow verification
 ```
@@ -62,9 +58,9 @@ src/
 
 | Parameter | Value | Notes |
 |-----------|-------|-------|
-| N (degree) | 2048 | = 2 rows of 1024 SIMD slots |
-| t (plaintext mod) | 12289 | Supports additive aggregation |
-| Moduli | 6 × 62-bit | Sufficient for rotations and multiple rounds |
+| N (degree) | 2048 | 128 max price levels with SLOT_WIDTH=16 (demo uses 64) |
+| t (plaintext mod) | 12289 | Must exceed z (bidder count) for bit-position counts |
+| Moduli | 6 × 62-bit | Sufficient for multiple rounds and slow noise growth |
 | Price levels | 64 | Discrete ladder 0..63 |
 
 ## Threshold parameters

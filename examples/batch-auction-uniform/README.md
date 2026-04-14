@@ -23,30 +23,51 @@ Each member:
 
 The public key shares are aggregated into a single **joint public key**. Bidders encrypt to this key. No single committee member knows the corresponding full secret key.
 
-### 2. Encoding: cumulative demand vectors
+### 2. Encoding: multi-coefficient demand vectors
 
-Unlike bit-plane encoding which bit-decomposes prices, this demo encodes each bid as a **cumulative demand vector**. For a public price ladder of $P=64$ levels, a bidder with bid $(q_i, price_i)$ constructs a vector where each slot $p$ contains $q_i$ if $price\_ladder[p] \le price_i$, and 0 otherwise.
+Unlike bit-plane encoding which bit-decomposes prices, this demo encodes
+each bid as a **cumulative demand polynomial**. For a public price ladder
+of $P=64$ levels, each price level uses `SLOT_WIDTH = 16` consecutive
+polynomial coefficients. A bidder with bid $(q_i, price_i)$ bit-decomposes
+their quantity $q_i$ across the 16 coefficients of each level $p$ where
+$price\_ladder[p] \le price_i$.
 
-This step function is computed in plaintext by the bidder. Each bidder then encrypts their vector into a **single BFV ciphertext** using SIMD slots.
+This multi-coefficient step function is computed in plaintext by the
+bidder using `Encoding::poly()`. Each bidder then encrypts their
+polynomial into a **single BFV ciphertext**. With $N=2048$ and $W=16$, the
+scheme supports up to 128 price levels.
 
 ### 3. Accumulation: aggregate demand (depth 0)
 
-The aggregator sums all bidder ciphertexts slot-wise. Because addition is linear under BFV, the result is an encrypted vector where each slot $p$ contains the **total aggregate demand** at that price level.
+The aggregator sums all bidder ciphertexts. Because addition is linear
+under BFV, the result is an encrypted polynomial where each 16-coefficient
+block contains the bitwise sum of demanded quantities at that price level.
+Summing bit-positions independently avoids carry propagation during FHE.
 
-Total multiplicative depth: **0**. The demand curve is computed using only homomorphic additions, requiring no rotations or relinearizations for the core accumulation.
+Total multiplicative depth: **0**. The demand curve is computed using only
+homomorphic additions, requiring no rotations or relinearizations for the
+core accumulation.
 
 ### 4. Threshold decryption (2-of-3)
 
 Any 2 of the 3 committee members can jointly decrypt ciphertexts:
 
-1. Each participating member generates **smudging noise** (see below) and computes a **decryption share**.
-2. The shares are combined via **Shamir reconstruction** to recover the plaintext.
+1. Each participating member generates **smudging noise** (see below) and
+   computes a **decryption share**.
+2. The shares are combined via **Shamir reconstruction** to recover the
+   plaintext.
 
-The committee first decrypts the aggregate demand vector to find the clearing price, then masks and decrypts individual bidder vectors to determine allocations.
+The committee first decrypts the aggregate demand polynomial to find the
+clearing price, then decrypts individual bidder polynomials to determine
+allocations.
 
 ### 5. Clearing price discovery
 
-The decrypted aggregate demand curve is searched in plaintext from highest price to lowest. The **clearing price $P^*$** is the highest price level where total demand meets or exceeds the public supply. If total demand is less than supply even at the lowest price, the auction clears at the lowest level (undersubscribed).
+The decrypted aggregate demand curve is reconstructed from the
+bit-summed coefficient blocks and searched in plaintext from highest price
+to lowest. The **clearing price $P^*$** is the highest price level where
+total demand meets or exceeds the public supply.
+ If total demand is less than supply even at the lowest price, the auction clears at the lowest level (undersubscribed).
 
 ### 6. Allocation: strict and marginal
 
@@ -55,7 +76,7 @@ Bidders are allocated based on their price relative to $P^*$:
 - **Losers** ($price_i < P^*$): Receive zero allocation.
 - **Marginal bidders** ($price_i = P^*$): Receive a pro-rata share of the remaining supply.
 
-The marginal allocation uses the **largest-remainder method** (Hamilton's method) to ensure integer fills sum exactly to the supply. Ties in fractional remainders are broken deterministically by the bidder's SIMD slot index.
+The marginal allocation uses the **largest-remainder method** (Hamilton's method) to ensure integer fills sum exactly to the supply. Ties in fractional remainders are broken deterministically by the bidder's coefficient block index.
 
 ## Comparison with Vickrey demo
 
@@ -63,7 +84,7 @@ The marginal allocation uses the **largest-remainder method** (Hamilton's method
 |---------|--------------|-------------------|
 | Ciphertexts per bidder | 64 (bit-planes) | 1 (demand vector) |
 | Multiplicative depth | 1 (ct × ct) | 0 (additions only) |
-| Core rotations | Required (reduce-tree) | None (slot-wise sum) |
+| Core rotations | Required (reduce-tree) | None (coefficient blocks) |
 | Privacy | Second price only | Clearing price + allocations |
 
 ## Production considerations
@@ -89,10 +110,10 @@ src/
 
 | Parameter | Value | Notes |
 |-----------|-------|-------|
-| N (degree) | 2048 | = max price levels (one SIMD slot each) |
-| t (plaintext mod) | 12289 | Total demand at any level must be < 6144 |
+| N (degree) | 2048 | 128 max price levels with SLOT_WIDTH=16 |
+| t (plaintext mod) | 12289 | Must exceed number of bidders z |
 | Moduli | 6 × 62-bit | Large noise margin for depth-0 additions |
-| Price levels | 64 | Discrete ladder within one BFV row |
+| Price levels | 64 | Discrete ladder within one BFV polynomial |
 
 ## Threshold parameters
 

@@ -1,7 +1,7 @@
 # Uniform-Price Batch Auction — FHE Circuit Design
 
 > **Milestone**: M1 (see `AGENTS.md`)
-> **Status**: Design complete, implementation pending
+> **Status**: Design complete, implemented
 > **Infrastructure**: Threshold BFV (2-of-3 committee), distributed DKG + eval-key MPC
 
 ## 1. Problem Statement
@@ -50,31 +50,32 @@ entire ladder fits in one BFV row half, avoiding row-crossing complexity.
 
 ### 3.2 Cumulative Demand Vector (per bidder)
 
-Bidder `i` with bid `(q_i, price_i)` constructs a plaintext vector of
-length `N = 2048`:
+Bidder `i` with bid `(q_i, price_i)` constructs a plaintext polynomial of
+degree `N = 2048`. Each price level `p` spans `SLOT_WIDTH = 16` consecutive
+coefficients. Each coefficient holds one bit of the quantity `q_i`'s
+binary representation.
 
 ```
-v_i[p] = q_i    if price_ladder[p] <= price_i
-v_i[p] = 0      if price_ladder[p] > price_i
-        (slots p >= P are always 0)
+coeff[p*16 + j] = bit_j(q_i)    if price_ladder[p] <= price_i
+coeff[p*16 + j] = 0             if price_ladder[p] > price_i
+        (for j in 0..16; levels p >= P are always 0)
 ```
 
-This is a step function: `q_i` in all slots up to and including the
-bidder's price level, then zeros. The bidder computes this **in plaintext
-before encryption** — no FHE operations needed.
+This is a multi-coefficient step function. The bidder computes this
+**in plaintext before encryption** using `Encoding::poly()`.
 
 **Example**: Price ladder `[10, 20, 30, 40, 50]`, bidder bids
 `(qty=100, price=30)`:
+100 = `0b0000000001100100`.
 
-```
-v_i = [100, 100, 100, 0, 0, 0, 0, ...]
-       p=10 p=20 p=30 p=40 p=50  (unused)
-```
+The coefficient blocks for `p=10, 20, 30` (indices `160..175`, `320..335`,
+`480..495`) will all contain `[0,0,1,0,0,1,1,0, 0,0,0,0,0,0,0,0]`.
+Blocks for `p=40, 50` will contain all zeros.
 
 ### 3.3 Encryption
 
-Each bidder encrypts `v_i` as a single BFV ciphertext using SIMD encoding
-with the joint public key. **One ciphertext per bidder.**
+Each bidder encrypts their polynomial as a single BFV ciphertext using
+`Encoding::poly()`. **One ciphertext per bidder.**
 
 ### 3.4 Accumulation
 
@@ -85,8 +86,9 @@ V = Σ_i v_i
 ```
 
 This is `n_bidders - 1` homomorphic additions (depth 0). The result `V`
-is an encrypted vector where `V[p]` = total demand at price level `p`
-(cumulative from above).
+is an encrypted polynomial where each block of 16 coefficients contains
+the bitwise sum of quantities at that price level. Summing bit-positions
+independently avoids carry propagation during FHE execution.
 
 ## 4. FHE Circuit Analysis
 
@@ -135,29 +137,26 @@ BFV arithmetic is mod `t = 12289`. The cumulative demand at any price
 level must satisfy:
 
 ```
-V[p] = Σ{q_i : price_i ≥ price_ladder[p]} < t/2 = 6144
+count_at_any_bit_position < t/2 = 6144
 ```
 
-Values above `t/2` are ambiguous with negative values / noisy zeros.
+Since each bidder contributes 0 or 1 to a specific bit position, the
+constraint simplifies to `number_of_bidders < 6144`. With `t = 12289`
+and 10 bidders in the demo, this is trivially satisfied.
 
-**Implication**: Total demand at the lowest price level (where everyone
-participates) must be < 6144. For the demo, cap individual quantities
-to reasonable ranges (e.g., 1–500) with ~10 bidders → max total ~5000.
-
-For production with larger quantities, options include:
-- Increase `t` (requires parameter change)
-- Multi-limb encoding (split quantity into low/high halves)
-- Bit-decompose quantities into multiple ciphertexts per bidder
+Unlike SIMD encoding where `Σq_i < t/2` was required, multi-coefficient
+encoding allows `Σq_i` to exceed `t`, as long as the count of bidders
+at any bit-position (0..15) doesn't overflow `t/2`.
 
 ### 4.5 Parameter Sufficiency
 
 | Parameter | Current | Needed | Verdict |
 |-----------|---------|--------|---------|
-| N (degree) | 2048 | 2048 | Sufficient (P ≤ 1024 fits in one row) |
-| t (plaintext mod) | 12289 | 12289 | Sufficient for demo (total demand < 6144) |
+| N (degree) | 2048 | 2048 | Sufficient (128 max price levels with SLOT_WIDTH=16) |
+| t (plaintext mod) | 12289 | 12289 | Sufficient (z < 6144) |
 | Moduli | 6×62-bit | 6×62-bit | Sufficient (depth 0, huge noise margin) |
-| Galois keys | 11 rotations | 0–11 | Sufficient (mostly unused) |
-| Relin key | 1 | 0–1 | Sufficient (unused unless depth-1 alloc) |
+| Galois keys | 11 rotations | 0–11 | Sufficient (unused) |
+| Relin key | 1 | 0–1 | Sufficient (unused) |
 
 **No parameter changes needed for M1.**
 
@@ -284,44 +283,29 @@ This is deterministic and publicly verifiable.
 
 ### 6.3 Settlement Modes
 
-**Mode A: Exact settlement (decrypt marginal quantities)**
+**Mode A: Exact settlement (decrypt coefficient blocks)**
 
 1. From the decrypted demand curve, compute `P*`, `D_strict`, `Q_marginal`, `R`.
-2. Threshold-decrypt each bidder's ciphertext `v_i` at slots `k` and `k+1` only.
-   - Actually: decrypt the full `v_i` for each bidder, but extract only
-     slots `k` and `k+1`. Or use a plaintext mask to zero all other slots
-     before decryption, limiting information leakage.
-3. Compute `strict_fill_i = v_i[k+1]`, `marginal_qty_i = v_i[k] - v_i[k+1]`.
+2. Threshold-decrypt each bidder's ciphertext `v_i`.
+3. Extract `strict_fill_i` from the block at `k+1` and `marginal_qty_i`
+   by subtracting `v_i[k+1]` from `v_i[k]` (block-wise decoding).
 4. Compute exact pro-rata in plaintext with deterministic rounding.
 
-**Privacy note**: Decrypting `v_i[k]` and `v_i[k+1]` reveals:
-- Whether bidder `i` is a strict winner, marginal, or loser
-- If marginal: their exact quantity at the clearing price
-This is the minimum leakage needed for exact pro-rata. Individual prices
-are not revealed (only their relation to `P*`).
+**Privacy note**: Under polynomial encoding, plaintext×ciphertext
+multiplication is polynomial convolution, not coefficient-wise. This
+means mask-multiplication (Mode A's original design) does not work for
+selective slot decryption. Instead, the full bidder ciphertext is
+threshold-decrypted.
 
-**Implementation for M1**: Use a plaintext mask that is 1 at slot `k`,
-1 at slot `k+1`, and 0 elsewhere. Multiply each bidder's ciphertext by
-this mask (ct×pt, depth 0), then threshold-decrypt. This reveals only
-the two relevant slots.
+Committee members see all coefficient blocks for each bidder, revealing
+their full bid (quantity and price level). This is a privacy trade-off
+for exact settlement in the current implementation.
 
-**Mode B: Private approximate settlement (homomorphic pro-rata)**
+**Mode B: Private approximate settlement**
 
-Apply a public scaling factor `F = R / Q_marginal` (computed in plaintext
-from the demand curve) homomorphically:
-
-```
-alloc_i = v_i[k+1] + (v_i[k] - v_i[k+1]) × F
-```
-
-This requires ct×pt multiplies (depth 0) and would reveal only the final
-allocation amount per bidder. However, `F` is a fraction — representing
-it in `Z_t` requires computing the modular inverse of `Q_marginal` mod `t`,
-which exists since `t = 12289` is prime.
-
-**Trade-off**: More private but may have rounding artifacts. For M1,
-**Mode A is recommended** — simpler, exact, and the leakage (position
-relative to clearing price) is inherent to any uniform-price auction.
+Not applicable under polynomial encoding as Hadamard product (slot-wise
+multiply) is not supported. All allocations are currently computed
+following full decryption of bidder ciphertexts (Mode A).
 
 ## 7. Protocol Flow
 
@@ -346,9 +330,9 @@ relative to clearing price) is inherent to any uniform-price auction.
 ┌─────────────┐
 │  Committee   │  5. Threshold-decrypt V → demand curve in plaintext
 │  (2-of-3)   │  6. Find clearing price P* via plaintext search
-│              │  7. Construct allocation mask for slots k, k+1
-│              │  8. For each bidder: mask v_i, threshold-decrypt
-│              │     → extract strict_fill and marginal_qty
+│              │  7. Extract clearing price index k
+│              │  8. For each bidder: threshold-decrypt v_i
+│              │     → extract blocks k and k+1 from coefficients
 │              │  9. Compute final allocations (exact pro-rata)
 └─────────────┘
 ```
@@ -360,11 +344,11 @@ relative to clearing price) is inherent to any uniform-price auction.
 | Bid type | Single scalar (price) | (quantity, price) pair |
 | Encoding | 64 bitplane ciphertexts/bidder | 1 cumulative-demand ciphertext/bidder |
 | FHE computation | Tally per bitplane (depth 1) | Sum across bidders (depth 0) |
-| Rotations used | 11 per bitplane × 64 = 704 | 0 for core; optional for allocation |
-| Relin used | Yes (64 relinearizations) | No (for core computation) |
-| Depth consumed | 1 | 0 (core), optionally 0 (allocation via ct×pt) |
-| Decryption surface | 64 tally ciphertexts + winner's bid | 1 aggregate vector + n×1 masked bidder vectors |
-| Privacy | Individual bids never decrypted | Individual (qty, price) pairs never revealed |
+| Rotations used | 11 per bitplane × 64 = 704 | 0 (polynomial coefficient blocks) |
+| Relin used | Yes (64 relinearizations) | No (depth 0 sum) |
+| Depth consumed | 1 | 0 |
+| Decryption surface | 64 tally ciphertexts + winner's bid | 1 aggregate polynomial + n bidder polynomials |
+| Privacy | Individual bids never decrypted | (qty, price) revealed during per-bidder decryption |
 | Complexity | O(BID_BITS × n) rotations | O(n) additions |
 
 ## 9. Ciphertext Count and Performance
@@ -373,8 +357,7 @@ relative to clearing price) is inherent to any uniform-price auction.
 |-----------|-------|-------|
 | Bidder ciphertexts | n | One per bidder |
 | Aggregate demand | 1 | Sum of all bidder ciphertexts |
-| Masked bidder vectors | n | For allocation extraction |
-| **Total threshold decryptions** | **1 + n** | Demand curve + per-bidder allocation |
+| **Total threshold decryptions** | **1 + n** | Demand curve + per-bidder vectors |
 
 For 10 bidders: 11 threshold decryptions (vs. 64 + 64 = 128 for Vickrey).
 Significantly lighter.
@@ -388,8 +371,8 @@ Significantly lighter.
 | Single bidder | Clearing at their price; full fill up to supply |
 | Quantity exceeds supply | Standard marginal pro-rata with largest-remainder rounding |
 | Zero quantity bid | Valid; contributes nothing to demand curve |
-| Demand curve wraps mod t | **Bug**: must enforce `Σq_i < t/2` |
-| Equal fractional remainders | Tiebreak by lower slot index (deterministic, see §6.2) |
+| Bit-position wraps mod t | MUST enforce `number_of_bidders < t/2 = 6144` |
+| Equal fractional remainders | Tiebreak by lower coefficient block index (see §6.2) |
 | R = 0 (exact fill at clearing) | All marginal bidders get 0 marginal allocation; strict winners only |
 
 ## 11. Implementation Plan

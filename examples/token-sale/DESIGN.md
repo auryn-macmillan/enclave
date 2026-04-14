@@ -1,7 +1,7 @@
 # Capped Token Sale (Fair Launch) — FHE Circuit Design
 
 > **Milestone**: M3 (see `AGENTS.md`)
-> **Status**: Design complete, implementation pending
+> **Status**: Design complete, implemented
 > **Infrastructure**: Threshold BFV (2-of-3 committee), distributed DKG + eval-key MPC
 
 ## 1. Problem Statement
@@ -27,9 +27,9 @@ To ensure fairness and prevent whale dominance, the sale enforces a public
 cap `K` on the number of lots per bidder.
 
 **Solution**:
-1. **Lot-units**: All quantities are expressed in discrete lots (e.g., 1 lot = 100 tokens). This simplifies allocation to integer units and naturally fits the SIMD slot range.
-2. **Client-side clamping**: Instead of expensive encrypted comparisons, the cap `K` is enforced by the client-side encoding function. If a bidder attempts to request `Q > K` lots, the encoder produces a demand vector for exactly `K` lots.
-3. **Cumulative Demand Vector**: Same as M1, each bidder encrypts a step function representing their demand at each price level. Summing these produces the aggregate demand curve with **zero multiplicative depth**.
+30: 1. **Lot-units**: All quantities are expressed in discrete lots (e.g., 1 lot = 100 tokens). This simplifies allocation to integer units and naturally fits the multi-coefficient polynomial encoding.
+31: 2. **Client-side clamping**: Instead of expensive encrypted comparisons, the cap `K` is enforced by the client-side encoding function. If a bidder attempts to request `Q > K` lots, the encoder produces a demand vector for exactly `K` lots.
+32: 3. **Cumulative Demand Vector**: Same as M1, each bidder encrypts a step function representing their demand at each price level. Summing these produces the aggregate demand curve with **zero multiplicative depth**. Uses multi-coefficient polynomial encoding to handle high-throughput aggregation.
 
 ## 3. Encoding Scheme
 
@@ -46,24 +46,33 @@ For the demo, `P = 64`.
 ### 3.2 Capped Cumulative Demand Vector (per bidder)
 
 Bidder `i` with bid `(q_i, price_i)` and public cap `K` constructs a plaintext
-vector of length `N = 2048`:
+polynomial using `Encoding::poly()`. Each price level spans `SLOT_WIDTH=16`
+consecutive polynomial coefficients.
 
 ```
 clamped_qty = min(q_i, K)
-v_i[p] = clamped_qty    if price_ladder[p] <= price_i
-v_i[p] = 0              if price_ladder[p] > price_i
-        (slots p >= P are always 0)
+```
+
+The `clamped_qty` is bit-decomposed across the 16 coefficients for each price level
+`p` where `price_ladder[p] <= price_i`.
+
+```
+v_i[p*SLOT_WIDTH + j] = bit_j(clamped_qty)   if price_ladder[p] <= price_i
+v_i[p*SLOT_WIDTH + j] = 0                    if price_ladder[p] > price_i
 ```
 
 The clamping happens in plaintext before encryption. This ensures the
 aggregate demand curve accurately reflects only valid (capped) demand.
+Multi-coefficient encoding allows for massive bidder aggregation without
+overflowing the BFV plaintext modulus `t`.
 
 ### 3.3 Comparison: M1 vs M3
 
 | Feature | M1 (Uniform-Price) | M3 (Capped Token Sale) |
 |---------|--------------------|------------------------|
 | Unit | Arbitrary quantity | Discrete Lots (e.g., 100 tokens) |
-| Max Quantity | Limited by `t/2` only | Public cap `K` per bidder |
+| Max Quantity | Limited by `t` (bidder count) | Public cap `K` per bidder |
+| Encoding | Multi-coefficient Poly (SLOT_WIDTH=16) | Multi-coefficient Poly (SLOT_WIDTH=16) |
 | Cap Enforcement | None | Client-side (at encoding time) |
 | Phases | Single-phase settlement | Commitment → Settlement |
 | Collateral | Not specified | Max-price × requested_lots |
@@ -92,14 +101,23 @@ The system can comfortably handle thousands of additions.
 
 ### 4.3 Plaintext Range Constraint
 
-The aggregate demand at any price level must satisfy:
+The multi-coefficient encoding ensures that each coefficient position only
+holds a count of bidders (0 or 1) per bit position. For `n` bidders, each
+coefficient `c` in the aggregate demand curve satisfies:
 
 ```
-V[p] = Σ clamped_qty_i < t/2 = 6144
+V[c] = Σ bit_j(clamped_qty_i) <= n
 ```
 
-With `n` bidders and cap `K`, we must ensure `n × K < 6144`.
-For the demo: `n = 10`, `K = 500` → `max_demand = 5000 < 6144`. ✓
+Since the BFV plaintext modulus `t = 12289`, we only need to ensure:
+
+```
+t > n (number of bidders)
+```
+
+This supports thousands of bidders regardless of the aggregate demand magnitude.
+The old constraint about `aggregate_demand < t/2` no longer applies because
+bits are independent and don't carry over between coefficients.
 
 ## 5. Protocol Flow
 
@@ -117,9 +135,10 @@ The protocol operates in two distinct phases to ensure commitment integrity.
 1. **Accumulation**: Aggregator sums all encrypted `v_i` to get `V`.
 2. **Price Discovery**: Committee threshold-decrypts `V`. Search for clearing price `P*` where `demand >= total_supply_lots`.
 3. **Allocation Extraction**:
-   - For each bidder, the committee masks `v_i` to extract slots at `P*` and `P* + 1`.
-   - Threshold-decrypt masked vectors.
+   - For each bidder, the committee threshold-decrypts their full ciphertext. Masking individual coefficients does not work under polynomial encoding due to the convolution property of pt×ct multiplication.
+   - The committee reads the coefficient blocks at `P*` and `P* + 1` directly from the decrypted plaintext.
 4. **Finalization**:
+   - Use `decode_demand_slot` from M1 to reconstruct `clamped_qty_i` from the bit-decomposed coefficients.
    - Compute exact lot allocations via largest-remainder rounding.
    - **Payment**: `clearing_price × allocated_lots`.
    - **Refund**: `collateral - payment`.
@@ -146,11 +165,18 @@ The protocol operates in two distinct phases to ensure commitment integrity.
 
 ### Phase 2: Core library (`src/lib.rs`)
 1. **`SaleConfig`**: Struct holding `lot_size`, `cap_K`, `total_supply_lots`, `price_ladder`, and `vesting_metadata`.
-2. **`encode_capped_demand_vector`**: Implements `min(q_i, K)` clamping and step-function generation.
+2. **`encode_capped_demand_vector`**: Implements `min(q_i, K)` clamping and bit-decomposition across polynomial coefficients using `Encoding::poly()`.
 3. **`compute_settlement`**: Functions for `compute_payment` and `compute_refund` based on clearing results.
-4. **Shared logic**: Re-export accumulation and threshold decryption helpers from shared infra.
+4. **Shared logic**: Re-exports `SLOT_WIDTH`, `decode_demand_curve`, and `decode_demand_slot` from the `batch_auction_uniform_example` crate (M1).
 
 **QA**: Unit tests for `encode_capped_demand_vector` verify that any input `> K` results in a vector for `K`.
+5. **Re-exports**:
+   ```rust
+   pub use batch_auction_uniform_example::{
+       accumulate_demand, build_price_ladder, compute_allocations, decode_demand_curve,
+       decode_demand_slot, find_clearing_price, PRICE_LEVELS, SLOT_WIDTH,
+   };
+   ```
 
 ### Phase 3: Demo binary (`src/bin/demo.rs`)
 - 10 bidders.

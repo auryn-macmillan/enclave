@@ -18,20 +18,20 @@ Three committee members run a distributed key generation protocol to establish a
 
 ### 2. Encoding: Two-Sided Step Functions
 
-The exchange uses a public grid of 64 discrete price levels. Participants encode their orders into BFV SIMD slots corresponding to these price levels:
+The exchange uses a public grid of 64 discrete price levels. Participants encode their orders using **multi-coefficient polynomial encoding** (`SLOT_WIDTH = 16`, `Encoding::poly()`). Each price level spans 16 polynomial coefficients, and the quantity is bit-decomposed across these coefficients:
 
-*   **Buyers** (Demand): Encode a **descending step function**. A buyer with `(quantity, max_price)` places `quantity` in all slots where the price level is less than or equal to `max_price`, and 0 elsewhere.
-*   **Sellers** (Supply): Encode an **ascending step function**. A seller with `(quantity, min_price)` places `quantity` in all slots where the price level is greater than or equal to `min_price`, and 0 elsewhere.
+*   **Buyers** (Demand): Encode a **descending step function**. A buyer with `(quantity, max_price)` bit-decomposes their quantity into the coefficient blocks for all price levels where the level is less than or equal to `max_price`.
+*   **Sellers** (Supply): Encode an **ascending step function**. A seller with `(quantity, min_price)` bit-decomposes their quantity into the coefficient blocks for all price levels where the level is greater than or equal to `min_price`.
 
-This encoding moves the comparison logic into the client-side pre-processing phase, allowing the matching engine to operate with additive FHE.
+This encoding allows for high-throughput aggregation without carries between coefficients and keeps the circuit at **multiplicative depth 0**.
 
 ### 3. Accumulation: Curve Summation
 
-The aggregator maintains two separate encrypted accumulators. It sums all buyer ciphertexts into an aggregate **buy demand curve** and all seller ciphertexts into an aggregate **sell supply curve**. Because BFV addition is native, this accumulation happens at **multiplicative depth 0**.
+The aggregator maintains two separate encrypted accumulators. It sums all buyer ciphertexts into an aggregate **buy demand curve** and all seller ciphertexts into an aggregate **sell supply curve**. Because BFV addition is native and coefficient-wise, this accumulation happens at **multiplicative depth 0**.
 
 ### 4. Threshold Decryption of Curves
 
-The committee threshold-decrypts both aggregate curves. Since these curves only reveal the total volume demanded or supplied at each price level, the privacy of individual participant prices and quantities is preserved.
+The committee threshold-decrypts both aggregate curves. Since these curves only reveal the total bit-counts at each coefficient position across price levels, individual participant quantities and prices stay private.
 
 ### 5. Clearing Price Computation
 
@@ -47,7 +47,7 @@ Once the clearing price index `k` is found, the committee determines which side 
 *   If `demand > supply` at the clearing price, buyers are rationed.
 *   If `supply > demand`, sellers are rationed.
 
-To extract per-participant quantities, the committee threshold-decrypts masked versions of the original input ciphertexts. Buyers use slots `(k, k+1)` to distinguish strict winners from marginal demand. Sellers use slots `(k, k-1)` (or just `k` at the lowest price). Pro-rata allocation with largest-remainder rounding is applied only to the rationed side.
+Under multi-coefficient encoding, masking individual ciphertexts with point-wise multiplication doesn't work. Instead, the committee threshold-decrypts the full ciphertexts of relevant participants and extracts the needed coefficient blocks. Buyers use blocks at price levels `(k, k+1)` to distinguish strict winners from marginal demand. Sellers use blocks at price levels `(k, k-1)` (or just `k` at the lowest price). Pro-rata allocation with largest-remainder rounding is applied only to the rationed side.
 
 ## Production considerations
 
@@ -76,8 +76,8 @@ src/
 
 | Parameter | Value | Notes |
 |-----------|-------|-------|
-| N (degree) | 2048 | 2048 SIMD slots |
-| t (plaintext mod) | 12289 | Sum of quantities must be < 6144 |
+| N (degree) | 2048 | 128 max price levels with SLOT_WIDTH=16 (demo uses 64) |
+| t (plaintext mod) | 12289 | Must exceed max(z_buy, z_sell) — not aggregate quantity |
 | Moduli | 6 × 62-bit | Sufficient for rotations and masking |
 | Price levels | 64 | Discrete price grid size |
 
