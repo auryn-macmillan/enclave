@@ -2,11 +2,11 @@
 
 use batch_auction_uniform_example::{
     accumulate_demand, aggregate_public_key, aggregate_sk_shares_for_party,
-    build_eval_key_from_committee, build_params, build_price_ladder, compute_allocations,
-    compute_decryption_shares, decode_demand_curve, decode_demand_slot, encode_demand_vector,
-    encrypt_demand, find_clearing_price, generate_crp, generate_eval_key_root_seed,
-    generate_smudging_noise, member_keygen, threshold_decrypt, COMMITTEE_N, PRICE_LEVELS,
-    SLOT_WIDTH,
+    build_eval_key_from_committee, build_extraction_mask, build_params, build_price_ladder,
+    compute_allocations, compute_decryption_shares, decode_demand_curve, decode_demand_slot,
+    encode_demand_vector, encrypt_demand, find_clearing_price, generate_crp,
+    generate_eval_key_root_seed, generate_smudging_noise, mask_multiply, member_keygen,
+    threshold_decrypt, COMMITTEE_N, PRICE_LEVELS, SLOT_WIDTH,
 };
 use fhe::bfv::Encoding;
 use fhe_traits::FheDecoder;
@@ -176,7 +176,7 @@ fn main() {
         .collect();
 
     let member_sk_refs: Vec<&_> = members.iter().map(|m| &m.sk).collect();
-    let (_eval_key, _relin_key) =
+    let (_eval_key, relin_key) =
         build_eval_key_from_committee(&member_sk_refs, &params, &eval_key_root_seed);
     println!("The committee generates distributed Galois and relinearization keys without reconstructing the joint secret key.");
     println!("  Galois keys (11 rotations) and a relinearization key are produced via distributed");
@@ -301,21 +301,27 @@ fn main() {
     );
     println!();
     println!("  The committee now needs each bidder's quantity at and above the clearing price");
-    println!("  to compute allocations. They threshold-decrypt each per-bidder ciphertext.");
-    println!("  In production, they would ct*ct Hadamard mask-multiply (encrypt a mask with 1s");
-    println!("  at the clearing-level SIMD slots, multiply at depth 1, relinearize) so that");
-    println!("  only the target slot blocks are revealed. In this demo, the full ciphertext is");
-    println!("  decrypted and only the relevant SIMD slot blocks at the clearing level are read.");
+    println!("  to compute allocations. For each bidder ciphertext, they encrypt a SIMD mask");
+    println!("  with 1s only at the clearing-level slot blocks, ct*ct Hadamard-multiply at");
+    println!("  depth 1, relinearize, and threshold-decrypt only that masked result.");
     println!();
+
+    let target_levels = if clearing_idx + 1 < PRICE_LEVELS {
+        vec![clearing_idx, clearing_idx + 1]
+    } else {
+        vec![clearing_idx]
+    };
+    let extraction_mask = build_extraction_mask(&target_levels, &params);
 
     let mut bidder_slot_values = Vec::with_capacity(per_bidder_cts.len());
     for bidder_ct in &per_bidder_cts {
+        let masked_ct = mask_multiply(&extraction_mask, bidder_ct, &joint_pk, &relin_key);
         let party_bidder_shares: Vec<(usize, Vec<_>)> = participating
             .iter()
             .map(|&i| {
                 let smudging = generate_smudging_noise(&params, 1);
                 let shares = compute_decryption_shares(
-                    std::slice::from_ref(bidder_ct),
+                    std::slice::from_ref(&masked_ct),
                     &sk_poly_sums[i],
                     &smudging,
                     &params,
@@ -326,7 +332,7 @@ fn main() {
 
         let bidder_pts = threshold_decrypt(
             &party_bidder_shares,
-            std::slice::from_ref(bidder_ct),
+            std::slice::from_ref(&masked_ct),
             &params,
         );
         let bidder_pt = &bidder_pts[0];

@@ -58,7 +58,7 @@ pub use auction_bitplane_example::{
     COMMITTEE_N, SLOTS, SMUDGING_LAMBDA,
 };
 
-use fhe::bfv::{BfvParameters, Ciphertext, Encoding, Plaintext, PublicKey};
+use fhe::bfv::{BfvParameters, Ciphertext, Encoding, Plaintext, PublicKey, RelinearizationKey};
 use fhe_traits::{FheEncoder, FheEncrypter};
 use rand::rngs::OsRng;
 use std::cmp::Reverse;
@@ -125,6 +125,40 @@ pub fn encrypt_demand(pt: &Plaintext, pk: &PublicKey) -> Ciphertext {
 /// Add one bidder's encrypted demand into the running global demand curve.
 pub fn accumulate_demand(global: &mut Ciphertext, contribution: &Ciphertext) {
     *global = &*global + contribution;
+}
+
+/// Build a SIMD mask plaintext with 1s at the specified price-level slot blocks.
+///
+/// For each level index in `target_levels`, the `SLOT_WIDTH` consecutive SIMD
+/// slots are set to 1.  All other slots are zero.
+pub fn build_extraction_mask(target_levels: &[usize], params: &Arc<BfvParameters>) -> Plaintext {
+    let mut slots = vec![0u64; params.degree()];
+    for &level in target_levels {
+        for bit in 0..SLOT_WIDTH {
+            slots[level * SLOT_WIDTH + bit] = 1;
+        }
+    }
+    Plaintext::try_encode(&slots, Encoding::simd(), params).expect("encode extraction mask")
+}
+
+/// Encrypt a mask plaintext, Hadamard-multiply with the target ciphertext, and
+/// relinearize — isolating only the target SIMD slot blocks.
+///
+/// The mask is encrypted under the joint public key so that the multiply is
+/// ct × ct (depth 1).  After relinearization, the result can be threshold-
+/// decrypted to reveal only the masked slot values.
+pub fn mask_multiply(
+    mask: &Plaintext,
+    target: &Ciphertext,
+    pk: &PublicKey,
+    relin_key: &RelinearizationKey,
+) -> Ciphertext {
+    let mask_ct = pk.try_encrypt(mask, &mut OsRng).expect("encrypt mask");
+    let mut result = &mask_ct * target;
+    relin_key
+        .relinearizes(&mut result)
+        .expect("relinearize after mask multiply");
+    result
 }
 
 /// Find the clearing price by scanning the demand curve from high to low.

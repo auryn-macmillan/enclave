@@ -11,7 +11,7 @@ pub use batch_auction_uniform_example::{
     encode_demand_vector, encrypt_demand, find_clearing_price, PRICE_LEVELS, SLOT_WIDTH,
 };
 
-use fhe::bfv::{BfvParameters, Ciphertext, Encoding, Plaintext, PublicKey};
+use fhe::bfv::{BfvParameters, Ciphertext, Encoding, Plaintext, PublicKey, RelinearizationKey};
 use fhe_math::rq::Poly;
 use fhe_traits::{FheDecoder, FheEncoder, FheEncrypter};
 use rand::rngs::OsRng;
@@ -119,10 +119,6 @@ pub fn build_classification_masks(
     )
 }
 
-pub fn apply_mask(ct: &Ciphertext, mask: &Plaintext) -> Ciphertext {
-    ct * mask
-}
-
 pub fn decrypt_demand_slot_qty(
     ct: &Ciphertext,
     mask: &Plaintext,
@@ -130,19 +126,25 @@ pub fn decrypt_demand_slot_qty(
     participating: &[usize],
     sk_poly_sums: &[Poly],
     params: &Arc<BfvParameters>,
+    pk: &PublicKey,
+    relin_key: &RelinearizationKey,
 ) -> u64 {
     assert!(
         level_idx * SLOT_WIDTH + SLOT_WIDTH <= params.degree(),
         "level index out of range"
     );
-    let _ = mask;
+    let mask_ct = pk.try_encrypt(mask, &mut OsRng).expect("encrypt mask");
+    let mut masked = &mask_ct * ct;
+    relin_key
+        .relinearizes(&mut masked)
+        .expect("relinearize after mask multiply");
 
     let party_shares: Vec<(usize, Vec<_>)> = participating
         .iter()
         .map(|&i| {
             let smudging = generate_smudging_noise(params, 1);
             let shares = compute_decryption_shares(
-                std::slice::from_ref(ct),
+                std::slice::from_ref(&masked),
                 &sk_poly_sums[i],
                 &smudging,
                 params,
@@ -151,7 +153,7 @@ pub fn decrypt_demand_slot_qty(
         })
         .collect();
 
-    let plaintexts = threshold_decrypt(&party_shares, std::slice::from_ref(ct), params);
+    let plaintexts = threshold_decrypt(&party_shares, std::slice::from_ref(&masked), params);
     let slots = Vec::<u64>::try_decode(&plaintexts[0], Encoding::simd()).expect("decode slots");
 
     let mut qty = 0u64;
@@ -284,6 +286,7 @@ mod tests {
     struct TestFixture {
         params: Arc<BfvParameters>,
         joint_pk: PublicKey,
+        relin_key: RelinearizationKey,
         sk_poly_sums: Vec<Poly>,
         price_ladder: Vec<u64>,
         participating: [usize; 2],
@@ -310,10 +313,15 @@ mod tests {
         let sk_poly_sums: Vec<_> = (0..COMMITTEE_N)
             .map(|i| aggregate_sk_shares_for_party(&all_sk_shares, i, &params))
             .collect();
+        let eval_key_root_seed = generate_eval_key_root_seed();
+        let member_sk_refs: Vec<&_> = members.iter().map(|member| &member.sk).collect();
+        let (_, relin_key) =
+            build_eval_key_from_committee(&member_sk_refs, &params, &eval_key_root_seed);
 
         TestFixture {
             params,
             joint_pk,
+            relin_key,
             sk_poly_sums,
             price_ladder: build_price_ladder(100, 1_000, PRICE_LEVELS),
             participating: [0, 1],
@@ -474,6 +482,8 @@ mod tests {
             &fixture.participating,
             &fixture.sk_poly_sums,
             &fixture.params,
+            &fixture.joint_pk,
+            &fixture.relin_key,
         );
 
         assert_eq!(recovered, qty);

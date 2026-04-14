@@ -58,8 +58,9 @@ pub use auction_bitplane_example::{
 };
 
 pub use batch_auction_uniform_example::{
-    accumulate_demand, build_price_ladder, compute_allocations, decode_demand_curve,
-    decode_demand_slot, find_clearing_price, PRICE_LEVELS, SLOT_WIDTH,
+    accumulate_demand, build_extraction_mask, build_price_ladder, compute_allocations,
+    decode_demand_curve, decode_demand_slot, find_clearing_price, mask_multiply, PRICE_LEVELS,
+    SLOT_WIDTH,
 };
 
 use batch_auction_uniform_example::encode_demand_vector;

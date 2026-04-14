@@ -9,9 +9,10 @@ use batch_exchange_example::{
     generate_smudging_noise, member_keygen, threshold_decrypt, COMMITTEE_N, PRICE_LEVELS,
     SLOT_WIDTH,
 };
-use fhe::bfv::{BfvParameters, Ciphertext, Encoding, Plaintext};
+use fhe::bfv::{BfvParameters, Ciphertext, Encoding, Plaintext, PublicKey, RelinearizationKey};
 use fhe_math::rq::Poly;
-use fhe_traits::{FheDecoder, FheEncoder};
+use fhe_traits::{FheDecoder, FheEncoder, FheEncrypter};
+use rand::rngs::OsRng;
 use std::sync::Arc;
 
 const BUYER_NAMES: [&str; 5] = ["Alice", "Bob", "Charlie", "Dave", "Eve"];
@@ -92,16 +93,24 @@ fn decrypt_curve(
 fn decrypt_masked_slots(
     ct: &Ciphertext,
     mask_pt: &Plaintext,
+    pk: &PublicKey,
+    relin_key: &RelinearizationKey,
     participating: &[usize],
     sk_poly_sums: &[Poly],
     params: &Arc<BfvParameters>,
 ) -> Vec<u64> {
+    let mask_ct = pk.try_encrypt(mask_pt, &mut OsRng).expect("encrypt mask");
+    let mut masked = &mask_ct * ct;
+    relin_key
+        .relinearizes(&mut masked)
+        .expect("relinearize after mask multiply");
+
     let party_shares: Vec<(usize, Vec<_>)> = participating
         .iter()
         .map(|&i| {
             let smudging = generate_smudging_noise(params, 1);
             let shares = compute_decryption_shares(
-                std::slice::from_ref(ct),
+                std::slice::from_ref(&masked),
                 &sk_poly_sums[i],
                 &smudging,
                 params,
@@ -109,15 +118,9 @@ fn decrypt_masked_slots(
             (i + 1, shares)
         })
         .collect();
-    let pts = threshold_decrypt(&party_shares, std::slice::from_ref(ct), params);
-    let slots = Vec::<u64>::try_decode(&pts[0], Encoding::simd()).expect("decode masked slots");
-    let mask_slots = Vec::<u64>::try_decode(mask_pt, Encoding::simd()).expect("decode mask");
+    let pts = threshold_decrypt(&party_shares, std::slice::from_ref(&masked), params);
 
-    slots
-        .into_iter()
-        .zip(mask_slots)
-        .map(|(slot, mask)| slot * mask)
-        .collect()
+    Vec::<u64>::try_decode(&pts[0], Encoding::simd()).expect("decode masked slots")
 }
 
 fn main() {
@@ -162,7 +165,7 @@ fn main() {
         .map(|i| aggregate_sk_shares_for_party(&all_sk_shares, i, &params))
         .collect();
     let member_sk_refs: Vec<&_> = members.iter().map(|member| &member.sk).collect();
-    let (_eval_key, _relin_key) =
+    let (_eval_key, relin_key) =
         build_eval_key_from_committee(&member_sk_refs, &params, &eval_key_root_seed);
     println!("The committee generates distributed evaluation keys without reconstructing the joint secret key.");
     println!("Galois keys and a relinearization key are generated via distributed MPC. The full joint secret key is never reconstructed.");
@@ -265,8 +268,8 @@ fn main() {
         "  ✅ Aggregate sell supply at clearing: {}",
         format_quantity(sell_supply[clearing_idx])
     );
-    println!("To determine per-participant allocations, the committee decrypts targeted SIMD slot blocks from each participant's ciphertext. Buyers need blocks at the clearing price (k) and one level above (k+1) to distinguish marginal from strict winners. Sellers need blocks at k and one level below (k-1). The plaintext mask applied post-decryption isolates only those slots.");
-    println!("In production, the committee would instead encrypt a mask ciphertext with 1s at the target SIMD positions, Hadamard-multiply (depth 1), relinearize, and threshold-decrypt — revealing only the masked slot values, not the full ciphertext.");
+    println!("To determine per-participant allocations, the committee extracts targeted SIMD slot blocks from each participant's ciphertext. Buyers need blocks at the clearing price (k) and one level above (k+1) to distinguish marginal from strict winners. Sellers need blocks at k and one level below (k-1).");
+    println!("The committee now encrypts a SIMD mask with 1s at the target positions, Hadamard-multiplies it with the participant ciphertext (depth 1), relinearizes, and threshold-decrypts only the masked result.");
 
     let mut buyer_mask_slots = vec![0u64; params.degree()];
     for bit in 0..SLOT_WIDTH {
@@ -294,6 +297,8 @@ fn main() {
             let slots = decrypt_masked_slots(
                 &order.ct,
                 &buyer_mask_pt,
+                &joint_pk,
+                &relin_key,
                 &participating,
                 &sk_poly_sums,
                 &params,
@@ -326,6 +331,8 @@ fn main() {
             let slots = decrypt_masked_slots(
                 &order.ct,
                 &seller_mask_pt,
+                &joint_pk,
+                &relin_key,
                 &participating,
                 &sk_poly_sums,
                 &params,
@@ -374,7 +381,7 @@ fn main() {
             format_quantity(*allocation)
         );
     }
-    println!("The committee saw: (1) aggregate buy and sell curves, (2) each buyer's quantity at levels k and k+1, (3) each seller's quantity at levels k and k-1. They never saw: reservation prices, full demand/supply vectors, or quantities at non-adjacent levels.");
+    println!("The committee saw: (1) aggregate buy and sell curves, (2) masked decryptions revealing each buyer's quantity at levels k and k+1, (3) masked decryptions revealing each seller's quantity at levels k and k-1. They never saw: reservation prices, full demand/supply vectors, or quantities at non-adjacent levels.");
 
     act("Act 5 — Shadow Verification");
     let expected_buy_curve = shadow_buy_curve(&buyer_orders, &price_ladder);
