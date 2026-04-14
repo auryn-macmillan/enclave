@@ -147,6 +147,7 @@ fn run_round(
     println!(
         "The committee sums the active cumulative demand ciphertexts directly for this round."
     );
+    println!("Homomorphic addition sums SIMD slots independently (Hadamard). Bit-position counts stay within t=12289, so no overflow. Depth remains 0.");
 
     let aggregate_ct = book
         .iter()
@@ -255,6 +256,7 @@ fn run_round(
         "  ✅ Aggregate demand at clearing: {}",
         format_quantity(demand_curve[clearing_idx])
     );
+    println!("To compute allocations, the committee classifies each order by its price relative to the clearing level. For strict winners (price > P*), it threshold-decrypts only the SIMD slot block at the order's price level to confirm the quantity. For marginal orders (price = P*), it decrypts the clearing-level slot block for pro-rata. Strict losers are carried forward with zero information revealed — their ciphertexts pass through untouched.");
 
     let allocation_map: HashMap<usize, u64> = fhe_allocations.iter().copied().collect();
 
@@ -315,6 +317,7 @@ fn run_round(
             println!("     • {name:<7} carries {}", format_quantity(qty));
         }
     }
+    println!("Marginal residuals are re-encrypted as fresh ciphertexts under the joint public key. Strict losers' original ciphertexts persist, preserving all privacy. Each decryption share includes 80-bit smudging noise to protect the joint secret key across rounds.");
 
     RoundReport {
         round,
@@ -336,11 +339,16 @@ fn main() {
     println!(
         "Here the bidders submit once, and the committee carries forward residuals without asking them to re-encrypt."
     );
+    println!(
+        "The committee manages residual ciphertexts across epochs using the same threshold BFV infrastructure — re-encrypting partial fills under the joint public key without ever seeing the underlying plaintext quantities."
+    );
 
     let params = build_params();
 
     act("Act 2 — The Setup");
     println!("Three independent parties jointly create one BFV lattice encryption key.");
+    println!("Each member samples a degree-2048 BFV secret-key polynomial, derives a public-key share from the shared Common Random Polynomial (CRP), and Shamir-splits their secret key into shares.");
+    println!("The joint public key aggregates all shares. Ciphertexts encrypted under it require ≥2 members' Shamir-reconstructed key shares to decrypt.");
     println!("No single party can decrypt alone — at least 2 of 3 must cooperate.");
 
     let crp = generate_crp(&params);
@@ -375,6 +383,7 @@ fn main() {
     let (_eval_key, _relin_key) =
         build_eval_key_from_committee(&member_sk_refs, &params, &eval_key_root_seed);
     println!("The committee generates distributed Galois and relinearization keys without reconstructing the joint secret key.");
+    println!("Galois keys (for SIMD slot rotations) and a relinearization key (for post-multiply noise control) are produced via distributed MPC — the full joint secret key is never reconstructed.");
 
     let price_ladder = build_price_ladder(100, 1_000, PRICE_LEVELS);
     let low_price = price_ladder[20];
@@ -404,6 +413,7 @@ fn main() {
         &mut state, &mut book, NAMES[4], 4, 60, low_price, &params, &joint_pk,
     );
     println!("Alice–Eve submit into the first batch window.");
+    println!("Each order is encoded as a SIMD bit-decomposed cumulative demand vector (Encoding::simd()): 64 price levels × 16 bits = 1024 active SIMD slots per ciphertext. For each level where price_ladder[p] ≤ bid_price, the quantity is bit-decomposed across the 16 SIMD slots. One BFV ciphertext per order.");
 
     act("Act 4 — The Computation");
     reports.push(run_round(
@@ -501,4 +511,5 @@ fn main() {
     println!(
         "✅ Verified: the FHE frequent batch auction matched all three rounds with correct clearing prices, epoch-priority allocations, and committee-managed carry-forward residuals."
     );
+    println!("Across all rounds, the committee saw only: (1) the aggregate demand curve per round, and (2) targeted SIMD slot blocks for winners and marginal bidders. Losers' quantities, prices, and full demand vectors were never revealed.");
 }

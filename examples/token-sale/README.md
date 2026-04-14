@@ -32,6 +32,27 @@ Per-bidder lot allocations are determined based on the clearing price:
 
 Under SIMD encoding, the committee can also perform privacy-preserving ct×ct mask-multiply via Hadamard multiplication to isolate target SIMD slot blocks at depth 1 before threshold decryption. The functional settlement logic is unchanged.
 
+## What is revealed vs. what stays hidden
+
+| Data | Revealed? | When? | Why? |
+|------|-----------|-------|------|
+| Aggregate capped demand curve | ✅ Yes | After threshold decryption of summed ciphertext | Needed to find clearing price |
+| Bidder's capped lots at clearing price | ✅ Yes | During allocation | Needed for pro-rata at marginal |
+| Bidder's capped lots above clearing price | ✅ Yes | During allocation | Identifies strict winners |
+| Bidder's unclamped (raw) quantity | ❌ No | Never | Clamped client-side before encryption; never enters a ciphertext |
+| Bidder's full 64-level demand vector | ❌ No | Never | Only targeted SIMD slot blocks at clearing and above are decrypted |
+| Bidder's exact max price | ❌ No | Never | Only at-clearing and above-clearing quantities are read |
+| Lot counts at non-clearing levels | ❌ No | Never | Not decrypted (zeroed by mask-multiply in production) |
+
+### Ciphertext lifecycle
+
+1. **Client-side clamping**: Bidder clamps `min(requested, cap_K)` before encoding. Unclamped quantity never enters FHE.
+2. **Encryption**: 2048-slot SIMD plaintext (64 levels × 16 bits) encrypted under joint public key → 1 ciphertext per bidder.
+3. **Accumulation**: Homomorphic sum (depth 0) → 1 aggregate ciphertext.
+4. **Aggregate decryption**: 2-of-3 threshold decrypt with 80-bit smudging → plaintext demand curve.
+5. **Per-bidder decryption**: Committee decrypts targeted SIMD slot blocks at clearing level and one above. In production, mask-multiply (depth 1) isolates these slots first.
+6. **Settlement**: Allocations, payments, and refunds computed in plaintext from decrypted slot values.
+
 ### 6. Settlement
 The final settlement logic computes the payment and refund for each bidder:
 - **Payment**: `clearing_price × allocated_lots`.

@@ -36,7 +36,9 @@ $price\_ladder[p] \le price_i$.
 This SIMD bit-decomposed step function is computed in plaintext by the
 bidder using `Encoding::simd()`. Each bidder then encrypts the resulting
 plaintext vector into a **single BFV ciphertext**. With $N=2048$ and $W=16$, the
-scheme supports up to 128 price levels.
+scheme supports up to 128 price levels. The encoding is computed entirely
+in plaintext on the bidder's device before encryption — the committee never
+sees the plaintext demand vector.
 
 ### 3. Accumulation: aggregate demand (depth 0)
 
@@ -78,6 +80,26 @@ Bidders are allocated based on their price relative to $P^*$:
 - **Marginal bidders** ($price_i = P^*$): Receive a pro-rata share of the remaining supply.
 
 The marginal allocation uses the **largest-remainder method** (Hamilton's method) to ensure integer fills sum exactly to the supply. Ties in fractional remainders are broken deterministically by the bidder's SIMD slot block index.
+
+## What is revealed vs. what stays hidden
+
+| Data | Revealed to committee? | When? | Why? |
+|------|----------------------|-------|------|
+| Aggregate demand curve (64 price levels) | ✅ Yes | After threshold decryption of summed ciphertext | Needed to find clearing price |
+| Individual bidder's full demand vector | ❌ No | Never | Only targeted SIMD slot blocks are decrypted |
+| Bidder's quantity at clearing price | ✅ Yes (per-bidder) | During allocation | Needed for pro-rata calculation |
+| Bidder's quantity above clearing price | ✅ Yes (per-bidder) | During allocation | Needed to identify strict winners |
+| Bidder's exact bid price | ❌ No | Never | Only the at-clearing and above-clearing quantities are read |
+| Bidder's quantity at non-clearing levels | ❌ No | Never | These SIMD slots are never decrypted (or zeroed by mask-multiply in production) |
+| Any individual's raw bid (qty, price) pair | ❌ No | Never | Bids are only visible through encrypted ciphertexts |
+
+### Ciphertext lifecycle
+
+1. **Encryption**: Bidder encodes a 2048-slot SIMD plaintext (64 levels × 16 bits), encrypts under joint public key → 1 BFV ciphertext per bidder.
+2. **Accumulation**: All ciphertexts are summed homomorphically (depth 0) → 1 aggregate ciphertext.
+3. **Aggregate decryption**: 2-of-3 committee threshold-decrypts the aggregate → plaintext demand curve. Smudging noise (λ=80 bits) protects the secret key.
+4. **Per-bidder decryption**: Committee threshold-decrypts each bidder's ciphertext and reads only the SIMD slot blocks at the clearing price and one level above. In production, ct×ct Hadamard mask-multiply (depth 1) + relinearization zeroes all other slots before decryption.
+5. **Allocation**: Clearing price, strict-winner quantities, and marginal pro-rata shares are computed in plaintext from the decrypted slot values.
 
 ## Comparison with Vickrey demo
 

@@ -113,6 +113,7 @@ fn main() {
     println!("A fair launch should clear demand without exposing every individual order.");
     println!("It should also stop whales from dominating the sale with oversized bids.");
     println!("Here, bidders submit encrypted capped lot-demand vectors under one joint BFV key.");
+    println!("Each bid is clamped client-side to the public per-bidder cap K before encryption — the unclamped quantity never enters a ciphertext. In production, a ZK proof would attest that the encrypted vector respects the cap without revealing the original request.");
 
     let params = build_params();
     let price_ladder = build_price_ladder(100, 1_000, PRICE_LEVELS);
@@ -125,6 +126,8 @@ fn main() {
 
     act("Act 2 — The Setup");
     println!("Three independent parties jointly create one BFV lattice encryption key.");
+    println!("Each member samples a degree-2048 BFV secret-key polynomial, computes a public-key share via a shared CRP, and Shamir-splits their secret key.");
+    println!("The joint public key aggregates all shares. Threshold decryption requires ≥2 members' Shamir-reconstructed key shares plus 80-bit smudging noise.");
     println!("No single party can decrypt alone — at least 2 of 3 must cooperate.");
     println!(
         "This token sale reuses the same zero-depth cumulative-demand circuit as the uniform-price auction."
@@ -156,6 +159,7 @@ fn main() {
     let (_eval_key, _relin_key) =
         build_eval_key_from_committee(&member_sk_refs, &params, &eval_key_root_seed);
     println!("The committee generates distributed Galois and relinearization keys without reconstructing the joint secret key.");
+    println!("Galois keys and a relinearization key are generated via distributed MPC — the joint secret key is never reconstructed at any point.");
 
     act("Act 3 — The Commitment Phase");
     println!("Public sale parameters:");
@@ -231,11 +235,14 @@ fn main() {
     }
 
     println!("All bids are now fixed in encrypted form.");
+    println!("Each capped demand is encoded as a SIMD bit-decomposed cumulative vector (Encoding::simd()): 64 price levels × 16 bits = 1024 active SIMD slots. For each level where price_ladder[p] ≤ max_price, the clamped lot count is bit-decomposed across the 16 slots. One BFV ciphertext per bidder.");
+    println!("The aggregator sums all ciphertexts homomorphically (Hadamard addition, depth 0). Each SIMD slot now holds the sum of individual bit-position values across all bidders. Because t=12289 far exceeds the bidder count, no overflow occurs.");
     println!("Alice tried to request more than the cap, and the encoder clamped her bid before encryption.");
 
     act("Act 4 — The Settlement Phase");
     println!("The aggregator sums all encrypted capped demand vectors.");
     println!("Two committee members now threshold-decrypt the market-wide demand curve and reconstruct per-bidder values at clearing.");
+    println!("Each member computes a decryption share by applying their Shamir-reconstructed secret-key polynomial to the aggregate ciphertext, adding 80-bit smudging noise to prevent key leakage. The shares are combined via Lagrange interpolation to recover the aggregate demand curve plaintext.");
 
     let aggregate_ct = aggregate_ct.expect("at least one bidder");
     let participating = [0usize, 1];
@@ -272,6 +279,7 @@ fn main() {
         "  ✅ Aggregate capped demand at clearing: {}",
         format_lots(demand_curve[clearing_idx])
     );
+    println!("The committee now threshold-decrypts each per-bidder ciphertext to read the SIMD slot blocks at the clearing price level and one level above. In production, ct×ct Hadamard mask-multiply (depth 1) + relinearization would zero all other slots before decryption, so only the needed values are revealed.");
 
     let mut bidder_slot_values = Vec::with_capacity(per_bidder_cts.len());
     for bidder_ct in &per_bidder_cts {
@@ -347,6 +355,7 @@ fn main() {
     println!("  ❌ No raw unclamped quantity was decrypted");
     println!("  ❌ No bidder's full demand vector was revealed");
     println!("  ❌ No committee member saw a plaintext order book");
+    println!("The committee learned: (1) the aggregate capped demand curve, and (2) each bidder's capped lot count at and above the clearing price. They never saw: any bidder's unclamped quantity, their full demand vector, their exact max price, or lot counts at non-clearing levels.");
 
     act("Act 5 — Lifting the Curtain");
     println!("Let's verify the encrypted sale against the plaintext shadow computation:");

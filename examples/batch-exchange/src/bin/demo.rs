@@ -127,11 +127,14 @@ fn main() {
     println!("In a two-sided market, both buyers and sellers reveal sensitive intent.");
     println!("That exposes reservation prices, inventory pressure, and trading strategy.");
     println!("This demo clears one batch exchange while keeping individual orders encrypted.");
+    println!("Buyers and sellers each encrypt a single BFV ciphertext encoding their quantity at every relevant price level. The committee sees only aggregate curves and the specific slot values needed for rationing — never individual reservation prices or full order details.");
 
     let params = build_params();
 
     act("Act 2 — The Setup");
     println!("Three independent parties jointly create one BFV lattice encryption key.");
+    println!("Each member samples a degree-2048 BFV secret-key polynomial, computes a public-key share from a shared CRP, and Shamir-splits their secret key.");
+    println!("The joint public key is the sum of all shares. Threshold decryption requires ≥2 members to contribute Shamir-reconstructed key shares, each protected by 80-bit smudging noise.");
     println!("No single party can decrypt alone — at least 2 of 3 must cooperate.");
 
     let crp = generate_crp(&params);
@@ -162,6 +165,7 @@ fn main() {
     let (_eval_key, _relin_key) =
         build_eval_key_from_committee(&member_sk_refs, &params, &eval_key_root_seed);
     println!("The committee generates distributed evaluation keys without reconstructing the joint secret key.");
+    println!("Galois keys and a relinearization key are generated via distributed MPC. The full joint secret key is never reconstructed.");
 
     act("Act 3 — The Submission Phase");
     let price_ladder = build_price_ladder(100, 1_000, PRICE_LEVELS);
@@ -215,6 +219,7 @@ fn main() {
         });
         println!("{name:<7} submits an encrypted buy order.");
     }
+    println!("Each buy order is encoded as a SIMD bit-decomposed descending step function (Encoding::simd()): for each price level ≤ max_price, the buyer's quantity is bit-decomposed across 16 SIMD slots. One ciphertext per buyer.");
 
     for &(name, qty, min_price) in &sellers_plain {
         let pt = encode_sell_supply_vector(qty, min_price, &price_ladder, &params);
@@ -232,11 +237,14 @@ fn main() {
         });
         println!("{name:<7} submits an encrypted sell order.");
     }
+    println!("Each sell order is an ascending step function: for each price level ≥ min_price, the seller's quantity is bit-decomposed across 16 SIMD slots. One ciphertext per seller.");
 
     println!("The aggregator now holds one encrypted cumulative buy curve and one encrypted cumulative sell curve.");
+    println!("Accumulation is pure Hadamard addition (depth 0). The aggregate buy ciphertext encodes total demand at each of 64 price levels; the aggregate sell ciphertext encodes total supply. No rotations or multiplications needed.");
 
     act("Act 4 — The Settlement Phase");
     println!("Two committee members decrypt only the aggregate curves needed to clear the batch.");
+    println!("Each member computes decryption shares with 80-bit smudging noise. Lagrange interpolation over 2 shares reconstructs both curve plaintexts. The committee now sees aggregate demand and supply at all 64 levels — but not any individual order.");
 
     let aggregate_buy_ct = aggregate_buy_ct.expect("at least one buyer");
     let aggregate_sell_ct = aggregate_sell_ct.expect("at least one seller");
@@ -257,6 +265,8 @@ fn main() {
         "  ✅ Aggregate sell supply at clearing: {}",
         format_quantity(sell_supply[clearing_idx])
     );
+    println!("To determine per-participant allocations, the committee decrypts targeted SIMD slot blocks from each participant's ciphertext. Buyers need blocks at the clearing price (k) and one level above (k+1) to distinguish marginal from strict winners. Sellers need blocks at k and one level below (k-1). The plaintext mask applied post-decryption isolates only those slots.");
+    println!("In production, the committee would instead encrypt a mask ciphertext with 1s at the target SIMD positions, Hadamard-multiply (depth 1), relinearize, and threshold-decrypt — revealing only the masked slot values, not the full ciphertext.");
 
     let mut buyer_mask_slots = vec![0u64; params.degree()];
     for bit in 0..SLOT_WIDTH {
@@ -364,6 +374,7 @@ fn main() {
             format_quantity(*allocation)
         );
     }
+    println!("The committee saw: (1) aggregate buy and sell curves, (2) each buyer's quantity at levels k and k+1, (3) each seller's quantity at levels k and k-1. They never saw: reservation prices, full demand/supply vectors, or quantities at non-adjacent levels.");
 
     act("Act 5 — Shadow Verification");
     let expected_buy_curve = shadow_buy_curve(&buyer_orders, &price_ladder);

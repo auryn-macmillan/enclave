@@ -160,6 +160,11 @@ fn main() {
     let pk_shares: Vec<_> = members.iter().map(|m| m.pk_share.clone()).collect();
     let joint_pk = aggregate_public_key(pk_shares);
     println!("The committee aggregates those shares into one joint public key.");
+    println!("  Each member sampled a degree-2048 BFV secret-key polynomial s_i(x), computed a");
+    println!("  public-key share from s_i and the shared CRP, then Shamir-split s_i into shares");
+    println!("  for the other members. The joint public key is the sum of all pk shares.");
+    println!("  Ciphertexts encrypted under it require >= 2 members to Shamir-reconstruct the");
+    println!("  joint secret key before any decryption is possible.");
     let eval_key_root_seed = generate_eval_key_root_seed();
     println!(
         "The committee also agrees on shared eval-key randomness for distributed key generation."
@@ -174,6 +179,11 @@ fn main() {
     let (_eval_key, _relin_key) =
         build_eval_key_from_committee(&member_sk_refs, &params, &eval_key_root_seed);
     println!("The committee generates distributed Galois and relinearization keys without reconstructing the joint secret key.");
+    println!("  Galois keys (11 rotations) and a relinearization key are produced via distributed");
+    println!("  MPC over each member's sk share — the full joint secret key is never assembled.");
+    println!(
+        "  These eval keys enable slot rotations and ct*ct Hadamard multiply + relin (depth 1)"
+    );
 
     act("Act 3 — The Bids");
     let mut rng = OsRng;
@@ -215,11 +225,34 @@ fn main() {
         println!("{name:<7} submits an encrypted quantity-and-price order.");
     }
 
+    println!();
+    println!(
+        "  Each bid is SIMD bit-decomposed into a cumulative demand vector (Encoding::simd())."
+    );
+    println!(
+        "  The 2048 NTT slots are divided into 64 price levels x 16 bits each (SLOT_WIDTH=16)."
+    );
+    println!("  For every level p where price_ladder[p] <= bid_price, the bidder's quantity is");
+    println!(
+        "  bit-decomposed across the 16 SIMD slots of that level (bit 0 = LSB, bit 15 = MSB)."
+    );
+    println!("  This 2048-slot plaintext vector is encrypted into a single BFV ciphertext under");
+    println!(
+        "  the joint public key. The committee receives only the ciphertext — never the plaintext."
+    );
+    println!();
     println!(
         "Public supply for this batch is {}.",
         format_quantity(supply)
     );
     println!("Orders are accumulated into one encrypted demand curve.");
+    println!("  Homomorphic BFV addition sums the SIMD slots element-wise (Hadamard addition).");
+    println!(
+        "  Each slot holds a single bit-position count; with t=12289 >> #bidders, no overflow"
+    );
+    println!(
+        "  or carry propagation occurs. Result: 1 aggregate ciphertext, multiplicative depth 0."
+    );
     println!("All orders are now locked in encrypted form. Nobody — not even the committee — can see them.");
 
     act("Act 4 — The Computation");
@@ -231,6 +264,10 @@ fn main() {
     let aggregate_ct = aggregate_ct.expect("at least one bidder");
     let participating = [0usize, 1];
     println!("Two committee members now cooperate for threshold decryption: 1 and 2.");
+    println!("  Each member applies their Shamir-reconstructed sk polynomial to the ciphertext,");
+    println!("  then adds 80-bit smudging noise to statistically mask any key-dependent leakage.");
+    println!("  The two partial decryptions are combined via Lagrange interpolation to recover");
+    println!("  the aggregate plaintext — the total demand curve across all 64 price levels.");
 
     let party_demand_shares: Vec<(usize, Vec<_>)> = participating
         .iter()
@@ -262,6 +299,13 @@ fn main() {
         "  ✅ Aggregate demand at clearing: {}",
         format_quantity(demand_curve[clearing_idx])
     );
+    println!();
+    println!("  The committee now needs each bidder's quantity at and above the clearing price");
+    println!("  to compute allocations. They threshold-decrypt each per-bidder ciphertext.");
+    println!("  In production, they would ct*ct Hadamard mask-multiply (encrypt a mask with 1s");
+    println!("  at the clearing-level SIMD slots, multiply at depth 1, relinearize) so that");
+    println!("  only the target slot blocks are revealed. In this demo, the full ciphertext is");
+    println!("  decrypted and only the relevant SIMD slot blocks at the clearing level are read.");
     println!();
 
     let mut bidder_slot_values = Vec::with_capacity(per_bidder_cts.len());
@@ -324,6 +368,13 @@ fn main() {
     println!("  ❌ No individual bid price was revealed");
     println!("  ❌ No full bidder demand vector was revealed");
     println!("  ❌ No committee member saw any plaintext order book");
+    println!();
+    println!("  What the committee did see: (1) the aggregate demand curve — sums, not individual");
+    println!(
+        "  values; (2) each bidder's quantity at the clearing price level and one level above."
+    );
+    println!("  They never saw any bidder's full 64-level demand vector, exact bid price, or any");
+    println!("  quantity at non-clearing price levels.");
 
     act("Act 5 — Lifting the Curtain");
     println!("Let's peek behind the scenes to verify the result:");

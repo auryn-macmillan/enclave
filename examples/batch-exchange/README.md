@@ -49,6 +49,27 @@ Once the clearing price index `k` is found, the committee determines which side 
 
 Under SIMD encoding, ct×ct mask-multiply is possible via Hadamard multiplication. The committee can encrypt a mask with 1s at the target SIMD slots and isolate the relevant SIMD slot blocks at depth 1 before threshold decryption. In this demo, the committee still threshold-decrypts the full ciphertexts of relevant participants and reads the needed SIMD slot blocks directly. Buyers use blocks at price levels `(k, k+1)` to distinguish strict winners from marginal demand. Sellers use blocks at price levels `(k, k-1)` (or just `k` at the lowest price). Pro-rata allocation with largest-remainder rounding is applied only to the rationed side.
 
+## What is revealed vs. what stays hidden
+
+| Data | Revealed? | When? | Why? |
+|------|-----------|-------|------|
+| Aggregate buy demand curve (64 levels) | ✅ Yes | After threshold decryption | Needed for clearing price intersection |
+| Aggregate sell supply curve (64 levels) | ✅ Yes | After threshold decryption | Needed for clearing price intersection |
+| Buyer's quantity at clearing level k and k+1 | ✅ Yes | During allocation | Distinguishes strict winners from marginal buyers |
+| Seller's quantity at clearing level k and k-1 | ✅ Yes | During allocation | Distinguishes strict sellers from marginal sellers |
+| Any participant's full 64-level demand/supply vector | ❌ No | Never | Only 2 adjacent SIMD slot blocks per participant are read |
+| Buyer's max price or seller's min price | ❌ No | Never | Only quantities at specific levels are revealed, not reservation prices |
+| Quantities at non-adjacent price levels | ❌ No | Never | Not decrypted (zeroed by mask-multiply in production) |
+
+### Ciphertext lifecycle
+
+1. **Encryption**: Buyer encodes descending step function, seller encodes ascending step function — each as a 2048-slot SIMD plaintext (64 levels × 16 bits), encrypted under joint public key → 1 ciphertext per participant.
+2. **Accumulation**: Separate Hadamard sums for buy and sell sides (depth 0) → 2 aggregate ciphertexts.
+3. **Curve decryption**: 2-of-3 threshold decrypt both aggregates with 80-bit smudging → 2 plaintext curves.
+4. **Clearing**: Committee performs descending scan in plaintext to find intersection → clearing price.
+5. **Per-participant decryption**: Committee threshold-decrypts each participant's ciphertext and reads only the 2 relevant SIMD slot blocks (at k and k±1). In production, ct×ct mask-multiply (depth 1) would isolate these slots before decryption.
+6. **Allocation**: Pro-rata with largest-remainder rounding applied to the rationed side.
+
 ## Production considerations
 
 ### Distributed evaluation keys
