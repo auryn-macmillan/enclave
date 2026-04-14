@@ -1,0 +1,103 @@
+# Uniform-Price Batch Auction (Threshold FHE Demand Curve Demo)
+
+A sealed-bid **uniform-price** batch auction where bidders submit encrypted (quantity, price) pairs under threshold BFV fully-homomorphic encryption. A **2-of-3 committee** jointly generates the encryption key (DKG), aggregates the demand curve homomorphically, and threshold-decrypts only the clearing price and per-bidder allocations — without ever revealing individual bids.
+
+## Quick start
+
+```bash
+cargo run --bin demo --release
+```
+
+This generates 10 random bids, runs the full threshold FHE pipeline, and asserts the results against a plaintext shadow.
+
+## How it works
+
+### 1. Committee DKG (distributed key generation)
+
+Three committee members run a distributed key generation protocol — **no trusted dealer**.
+
+Each member:
+1. Samples a fresh BFV secret key.
+2. Computes a **public key share** from their secret key and a shared common random polynomial (CRP).
+3. **Shamir-splits** their secret key into shares for distribution to all members.
+
+The public key shares are aggregated into a single **joint public key**. Bidders encrypt to this key. No single committee member knows the corresponding full secret key.
+
+### 2. Encoding: cumulative demand vectors
+
+Unlike bit-plane encoding which bit-decomposes prices, this demo encodes each bid as a **cumulative demand vector**. For a public price ladder of $P=64$ levels, a bidder with bid $(q_i, price_i)$ constructs a vector where each slot $p$ contains $q_i$ if $price\_ladder[p] \le price_i$, and 0 otherwise.
+
+This step function is computed in plaintext by the bidder. Each bidder then encrypts their vector into a **single BFV ciphertext** using SIMD slots.
+
+### 3. Accumulation: aggregate demand (depth 0)
+
+The aggregator sums all bidder ciphertexts slot-wise. Because addition is linear under BFV, the result is an encrypted vector where each slot $p$ contains the **total aggregate demand** at that price level.
+
+Total multiplicative depth: **0**. The demand curve is computed using only homomorphic additions, requiring no rotations or relinearizations for the core accumulation.
+
+### 4. Threshold decryption (2-of-3)
+
+Any 2 of the 3 committee members can jointly decrypt ciphertexts:
+
+1. Each participating member generates **smudging noise** (see below) and computes a **decryption share**.
+2. The shares are combined via **Shamir reconstruction** to recover the plaintext.
+
+The committee first decrypts the aggregate demand vector to find the clearing price, then masks and decrypts individual bidder vectors to determine allocations.
+
+### 5. Clearing price discovery
+
+The decrypted aggregate demand curve is searched in plaintext from highest price to lowest. The **clearing price $P^*$** is the highest price level where total demand meets or exceeds the public supply. If total demand is less than supply even at the lowest price, the auction clears at the lowest level (undersubscribed).
+
+### 6. Allocation: strict and marginal
+
+Bidders are allocated based on their price relative to $P^*$:
+- **Strict winners** ($price_i > P^*$): Receive their full requested quantity.
+- **Losers** ($price_i < P^*$): Receive zero allocation.
+- **Marginal bidders** ($price_i = P^*$): Receive a pro-rata share of the remaining supply.
+
+The marginal allocation uses the **largest-remainder method** (Hamilton's method) to ensure integer fills sum exactly to the supply. Ties in fractional remainders are broken deterministically by the bidder's SIMD slot index.
+
+## Comparison with Vickrey demo
+
+| Feature | Vickrey Demo | Uniform-Price Demo |
+|---------|--------------|-------------------|
+| Ciphertexts per bidder | 64 (bit-planes) | 1 (demand vector) |
+| Multiplicative depth | 1 (ct × ct) | 0 (additions only) |
+| Core rotations | Required (reduce-tree) | None (slot-wise sum) |
+| Privacy | Second price only | Clearing price + allocations |
+
+## Production considerations
+
+### Distributed evaluation keys
+
+While the core accumulation requires no rotations, the committee still generates Galois and relinearization keys using the repo's **distributed eval-key MPC** flow. This ensures the infrastructure is ready for more complex circuits (like marginal-quantity extraction) without ever reconstructing the joint secret key.
+
+### Smudging noise
+
+Every BFV decryption leaks information about the secret key through the noise term. To prevent this, each decryption share includes **smudging noise** — a random term ($\lambda = 80$ bits) that drowns the key-dependent component, ensuring statistical security for the joint key.
+
+## Project structure
+
+```
+src/
+├── lib.rs          Core library: params, encoding, accumulation, clearing, allocations
+└── bin/
+    └── demo.rs     10-bidder demo with 2-of-3 committee and shadow verification
+```
+
+## BFV parameters
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| N (degree) | 2048 | = max price levels (one SIMD slot each) |
+| t (plaintext mod) | 12289 | Total demand at any level must be < 6144 |
+| Moduli | 6 × 62-bit | Large noise margin for depth-0 additions |
+| Price levels | 64 | Discrete ladder within one BFV row |
+
+## Threshold parameters
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| Committee size (n) | 3 | Minimum for threshold semantics |
+| Threshold (t) | 1 | Reconstruction requires t+1 = 2 parties |
+| Smudging $\lambda$ | 80 bits | Statistical security for noise flooding |
