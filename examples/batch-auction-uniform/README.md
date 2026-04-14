@@ -23,25 +23,26 @@ Each member:
 
 The public key shares are aggregated into a single **joint public key**. Bidders encrypt to this key. No single committee member knows the corresponding full secret key.
 
-### 2. Encoding: multi-coefficient demand vectors
+### 2. Encoding: SIMD bit-decomposed demand vectors
 
 Unlike bit-plane encoding which bit-decomposes prices, this demo encodes
-each bid as a **cumulative demand polynomial**. For a public price ladder
+each bid as a **cumulative demand ciphertext** built from a plaintext SIMD
+step function. For a public price ladder
 of $P=64$ levels, each price level uses `SLOT_WIDTH = 16` consecutive
-polynomial coefficients. A bidder with bid $(q_i, price_i)$ bit-decomposes
-their quantity $q_i$ across the 16 coefficients of each level $p$ where
+SIMD slots. A bidder with bid $(q_i, price_i)$ bit-decomposes
+their quantity $q_i$ across the 16 slots of each level $p$ where
 $price\_ladder[p] \le price_i$.
 
-This multi-coefficient step function is computed in plaintext by the
-bidder using `Encoding::poly()`. Each bidder then encrypts their
-polynomial into a **single BFV ciphertext**. With $N=2048$ and $W=16$, the
+This SIMD bit-decomposed step function is computed in plaintext by the
+bidder using `Encoding::simd()`. Each bidder then encrypts the resulting
+plaintext vector into a **single BFV ciphertext**. With $N=2048$ and $W=16$, the
 scheme supports up to 128 price levels.
 
 ### 3. Accumulation: aggregate demand (depth 0)
 
 The aggregator sums all bidder ciphertexts. Because addition is linear
-under BFV, the result is an encrypted polynomial where each 16-coefficient
-block contains the bitwise sum of demanded quantities at that price level.
+under BFV, the result is a ciphertext where each 16-slot SIMD block
+contains the bitwise sum of demanded quantities at that price level.
 Summing bit-positions independently avoids carry propagation during FHE.
 
 Total multiplicative depth: **0**. The demand curve is computed using only
@@ -57,14 +58,14 @@ Any 2 of the 3 committee members can jointly decrypt ciphertexts:
 2. The shares are combined via **Shamir reconstruction** to recover the
    plaintext.
 
-The committee first decrypts the aggregate demand polynomial to find the
-clearing price, then decrypts individual bidder polynomials to determine
+The committee first decrypts the aggregate demand ciphertext to find the
+clearing price, then decrypts masked per-bidder slot blocks to determine
 allocations.
 
 ### 5. Clearing price discovery
 
 The decrypted aggregate demand curve is reconstructed from the
-bit-summed coefficient blocks and searched in plaintext from highest price
+bit-summed SIMD slot blocks and searched in plaintext from highest price
 to lowest. The **clearing price $P^*$** is the highest price level where
 total demand meets or exceeds the public supply.
  If total demand is less than supply even at the lowest price, the auction clears at the lowest level (undersubscribed).
@@ -76,7 +77,7 @@ Bidders are allocated based on their price relative to $P^*$:
 - **Losers** ($price_i < P^*$): Receive zero allocation.
 - **Marginal bidders** ($price_i = P^*$): Receive a pro-rata share of the remaining supply.
 
-The marginal allocation uses the **largest-remainder method** (Hamilton's method) to ensure integer fills sum exactly to the supply. Ties in fractional remainders are broken deterministically by the bidder's coefficient block index.
+The marginal allocation uses the **largest-remainder method** (Hamilton's method) to ensure integer fills sum exactly to the supply. Ties in fractional remainders are broken deterministically by the bidder's SIMD slot block index.
 
 ## Comparison with Vickrey demo
 
@@ -84,14 +85,14 @@ The marginal allocation uses the **largest-remainder method** (Hamilton's method
 |---------|--------------|-------------------|
 | Ciphertexts per bidder | 64 (bit-planes) | 1 (demand vector) |
 | Multiplicative depth | 1 (ct × ct) | 0 (additions only) |
-| Core rotations | Required (reduce-tree) | None (coefficient blocks) |
+| Core rotations | Required (reduce-tree) | None for core computation (SIMD slot blocks) |
 | Privacy | Second price only | Clearing price + allocations |
 
 ## Production considerations
 
 ### Distributed evaluation keys
 
-While the core accumulation requires no rotations, the committee still generates Galois and relinearization keys using the repo's **distributed eval-key MPC** flow. This ensures the infrastructure is ready for more complex circuits (like marginal-quantity extraction) without ever reconstructing the joint secret key.
+While the core accumulation requires no rotations, the committee still generates Galois and relinearization keys using the repo's **distributed eval-key MPC** flow. Under `Encoding::simd()`, this also enables privacy-preserving ct×ct mask-multiply: the committee can encrypt a mask, apply a Hadamard product, relinearize, and decrypt only the target SIMD slots needed for settlement without ever reconstructing the joint secret key.
 
 ### Smudging noise
 
@@ -113,7 +114,7 @@ src/
 | N (degree) | 2048 | 128 max price levels with SLOT_WIDTH=16 |
 | t (plaintext mod) | 12289 | Must exceed number of bidders z |
 | Moduli | 6 × 62-bit | Large noise margin for depth-0 additions |
-| Price levels | 64 | Discrete ladder within one BFV polynomial |
+| Price levels | 64 | Discrete ladder within one BFV SIMD ciphertext |
 
 ## Threshold parameters
 

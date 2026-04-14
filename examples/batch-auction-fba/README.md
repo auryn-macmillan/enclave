@@ -16,20 +16,20 @@ This runs a 3-round simulation with 10 bidders, including order carry-forward an
 
 Three committee members run a distributed key generation protocol to create a **joint public key** without a trusted dealer. Each member samples a secret key, computes a public key share, and Shamir-splits their secret for distribution. Bidders encrypt only once to the joint key; no single member can decrypt individual orders.
 
-### 2. Encoding: multi-coefficient demand vectors
+### 2. Encoding: SIMD bit-decomposed demand vectors
 
-Bidders encode their `(quantity, price)` pair using a high-throughput **multi-coefficient polynomial encoding** (`Encoding::poly()`). Each price level spans `SLOT_WIDTH = 16` polynomial coefficients, where each coefficient holds one bit of the quantity's binary representation. This allows for massive aggregation while maintaining a constant multiplicative depth of zero.
+Bidders encode their `(quantity, price)` pair using a high-throughput **SIMD bit-decomposed encoding** (`Encoding::simd()`). Each price level spans `SLOT_WIDTH = 16` SIMD slots, where each SIMD slot holds one bit of the quantity's binary representation. This allows for massive aggregation while maintaining a constant multiplicative depth of zero in the main FBA pipeline.
 
 ### 3. Aggregation and clearing
 
-The aggregator sums all active ciphertexts into an **aggregate demand curve**. Because each coefficient represents a bit-count across all bidders, the committee can threshold-decrypt this aggregate and decode the total demand at every price level using `decode_demand_curve()`. The clearing price $P^*$ is the highest price where total demand meets or exceeds supply.
+The aggregator sums all active ciphertexts into an **aggregate demand curve**. Because each SIMD slot represents a bit-count across all bidders, the committee can threshold-decrypt this aggregate and decode the total demand at every price level using `decode_demand_curve()`. The clearing price $P^*$ is the highest price where total demand meets or exceeds supply.
 
 ### 4. Order classification and allocation
 
 Using the public clearing index $k$, the committee classifies each order:
-1. **Strict winners** (price > $P^*$): Fully filled. Committee threshold-decrypts the relevant price-level block for allocation reporting and drops the ciphertext.
+1. **Strict winners** (price > $P^*$): Fully filled. Committee threshold-decrypts the relevant price-level SIMD slot block for allocation reporting and drops the ciphertext.
 2. **Strict losers** (price < $P^*$): Unfilled. Ciphertext is carried forward untouched with zero per-order information revealed.
-3. **Marginal** (price = $P^*$): Partially filled. Committee threshold-decrypts the marginal quantity block, computes pro-rata in plaintext, and re-encrypts the residual.
+3. **Marginal** (price = $P^*$): Partially filled. Committee threshold-decrypts the marginal quantity SIMD slot block, computes pro-rata in plaintext, and re-encrypts the residual.
 
 ### 5. Multi-round carry-forward
 
@@ -39,11 +39,11 @@ FBA uses **epoch-based priority** where earlier-round orders fill first at the m
 
 ### Distributed evaluation keys
 
-While the core FBA pipeline under poly-encoding uses pure ciphertext additions and threshold decryption, the repository's distributed eval-key MPC infrastructure remains fully integrated. This ensures that any additional mechanisms requiring Galois rotations or relinearization can be securely executed without ever reconstructing the joint secret key.
+While the core FBA pipeline under SIMD encoding uses pure ciphertext additions and threshold decryption, the repository's distributed eval-key MPC infrastructure remains fully integrated. This ensures that any additional mechanisms requiring Galois rotations, relinearization, or Hadamard ct×ct mask-multiply can be securely executed without ever reconstructing the joint secret key.
 
 ### Smudging noise
 
-Threshold decryption shares include **80-bit smudging noise** to protect the secret key from leakage during the multi-round process. Because the pipeline avoids depth-consuming operations like rotations and multiplications, the noise growth is minimal, allowing for a large number of carry-forward rounds.
+Threshold decryption shares include **80-bit smudging noise** to protect the secret key from leakage during the multi-round process. Because the main pipeline is dominated by additions, the noise growth is minimal, allowing for a large number of carry-forward rounds. SIMD encoding also leaves depth-1 Hadamard mask-multiply available for privacy-preserving extraction when needed.
 
 ## Project structure
 

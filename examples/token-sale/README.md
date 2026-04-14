@@ -16,10 +16,10 @@ This generates 10 random bids (including some exceeding the cap), runs the thres
 Three committee members run a distributed key generation protocol to produce a **joint public key** without a trusted dealer. Each member samples a BFV secret key, publishes a public share from a common random polynomial (CRP), and distributes Shamir-shares of their secret key. Bidders encrypt exclusively to the aggregated joint public key.
 
 ### 2. Encoding: capped cumulative demand vectors
-Bidders specify their demand in discrete **lots** (e.g., 1 lot = 100 tokens). Fairness is enforced by a public cap **K** via client-side clamping: `clamped_qty = min(requested_qty, K)`. The encoder uses **multi-coefficient polynomial encoding** (`Encoding::poly()`), where each price level spans `SLOT_WIDTH=16` consecutive coefficients. The `clamped_qty` is bit-decomposed across these 16 coefficients. This clamping is enforced client-side at encoding time, which in production would be verified by **ZK input validation** to prevent whales from bypassing the limit.
+Bidders specify their demand in discrete **lots** (e.g., 1 lot = 100 tokens). Fairness is enforced by a public cap **K** via client-side clamping: `clamped_qty = min(requested_qty, K)`. The encoder uses **SIMD bit-decomposed encoding** (`Encoding::simd()`), where each price level spans `SLOT_WIDTH=16` consecutive SIMD slots. The `clamped_qty` is bit-decomposed across these 16 SIMD slots. This clamping is enforced client-side at encoding time, which in production would be verified by **ZK input validation** to prevent whales from bypassing the limit.
 
 ### 3. Accumulation: zero-depth sum
-The aggregator sums the encrypted demand vectors coefficient-wise. Because BFV addition is linear, this produces an encrypted aggregate demand curve with **zero multiplicative depth**. The plaintext range is constrained by the bidder count `z`, where the count at each bit position must not overflow the BFV plaintext modulus `t = 12289` (i.e., `t > z`). This allows for massive aggregation without overflow.
+The aggregator sums the encrypted demand vectors slot-wise. Because BFV addition is linear, this produces an encrypted aggregate demand curve with **zero multiplicative depth**. The plaintext range is constrained by the bidder count `z`, where the count at each bit position must not overflow the BFV plaintext modulus `t = 12289` (i.e., `t > z`). This allows for massive aggregation without overflow.
 
 ### 4. Threshold decryption and price discovery
 The committee threshold-decrypts the aggregate demand curve using their secret-key shares and **smudging noise** for statistical security. They perform a plaintext search to find the **clearing price P***: the highest price level where total demand meets or exceeds the `total_supply_lots`.
@@ -29,6 +29,8 @@ Per-bidder lot allocations are determined based on the clearing price:
 - **Strict winners** (price > P*) receive their full requested (clamped) lots.
 - **Losers** (price < P*) receive zero.
 - **Marginal bidders** (price == P*) receive a pro-rata share of remaining lots, resolved using **largest-remainder rounding** to maintain discrete lot units.
+
+Under SIMD encoding, the committee can also perform privacy-preserving ct×ct mask-multiply via Hadamard multiplication to isolate target SIMD slot blocks at depth 1 before threshold decryption. The functional settlement logic is unchanged.
 
 ### 6. Settlement
 The final settlement logic computes the payment and refund for each bidder:

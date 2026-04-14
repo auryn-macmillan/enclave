@@ -50,32 +50,32 @@ entire ladder fits in one BFV row half, avoiding row-crossing complexity.
 
 ### 3.2 Cumulative Demand Vector (per bidder)
 
-Bidder `i` with bid `(q_i, price_i)` constructs a plaintext polynomial of
-degree `N = 2048`. Each price level `p` spans `SLOT_WIDTH = 16` consecutive
-coefficients. Each coefficient holds one bit of the quantity `q_i`'s
+Bidder `i` with bid `(q_i, price_i)` constructs a plaintext vector over
+`N = 2048` SIMD slots. Each price level `p` spans `SLOT_WIDTH = 16`
+consecutive SIMD slots. Each slot holds one bit of the quantity `q_i`'s
 binary representation.
 
 ```
-coeff[p*16 + j] = bit_j(q_i)    if price_ladder[p] <= price_i
-coeff[p*16 + j] = 0             if price_ladder[p] > price_i
+slot[p*16 + j] = bit_j(q_i)    if price_ladder[p] <= price_i
+slot[p*16 + j] = 0             if price_ladder[p] > price_i
         (for j in 0..16; levels p >= P are always 0)
 ```
 
-This is a multi-coefficient step function. The bidder computes this
-**in plaintext before encryption** using `Encoding::poly()`.
+This is a bit-decomposed SIMD step function. The bidder computes this
+**in plaintext before encryption** using `Encoding::simd()`.
 
 **Example**: Price ladder `[10, 20, 30, 40, 50]`, bidder bids
 `(qty=100, price=30)`:
 100 = `0b0000000001100100`.
 
-The coefficient blocks for `p=10, 20, 30` (indices `160..175`, `320..335`,
+The SIMD slot blocks for `p=10, 20, 30` (indices `160..175`, `320..335`,
 `480..495`) will all contain `[0,0,1,0,0,1,1,0, 0,0,0,0,0,0,0,0]`.
 Blocks for `p=40, 50` will contain all zeros.
 
 ### 3.3 Encryption
 
-Each bidder encrypts their polynomial as a single BFV ciphertext using
-`Encoding::poly()`. **One ciphertext per bidder.**
+Each bidder encrypts their plaintext vector as a single BFV ciphertext using
+`Encoding::simd()`. **One ciphertext per bidder.**
 
 ### 3.4 Accumulation
 
@@ -86,9 +86,9 @@ V = Σ_i v_i
 ```
 
 This is `n_bidders - 1` homomorphic additions (depth 0). The result `V`
-is an encrypted polynomial where each block of 16 coefficients contains
-the bitwise sum of quantities at that price level. Summing bit-positions
-independently avoids carry propagation during FHE execution.
+is a ciphertext where each block of 16 SIMD slots contains the bitwise sum
+of quantities at that price level. Summing bit-positions independently
+avoids carry propagation during FHE execution.
 
 ## 4. FHE Circuit Analysis
 
@@ -99,16 +99,17 @@ independently avoids carry propagation during FHE execution.
 | Encoding | Client-side plaintext construction | None | 0 |
 | Encryption | `pk.encrypt(v_i)` | 1 encryption/bidder | 0 |
 | Accumulation | `V = Σ v_i` | n-1 ct additions | 0 |
-| Masking | `V_masked = V × slot_mask` | 1 ct×pt multiply | 0 |
-| Threshold decrypt | Decrypt `V_masked` | Standard protocol | — |
+| Masking | `v_i_masked = v_i × mask_i` | 1 ct×ct multiply + relin | 1 |
+| Threshold decrypt | Decrypt masked ciphertext | Standard protocol | — |
 | Clearing price | Plaintext search on `V` | None (plaintext) | 0 |
-| Allocation prep | See §6 | ct×pt multiplies | 0 |
+| Allocation prep | See §6 | ct×ct mask-multiplies | 1 |
 
-**Total multiplicative depth: 0.**
+**Total multiplicative depth: 0 for core demand-curve computation; 1 when
+using optional masked settlement.**
 
 The depth-1 budget is **not consumed** by the core demand-curve
 computation. This leaves the full depth-1 multiply available for optional
-allocation computation if needed (see §6).
+masked allocation extraction if needed (see §6).
 
 ### 4.2 Rotation Requirements
 
@@ -127,7 +128,7 @@ Each ct addition grows noise additively. With `n` bidders:
 - After `n-1` additions: ~n·σ
 - With 6×62-bit moduli (372-bit total), noise budget is ~330 bits
 - Each addition costs ~1 bit, so we can handle thousands of bidders
-- The mask (ct×pt) costs a few more bits but is negligible
+- The optional mask-multiply + relin costs a few more bits but is negligible
 
 **Verdict**: Current parameters handle up to ~2048 bidders with margin.
 
@@ -144,9 +145,11 @@ Since each bidder contributes 0 or 1 to a specific bit position, the
 constraint simplifies to `number_of_bidders < 6144`. With `t = 12289`
 and 10 bidders in the demo, this is trivially satisfied.
 
-Unlike SIMD encoding where `Σq_i < t/2` was required, multi-coefficient
-encoding allows `Σq_i` to exceed `t`, as long as the count of bidders
-at any bit-position (0..15) doesn't overflow `t/2`.
+This `t > z` style constraint comes from the bit-decomposition itself, not
+from the choice of plaintext embedding domain. Under SIMD encoding, each
+slot at bit-position `j` counts how many bidders contributed a `1` at that
+bit, so `Σq_i` may exceed `t` as long as the per-bit bidder count stays
+below `t/2`.
 
 ### 4.5 Parameter Sufficiency
 
@@ -216,8 +219,10 @@ For bidders with `price_i > P*`: allocation = `q_i` (full fill).
 For bidders with `price_i < P*`: allocation = 0.
 
 These are determined entirely by the bidder's cumulative demand vector.
-The bidder's slot at price index `k+1` (one above clearing) gives their
-strict-winner quantity directly:
+The bidder's SIMD slot block at price index `k+1` (one above clearing)
+gives their strict-winner quantity directly. Under `Encoding::simd()`, the
+committee can isolate that block with an encrypted mask because ct×ct
+multiplication is Hadamard (slot-wise):
 
 ```
 strict_fill_i = v_i[k+1]   (= q_i if price_i > P*, else 0)
@@ -283,29 +288,31 @@ This is deterministic and publicly verifiable.
 
 ### 6.3 Settlement Modes
 
-**Mode A: Exact settlement (decrypt coefficient blocks)**
+**Mode A: Exact settlement (decrypt masked SIMD slot blocks)**
 
 1. From the decrypted demand curve, compute `P*`, `D_strict`, `Q_marginal`, `R`.
-2. Threshold-decrypt each bidder's ciphertext `v_i`.
-3. Extract `strict_fill_i` from the block at `k+1` and `marginal_qty_i`
-   by subtracting `v_i[k+1]` from `v_i[k]` (block-wise decoding).
-4. Compute exact pro-rata in plaintext with deterministic rounding.
+2. For each bidder ciphertext `v_i`, the committee encrypts a mask with 1s
+   at the target SIMD slots for blocks `k` and `k+1`, and 0s elsewhere.
+3. Compute `v_i_masked = v_i × mask_i`, relinearize, and threshold-decrypt
+   only the masked ciphertext.
+4. Extract `strict_fill_i` from the SIMD slot block at `k+1` and
+   `marginal_qty_i` by subtracting the decoded block at `k+1` from the
+   decoded block at `k`.
+5. Compute exact pro-rata in plaintext with deterministic rounding.
 
-**Privacy note**: Under polynomial encoding, plaintext×ciphertext
-multiplication is polynomial convolution, not coefficient-wise. This
-means mask-multiplication (Mode A's original design) does not work for
-selective slot decryption. Instead, the full bidder ciphertext is
-threshold-decrypted.
-
-Committee members see all coefficient blocks for each bidder, revealing
-their full bid (quantity and price level). This is a privacy trade-off
-for exact settlement in the current implementation.
+**Privacy note**: Under SIMD encoding, ct×ct multiplication is Hadamard
+(slot-wise), so an encrypted mask cleanly zeroes all non-target slots.
+Only the selected SIMD slot blocks are revealed during threshold
+decryption; the rest of each bidder's cumulative demand vector remains
+hidden.
 
 **Mode B: Private approximate settlement**
 
-Not applicable under polynomial encoding as Hadamard product (slot-wise
-multiply) is not supported. All allocations are currently computed
-following full decryption of bidder ciphertexts (Mode A).
+Now applicable under SIMD encoding. The committee can encrypt a mask,
+compute a ct×ct Hadamard product, relinearize, and threshold-decrypt only
+the masked SIMD slots needed for an approximate settlement routine. This
+improves privacy relative to full per-bidder decryption because only the
+selected slots are revealed, not the bidder's full demand vector.
 
 ## 7. Protocol Flow
 
@@ -331,8 +338,8 @@ following full decryption of bidder ciphertexts (Mode A).
 │  Committee   │  5. Threshold-decrypt V → demand curve in plaintext
 │  (2-of-3)   │  6. Find clearing price P* via plaintext search
 │              │  7. Extract clearing price index k
-│              │  8. For each bidder: threshold-decrypt v_i
-│              │     → extract blocks k and k+1 from coefficients
+│              │  8. For each bidder: encrypt mask for SIMD slot blocks
+│              │     k and k+1, multiply, relin, threshold-decrypt masked slots
 │              │  9. Compute final allocations (exact pro-rata)
 └─────────────┘
 ```
@@ -344,11 +351,11 @@ following full decryption of bidder ciphertexts (Mode A).
 | Bid type | Single scalar (price) | (quantity, price) pair |
 | Encoding | 64 bitplane ciphertexts/bidder | 1 cumulative-demand ciphertext/bidder |
 | FHE computation | Tally per bitplane (depth 1) | Sum across bidders (depth 0) |
-| Rotations used | 11 per bitplane × 64 = 704 | 0 (polynomial coefficient blocks) |
-| Relin used | Yes (64 relinearizations) | No (depth 0 sum) |
-| Depth consumed | 1 | 0 |
-| Decryption surface | 64 tally ciphertexts + winner's bid | 1 aggregate polynomial + n bidder polynomials |
-| Privacy | Individual bids never decrypted | (qty, price) revealed during per-bidder decryption |
+| Rotations used | 11 per bitplane × 64 = 704 | 0 for core computation (SIMD slot blocks; no reductions needed) |
+| Relin used | Yes (64 relinearizations) | No for core sum; yes for optional masked extraction |
+| Depth consumed | 1 | 0 for core computation; 1 with optional masked extraction |
+| Decryption surface | 64 tally ciphertexts + winner's bid | 1 aggregate ciphertext + n masked bidder ciphertexts |
+| Privacy | Individual bids never decrypted | Clearing price + allocations; only masked SIMD slot blocks are revealed |
 | Complexity | O(BID_BITS × n) rotations | O(n) additions |
 
 ## 9. Ciphertext Count and Performance
@@ -357,7 +364,7 @@ following full decryption of bidder ciphertexts (Mode A).
 |-----------|-------|-------|
 | Bidder ciphertexts | n | One per bidder |
 | Aggregate demand | 1 | Sum of all bidder ciphertexts |
-| **Total threshold decryptions** | **1 + n** | Demand curve + per-bidder vectors |
+| **Total threshold decryptions** | **1 + n** | Demand curve + masked per-bidder slot-block ciphertexts |
 
 For 10 bidders: 11 threshold decryptions (vs. 64 + 64 = 128 for Vickrey).
 Significantly lighter.
@@ -372,7 +379,7 @@ Significantly lighter.
 | Quantity exceeds supply | Standard marginal pro-rata with largest-remainder rounding |
 | Zero quantity bid | Valid; contributes nothing to demand curve |
 | Bit-position wraps mod t | MUST enforce `number_of_bidders < t/2 = 6144` |
-| Equal fractional remainders | Tiebreak by lower coefficient block index (see §6.2) |
+| Equal fractional remainders | Tiebreak by lower SIMD slot block index (see §6.2) |
 | R = 0 (exact fill at clearing) | All marginal bidders get 0 marginal allocation; strict winners only |
 
 ## 11. Implementation Plan
@@ -400,7 +407,7 @@ arithmetic including edge cases).
 
 ### Phase 3: Demo binary (`src/bin/demo.rs`)
 - 10 bidders, random (qty, price) pairs within price ladder range
-- Enforce `Σq_i < t/2 = 6144` (cap individual quantities accordingly)
+- Enforce `number_of_bidders < t/2 = 6144` (already satisfied by the demo)
 - Full pipeline: DKG → encrypt → aggregate → decrypt → find clearing → allocate
 - Shadow plaintext verification: compute expected results from plaintext bids,
   assert FHE-derived clearing price and allocations match exactly

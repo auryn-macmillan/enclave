@@ -14,7 +14,7 @@ The following are already implemented and working on the `feat/eval-key` branch:
 - **Distributed eval-key MPC**: Galois keys (11 rotations) + relinearization key, never reconstructs full secret key
 - **BFV SIMD batching**: degree 2048 = 2048 slots, two rows of 1024, column rotations + row swap
 - **Bitplane encoding**: one slot per bidder, 64 bitplanes (MSB-first), ct x ct multiply + relin (depth 1)
-- **Multi-coefficient poly encoding**: SLOT_WIDTH=16 coefficients per price level, `Encoding::poly()`, addition-only aggregation (depth 0)
+- **SIMD bit-decomposed encoding**: SLOT_WIDTH=16 SIMD slots per price level, `Encoding::simd()`, ct x ct mask-multiply + relin (depth 1)
 - **Threshold decryption**: 2-of-3 with smudging noise (80-bit statistical security)
 - **ZK proof circuits**: C8 (galois share), C9 (relin round1), C10 (relin round2) — all prove+verify working
 
@@ -26,19 +26,19 @@ Key files:
 
 BFV parameters (Vickrey demo): N=2048, t=12289, 6x62-bit moduli, depth budget for 1 multiply + rotations + relin.
 
-## Multi-coefficient polynomial encoding
+## SIMD bit-decomposed encoding
 
-The batch auction examples use a high-throughput encoding scheme that bypasses the depth costs of SIMD multiplications.
+The batch auction examples use a SIMD bit-decomposed encoding scheme for high-throughput encrypted aggregation and selective extraction.
 
-- Each logical price-level slot spans W=16 polynomial coefficients.
-- Each coefficient holds one bit of the quantity's binary representation.
-- Uses `Encoding::poly()` (raw polynomial coefficients) instead of `Encoding::simd()` (NTT slots).
+- Each logical price-level slot spans W=16 SIMD slots.
+- Each SIMD slot holds one bit of the quantity's binary representation.
+- Uses `Encoding::simd()` (NTT slots) instead of `Encoding::poly()` (raw polynomial coefficients).
 - With N=2048 and W=16: 128 max price levels (demos use 64).
 - Plaintext modulus constraint: `t > z` (number of bidders), NOT `t > aggregate_demand`.
 - No carry propagation needed, as counts at each bit position are independent.
 - All 4 batch auction examples use this encoding; the Vickrey bitplane demo uses the original SIMD encoding.
 
-CRITICAL: BFV plaintext×ciphertext multiplication under poly encoding is polynomial convolution, NOT coefficient-wise. Mask-multiply for selective decryption does not work. Instead, full bidder ciphertexts are threshold-decrypted and only the needed coefficient blocks are read.
+CRITICAL: Under SIMD encoding, ct×ct multiplication is Hadamard (slot-wise). The committee can encrypt a mask with 1s at target SIMD slots, multiply ct×ct (depth 1), relinearize, and threshold-decrypt to isolate specific price-level slots without revealing the bidder's full demand vector.
 
 ## Milestone roadmap
 
@@ -48,7 +48,7 @@ CRITICAL: BFV plaintext×ciphertext multiplication under poly encoding is polyno
 
 Bidders submit encrypted (quantity, price) pairs. A fixed supply is known publicly. The FHE program determines the clearing price (highest price at which total demanded quantity >= supply), fills winning bids, and pro-rata allocates at the marginal price. Only the clearing price and per-bidder allocations are decrypted — individual bids are never revealed.
 
-Uses cumulative demand vectors with multi-coefficient poly encoding.
+Uses cumulative demand vectors with SIMD bit-decomposed encoding.
 
 ### M2: Frequent batch auction (FBA)
 **Status**: Complete — `examples/batch-auction-fba/`

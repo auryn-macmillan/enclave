@@ -18,20 +18,20 @@ Three committee members run a distributed key generation protocol to establish a
 
 ### 2. Encoding: Two-Sided Step Functions
 
-The exchange uses a public grid of 64 discrete price levels. Participants encode their orders using **multi-coefficient polynomial encoding** (`SLOT_WIDTH = 16`, `Encoding::poly()`). Each price level spans 16 polynomial coefficients, and the quantity is bit-decomposed across these coefficients:
+The exchange uses a public grid of 64 discrete price levels. Participants encode their orders using **SIMD bit-decomposed encoding** (`SLOT_WIDTH = 16`, `Encoding::simd()`). Each price level spans 16 SIMD slots, and the quantity is bit-decomposed across these slots:
 
-*   **Buyers** (Demand): Encode a **descending step function**. A buyer with `(quantity, max_price)` bit-decomposes their quantity into the coefficient blocks for all price levels where the level is less than or equal to `max_price`.
-*   **Sellers** (Supply): Encode an **ascending step function**. A seller with `(quantity, min_price)` bit-decomposes their quantity into the coefficient blocks for all price levels where the level is greater than or equal to `min_price`.
+*   **Buyers** (Demand): Encode a **descending step function**. A buyer with `(quantity, max_price)` bit-decomposes their quantity into the SIMD slot blocks for all price levels where the level is less than or equal to `max_price`.
+*   **Sellers** (Supply): Encode an **ascending step function**. A seller with `(quantity, min_price)` bit-decomposes their quantity into the SIMD slot blocks for all price levels where the level is greater than or equal to `min_price`.
 
-This encoding allows for high-throughput aggregation without carries between coefficients and keeps the circuit at **multiplicative depth 0**.
+This encoding allows for high-throughput aggregation without carries between slots and keeps the circuit at **multiplicative depth 0**.
 
 ### 3. Accumulation: Curve Summation
 
-The aggregator maintains two separate encrypted accumulators. It sums all buyer ciphertexts into an aggregate **buy demand curve** and all seller ciphertexts into an aggregate **sell supply curve**. Because BFV addition is native and coefficient-wise, this accumulation happens at **multiplicative depth 0**.
+The aggregator maintains two separate encrypted accumulators. It sums all buyer ciphertexts into an aggregate **buy demand curve** and all seller ciphertexts into an aggregate **sell supply curve**. Because BFV addition is native and slot-wise, this accumulation happens at **multiplicative depth 0**.
 
 ### 4. Threshold Decryption of Curves
 
-The committee threshold-decrypts both aggregate curves. Since these curves only reveal the total bit-counts at each coefficient position across price levels, individual participant quantities and prices stay private.
+The committee threshold-decrypts both aggregate curves. Since these curves only reveal the total bit-counts at each SIMD slot position across price levels, individual participant quantities and prices stay private.
 
 ### 5. Clearing Price Computation
 
@@ -47,7 +47,7 @@ Once the clearing price index `k` is found, the committee determines which side 
 *   If `demand > supply` at the clearing price, buyers are rationed.
 *   If `supply > demand`, sellers are rationed.
 
-Under multi-coefficient encoding, masking individual ciphertexts with point-wise multiplication doesn't work. Instead, the committee threshold-decrypts the full ciphertexts of relevant participants and extracts the needed coefficient blocks. Buyers use blocks at price levels `(k, k+1)` to distinguish strict winners from marginal demand. Sellers use blocks at price levels `(k, k-1)` (or just `k` at the lowest price). Pro-rata allocation with largest-remainder rounding is applied only to the rationed side.
+Under SIMD encoding, ct×ct mask-multiply is possible via Hadamard multiplication. The committee can encrypt a mask with 1s at the target SIMD slots and isolate the relevant SIMD slot blocks at depth 1 before threshold decryption. In this demo, the committee still threshold-decrypts the full ciphertexts of relevant participants and reads the needed SIMD slot blocks directly. Buyers use blocks at price levels `(k, k+1)` to distinguish strict winners from marginal demand. Sellers use blocks at price levels `(k, k-1)` (or just `k` at the lowest price). Pro-rata allocation with largest-remainder rounding is applied only to the rationed side.
 
 ## Production considerations
 

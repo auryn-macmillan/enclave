@@ -23,8 +23,9 @@ identically to M1. The innovation lies in the multi-round orchestration:
 
 **Privacy guarantee**: The aggregate demand curve is decrypted each round to
 determine the clearing price. Individual bids of strict losers are never
-revealed. Winners and marginal bidders have one slot each threshold-decrypted
-(the minimum needed for allocation reporting and pro-rata computation).
+revealed. Winners and marginal bidders have one SIMD slot block each
+threshold-decrypted (the minimum needed for allocation reporting and pro-rata
+computation).
 Strict losers are handled entirely homomorphically. The bidder never needs
 to interact after initial submission.
 
@@ -45,14 +46,14 @@ categories based on its encrypted demand vector:
 
 | Category | Condition | Residual | Homomorphic? |
 |----------|-----------|----------|--------------|
-| **Strict winner** | price > P* | 0 (fully filled) | ✅ Drop ciphertext (decrypt 1 slot for allocation reporting) |
+| **Strict winner** | price > P* | 0 (fully filled) | ✅ Drop ciphertext (decrypt 1 SIMD slot block for allocation reporting) |
 | **Strict loser** | price < P* | original qty (unfilled) | ✅ Keep ciphertext as-is, zero decryptions |
-| **Marginal** | price = P* | original − pro_rata_fill | Decrypt 1 slot for pro-rata + re-encrypt residual |
+| **Marginal** | price = P* | original − pro_rata_fill | Decrypt 1 SIMD slot block for pro-rata + re-encrypt residual |
 
 Strict losers require **zero per-order information** — the clearing index `k`
 is public, and losers are identified from their public price metadata. Only
 losers are handled fully homomorphically. Winners and marginals each require
-one slot decrypted: winners to report their fill quantity, marginals to
+one SIMD slot block decrypted: winners to report their fill quantity, marginals to
 compute pro-rata and re-encrypt the residual.
 
 ### 2.3 Why Marginal Bidders Cannot Be Fully Homomorphic
@@ -73,19 +74,19 @@ Same as M1. A public ascending ladder of `P = 64` discrete price levels.
 
 ### 3.2 Cumulative Demand Vector (Submission Encoding)
 
-The implementation uses **multi-coefficient polynomial encoding** (`Encoding::poly()`). Each logical price level spans `SLOT_WIDTH = 16` polynomial coefficients.
+The implementation uses **SIMD bit-decomposed encoding** (`Encoding::simd()`). Each logical price level spans `SLOT_WIDTH = 16` SIMD slots.
 
-Bidders submit encrypted (quantity, price) pairs. The quantity is bit-decomposed, and each bit is stored in one of the 16 coefficients within the block corresponding to the price level. This avoids the depth costs of SIMD multiplications.
+Bidders submit encrypted (quantity, price) pairs. The quantity is bit-decomposed, and each bit is stored in one of the 16 SIMD slots within the block corresponding to the price level. Under SIMD encoding, ciphertext-ciphertext multiplication is Hadamard (slot-wise), so encrypted masks can be applied via ct×ct mask-multiply when privacy-preserving extraction is needed.
 
 With $N=2048$ and `SLOT_WIDTH=16`, the system supports up to 128 price levels (the demo uses 64).
 
 ### 3.3 Aggregation Strategy
 
-The FBA aggregates cumulative demand vectors directly via ciphertext addition, exactly like M1. The original design's one-hot / adjacent-difference transform was removed to simplify the pipeline and avoid Galois rotations.
+The FBA aggregates cumulative demand vectors directly via ciphertext addition, exactly like M1. The original design's one-hot / adjacent-difference transform was removed to simplify the pipeline.
 
-Under polynomial encoding, Galois rotations do not act as simple coefficient shifts. Instead, they remap indices by exponent multiplication modulo $2N$. Because of this, the SIMD-style `rotates_columns_by(..., 1)` approach for adjacent differencing does not port to the high-throughput poly encoding.
+Under SIMD encoding, Galois rotations do act as simple slot shifts, so slot-level transforms remain available if needed. Even so, the implementation keeps the direct cumulative aggregation approach because it already achieves the required demand-curve computation at depth 0 without adding rotational complexity.
 
-By aggregating cumulative vectors directly, the system maintains $O(1)$ depth and avoids the complexity of homomorphic rotations.
+By aggregating cumulative vectors directly, the system maintains $O(1)$ depth and keeps the homomorphic pipeline simple.
 
 ## 4. Carry-Forward Protocol
 
@@ -96,7 +97,7 @@ After clearing at public price index `k` with clearing price `P*`:
 The clearing index `k` is public. For each active order's ciphertext `V_i`:
 
 - Determine if it is a **Strict Winner**, **Strict Loser**, or **Marginal** based on the public price metadata associated with the order.
-- Classification masks (`build_classification_masks`) are used during threshold decryption to isolate the relevant coefficient blocks for the clearing price level, rather than for SIMD-style masking in the FHE circuit.
+- Classification masks (`build_classification_masks`) target the relevant SIMD slot blocks for the clearing price level. Under SIMD encoding, these masks can be applied homomorphically via Hadamard ct×ct mask-multiply when privacy-preserving extraction is desired, while the current flow still uses them to guide targeted threshold decryption.
 
 ### Step 2: Handle strict winners
 
@@ -104,7 +105,7 @@ If the order is priced above clearing (`price > P*`), the order is fully
 filled. The ciphertext is dropped (no carry-forward needed).
 
 To report the per-order allocation, the committee threshold-decrypts the
-bidder's ciphertext and reads the coefficient block at the order's price level to learn `q_i`. The allocation for this order is `fill_i = q_i` (full fill).
+bidder's ciphertext and reads the SIMD slot block at the order's price level to learn `q_i`. The allocation for this order is `fill_i = q_i` (full fill).
 
 ### Step 3: Handle strict losers
 
@@ -115,7 +116,7 @@ unchanged** as the carried-forward ciphertext. This requires zero per-order decr
 
 For orders priced exactly at `P*`:
 
-1. **Threshold-decrypt quantity**: The committee uses `decrypt_demand_slot_qty` to decrypt the bidder's ciphertext and read the coefficient block at index `k`, revealing `q_i`.
+1. **Threshold-decrypt quantity**: The committee uses `decrypt_demand_slot_qty` to decrypt the bidder's ciphertext and read the SIMD slot block at index `k`, revealing `q_i`.
 
 2. **Compute pro-rata allocation** in plaintext: Using all marginal
    quantities, epoch metadata, and the remaining supply after strict winners
@@ -153,7 +154,7 @@ The next round's ciphertext book consists of:
 | Feature | v1 (Naive) | v2 (Implemented) |
 |---------|------------|-------------|
 | Bidder interaction after submit | Re-encrypt residual each round | None — submit once |
-| Per-order decryptions | 2 slots × every order × every round | 1 block × non-loser orders only; losers: 0 |
+| Per-order decryptions | 2 slots × every order × every round | 1 SIMD slot block × non-loser orders only; losers: 0 |
 | Aggregator learns | Individual (qty_at, qty_above) for all | Quantities of winners + marginals only |
 | Depth consumed | 0 | 0 |
 | Extra FHE ops | None | None (pure additions) |
@@ -161,11 +162,11 @@ The next round's ciphertext book consists of:
 ### 5.3 Parameter Sufficiency
 
 Same as M1. Parameters N=2048, t=12289, 6×62-bit moduli are sufficient.
-The plaintext range constraint is `t > z` (number of bidders), as each coefficient in the multi-coefficient encoding represents a bit-count across bidders. Since `12289 > number of bidders`, no carries occur between bit positions during aggregation.
+The plaintext range constraint is `t > z` (number of bidders), as each SIMD slot in the SIMD bit-decomposed encoding represents a bit-count across bidders. Since `12289 > number of bidders`, no carries occur between bit positions during aggregation.
 
 ### 5.4 Noise Budget
 
-The pipeline is now primarily composed of ciphertext additions and threshold decryptions. Since no rotations or ciphertext-ciphertext multiplications are performed, the noise growth is extremely slow. This allows for a very large number of carry-forward rounds before noise becomes a factor.
+The pipeline is now primarily composed of ciphertext additions and threshold decryptions, so the noise growth is extremely slow. SIMD encoding also makes depth-1 Hadamard ct×ct mask-multiply available for privacy-preserving extraction if needed, while the main carry-forward flow remains addition-dominated and supports a very large number of rounds before noise becomes a factor.
 
 ## 6. Clearing Price Computation
 
@@ -182,7 +183,7 @@ When multiple bidders are at the marginal price `P*`:
 
 ### 7.2 Per-Order Quantity Discovery
 
-The committee identifies non-loser orders using public price metadata. It uses `decrypt_demand_slot_qty()` to threshold-decrypt the relevant coefficient block for each such order. This reveals the individual quantity `q_i` required for allocation and residual calculation.
+The committee identifies non-loser orders using public price metadata. It uses `decrypt_demand_slot_qty()` to threshold-decrypt the relevant SIMD slot block for each such order. This reveals the individual quantity `q_i` required for allocation and residual calculation.
 
 ## 8. Protocol Flow
 
@@ -198,12 +199,12 @@ Submit bids          Sum vectors          Classify orders     Submit new bids
                                             re-encrypt
 ```
 
-1. **Submission**: Bidders encrypt `(qty, price)` using multi-coefficient poly encoding, submit once.
+1. **Submission**: Bidders encrypt `(qty, price)` using SIMD bit-decomposed encoding, submit once.
 2. **Aggregation**: Sum all active ciphertexts into an aggregate demand curve.
 3. **Decryption**: Committee threshold-decrypts the aggregate ciphertext.
 4. **Clearing**: Find the clearing price index `k` from the decrypted demand curve.
 5. **Classification**: Using public price metadata, classify each order.
-6. **Non-loser decryption**: Committee threshold-decrypts winners' and marginals' price-level coefficient blocks to learn quantities.
+6. **Non-loser decryption**: Committee threshold-decrypts winners' and marginals' price-level SIMD slot blocks to learn quantities.
 7. **Allocation**: Compute fills using decrypted quantities, epoch priority, and pro-rata logic.
 8. **Carry-forward**: Committee re-encrypts marginal residuals. Loser ciphertexts are kept. Winner ciphertexts are dropped.
 
@@ -212,9 +213,9 @@ Submit bids          Sum vectors          Classify orders     Submit new bids
 ### Phase 1: Library changes (`src/lib.rs`)
 
 Key implementation details:
-- `build_classification_masks(clearing_idx, params)`: Generates coefficient-range masks for isolation during decryption.
-- `decrypt_demand_slot_qty(ct, slot_idx, ...)`: Threshold-decrypts a specific price-level block from a bidder's ciphertext.
-- `encrypt_residual(qty, price_idx, ...)`: Re-encrypts a residual quantity into a new poly-encoded ciphertext.
+- `build_classification_masks(clearing_idx, params)`: Generates SIMD slot-range masks for isolation during decryption or optional Hadamard mask-multiply.
+- `decrypt_demand_slot_qty(ct, slot_idx, ...)`: Threshold-decrypts a specific price-level SIMD slot block from a bidder's ciphertext.
+- `encrypt_residual(qty, price_idx, ...)`: Re-encrypts a residual quantity into a new SIMD-encoded ciphertext.
 
 The functions `to_one_hot`, `accumulate_one_hot`, and `histogram_to_demand_curve` from the original design were removed as the pipeline was simplified to use direct cumulative aggregation.
 
@@ -232,7 +233,7 @@ The demo implements the homomorphic carry-forward flow:
 |------|----------|
 | All orders are strict winners | No marginal decryption needed. No carry-forward. |
 | All orders are strict losers | No decryption beyond aggregate. All ciphertexts carry forward. |
-| All orders are marginal | Every order's slot `k` is decrypted. Maximum per-order disclosure. |
+| All orders are marginal | Every order's SIMD slot block at `k` is decrypted. Maximum per-order disclosure. |
 | Zero marginal bidders | Clearing price falls between two price levels. No pro-rata needed. |
 | Order cancelled after partial fill | Valid; ciphertext removed from book before next aggregation. |
 
@@ -251,4 +252,4 @@ The demo implements the homomorphic carry-forward flow:
 ## 12. Open Questions
 
 1. **Secret prices**: If order prices should also be secret, classification would require different encoding strategies.
-2. **Galois Rotations**: While the current poly-encoding pipeline avoids rotations, they remain available for other mechanisms that might require coefficient shifts.
+2. **Galois Rotations**: Under SIMD encoding, rotations behave as expected slot shifts. The current FBA pipeline still avoids them for simplicity, but they remain available for other mechanisms that may benefit from slot movement.

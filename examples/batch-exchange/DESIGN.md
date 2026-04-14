@@ -34,7 +34,7 @@ Similar to the one-sided auction (M1), we move comparisons into the encoding pha
 - **Buy Demand**: A descending step function. Demand is highest at low prices and decreases as price rises.
 - **Sell Supply**: An ascending step function. Supply is lowest at low prices and increases as price rises.
 
-The clearing price is the intersection of these two curves. By encoding both sides into the same BFV polynomial coefficient blocks (mapped to price levels), we can compute both aggregate curves using only homomorphic addition.
+The clearing price is the intersection of these two curves. By encoding both sides into the same BFV SIMD slot blocks (mapped to price levels), we can compute both aggregate curves using only homomorphic addition.
 
 ## 3. Encoding Scheme
 
@@ -50,7 +50,7 @@ For the demo, `P = 64`.
 
 ### 3.2 Buyer Encoding (Descending Step)
 
-Buyer `i` with `(q_i, max_price_i)` constructs a vector where each price level spans `SLOT_WIDTH = 16` consecutive polynomial coefficients. The quantity `q_i` is bit-decomposed across these 16 coefficients at each price level where the buyer is willing to buy. Uses `Encoding::poly()`.
+Buyer `i` with `(q_i, max_price_i)` constructs a vector where each price level spans `SLOT_WIDTH = 16` consecutive SIMD slots. The quantity `q_i` is bit-decomposed across these 16 SIMD slots at each price level where the buyer is willing to buy. Uses `Encoding::simd()`.
 
 ```
 v_buy_i[p] = bit_decomposed(q_i)    if price_ladder[p] <= max_price_i
@@ -59,7 +59,7 @@ v_buy_i[p] = 0                      if price_ladder[p] > max_price_i
 
 ### 3.3 Seller Encoding (Ascending Step)
 
-Seller `j` with `(q_j, min_price_j)` constructs a similar vector using the same multi-coefficient encoding but in an ascending direction.
+Seller `j` with `(q_j, min_price_j)` constructs a similar vector using the same SIMD bit-decomposed encoding but in an ascending direction.
 
 ```
 v_sell_j[p] = bit_decomposed(q_j)    if price_ladder[p] >= min_price_j
@@ -69,7 +69,7 @@ v_sell_j[p] = 0                      if price_ladder[p] < min_price_j
 ### 3.4 Example
 
 Price ladder: `[10, 20, 30, 40, 50]`
-- Buyer A: `(qty=100, max_price=30)` → At price levels 10, 20, and 30 (indices 0, 1, 2), the 16 coefficients contain the bits of 100 (`0b0000000001100100`).
+- Buyer A: `(qty=100, max_price=30)` → At price levels 10, 20, and 30 (indices 0, 1, 2), the 16 SIMD slots contain the bits of 100 (`0b0000000001100100`).
 
 ### 3.5 Accumulation
 
@@ -80,7 +80,7 @@ V_buy  = Σ_i v_buy_i
 V_sell = Σ_j v_sell_j
 ```
 
-Both use `n-1` homomorphic additions (depth 0). Since additions are coefficient-wise, the bit counts at each position accumulate independently without carries between coefficients.
+Both use `n-1` homomorphic additions (depth 0). Since additions are slot-wise, the bit counts at each position accumulate independently without carries between SIMD slots.
 
 ## 4. FHE Circuit Analysis
 
@@ -94,7 +94,7 @@ Both use `n-1` homomorphic additions (depth 0). Since additions are coefficient-
 | Masking | `V × slot_mask` | 2 ct×pt multiplies | 0 |
 | Threshold decrypt | Decrypt curves + masks | Standard protocol | 0 |
 
-**Total multiplicative depth: 0.**
+**Total multiplicative depth: 0 for the direct-decrypt demo path; 1 if private ct×ct slot extraction is used.**
 
 ### 4.2 Noise and Range Constraints
 
@@ -131,19 +131,19 @@ fn find_clearing_price(
 
 ### 6.1 Slot Extraction Per Side
 
-Under multi-coefficient polynomial encoding, mask-multiply (pointwise) does not work because multiplication is polynomial convolution. Instead, the committee threshold-decrypts the full ciphertext of each participant and reads the coefficient blocks directly.
+Under SIMD encoding, mask-multiply works because ciphertext multiplication is Hadamard (slot-wise). The committee can encrypt a mask with 1s at the target SIMD slots, perform a ct×ct multiply plus relinearization at depth 1, and threshold-decrypt the isolated SIMD slot blocks before extraction.
 
-- **Buyers** (descending step): Extract coefficient blocks for price levels `k` and `k+1`.
+- **Buyers** (descending step): Extract SIMD slot blocks for price levels `k` and `k+1`.
   - `strict_fill_buy_i` is extracted from the block at `k+1`.
   - `marginal_qty_buy_i` is the difference between blocks at `k` and `k+1`.
   - When `k == P-1` (highest ladder price): all demand is marginal.
 
-- **Sellers** (ascending step): Extract coefficient blocks for price levels `k` and `k-1`.
+- **Sellers** (ascending step): Extract SIMD slot blocks for price levels `k` and `k-1`.
   - `strict_fill_sell_j` is extracted from the block at `k-1`.
   - `marginal_qty_sell_j` is the difference between blocks at `k` and `k-1`.
   - When `k == 0` (lowest ladder price): all supply is marginal.
 
-Individual bits are reconstructed from the 16 coefficients in each block to recover the full quantity.
+Individual bits are reconstructed from the 16 SIMD slots in each block to recover the full quantity.
 
 ### 6.2 Determining the Rationed Side
 
@@ -166,13 +166,13 @@ Rationing uses the same largest-remainder method as M1. Only the "marginal" side
 
 1.  **DKG/Eval-Key**: Setup joint keys.
 2.  **Submission**:
-    - Buyers encrypt bit-decomposed vectors (poly encoding).
-    - Sellers encrypt bit-decomposed vectors (poly encoding).
+    - Buyers encrypt bit-decomposed vectors (SIMD encoding).
+    - Sellers encrypt bit-decomposed vectors (SIMD encoding).
 3.  **Aggregation**: Aggregator sums buy ciphertexts and sell ciphertexts separately.
 4.  **Decryption**:
     - Threshold-decrypt `V_buy` and `V_sell`.
     - Committee finds `P*` and identifies which side is rationed.
-    - Committee threshold-decrypts participant ciphertexts directly and reads the needed coefficient blocks (no masking required).
+    - Committee either threshold-decrypts participant ciphertexts directly or uses ct×ct masks to isolate the needed SIMD slot blocks before decryption.
 5.  **Settlement**: Compute final allocations with largest-remainder rounding.
 
 ## 8. Comparison: M1 vs M4
@@ -191,7 +191,7 @@ Rationing uses the same largest-remainder method as M1. Only the "marginal" side
 - Buyers: `n_buy`
 - Sellers: `n_sell`
 - Aggregates: 2
-- Total threshold decryptions: `2 + n_buy + n_sell` (no masked vectors)
+- Total threshold decryptions: `2 + n_buy + n_sell` in the direct-decrypt demo path (mask-based extraction adds masked ciphertexts as needed)
 
 ## 10. Edge Cases
 
