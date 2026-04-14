@@ -52,7 +52,7 @@ FBA uses **epoch-based priority** where earlier-round orders fill first at the m
 1. **Submission**: Bidder encodes a 2048-slot SIMD plaintext (64 levels × 16 bits), encrypts under joint public key → 1 BFV ciphertext.
 2. **Aggregation**: Per-round sum of all active ciphertexts (depth 0) → 1 aggregate ciphertext per round.
 3. **Aggregate decryption**: 2-of-3 threshold decrypt with 80-bit smudging noise → plaintext demand curve.
-4. **Classification decryption**: Committee threshold-decrypts targeted SIMD slot blocks of winner/marginal ciphertexts only. Losers' ciphertexts are not decrypted.
+4. **Classification decryption**: Committee isolates targeted SIMD slot blocks of winner/marginal ciphertexts using ct×ct mask-multiply before threshold decryption. Losers' ciphertexts are not decrypted.
 5. **Carry-forward**: Strict losers' original ciphertexts persist unchanged. Marginal residuals are re-encrypted as fresh ciphertexts. Winners' ciphertexts are dropped.
 6. **Cross-round**: Steps 2–5 repeat each epoch with the updated book. Earlier-epoch orders get priority at marginal fills.
 
@@ -60,11 +60,11 @@ FBA uses **epoch-based priority** where earlier-round orders fill first at the m
 
 ### Distributed evaluation keys
 
-While the core FBA pipeline under SIMD encoding uses pure ciphertext additions and threshold decryption, the repository's distributed eval-key MPC infrastructure remains fully integrated. This ensures that any additional mechanisms requiring Galois rotations, relinearization, or Hadamard ct×ct mask-multiply can be securely executed without ever reconstructing the joint secret key.
+While the core FBA pipeline under SIMD encoding uses pure ciphertext additions and threshold decryption, the repository's distributed eval-key MPC infrastructure remains fully integrated. The relinearization key is actively used for ct×ct mask-multiply during per-order slot extraction. This ensures that any additional mechanisms requiring Galois rotations or relinearization can be securely executed without ever reconstructing the joint secret key.
 
 ### Smudging noise
 
-Threshold decryption shares include **80-bit smudging noise** to protect the secret key from leakage during the multi-round process. Because the main pipeline is dominated by additions, the noise growth is minimal, allowing for a large number of carry-forward rounds. SIMD encoding also leaves depth-1 Hadamard mask-multiply available for privacy-preserving extraction when needed.
+Threshold decryption shares include **80-bit smudging noise** to protect the secret key from leakage during the multi-round process. Because the main pipeline is dominated by additions, the noise growth is minimal, allowing for a large number of carry-forward rounds. The demo uses depth-1 Hadamard mask-multiply for privacy-preserving per-order slot extraction.
 
 ## Project structure
 

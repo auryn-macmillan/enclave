@@ -90,7 +90,7 @@ The marginal allocation uses the **largest-remainder method** (Hamilton's method
 | Bidder's quantity at clearing price | ✅ Yes (per-bidder) | During allocation | Needed for pro-rata calculation |
 | Bidder's quantity above clearing price | ✅ Yes (per-bidder) | During allocation | Needed to identify strict winners |
 | Bidder's exact bid price | ❌ No | Never | Only the at-clearing and above-clearing quantities are read |
-| Bidder's quantity at non-clearing levels | ❌ No | Never | These SIMD slots are never decrypted (or zeroed by mask-multiply in production) |
+| Bidder's quantity at non-clearing levels | ❌ No | Never | These SIMD slots are zeroed by ct×ct Hadamard mask-multiply before decryption |
 | Any individual's raw bid (qty, price) pair | ❌ No | Never | Bids are only visible through encrypted ciphertexts |
 
 ### Ciphertext lifecycle
@@ -98,7 +98,7 @@ The marginal allocation uses the **largest-remainder method** (Hamilton's method
 1. **Encryption**: Bidder encodes a 2048-slot SIMD plaintext (64 levels × 16 bits), encrypts under joint public key → 1 BFV ciphertext per bidder.
 2. **Accumulation**: All ciphertexts are summed homomorphically (depth 0) → 1 aggregate ciphertext.
 3. **Aggregate decryption**: 2-of-3 committee threshold-decrypts the aggregate → plaintext demand curve. Smudging noise (λ=80 bits) protects the secret key.
-4. **Per-bidder decryption**: Committee threshold-decrypts each bidder's ciphertext and reads only the SIMD slot blocks at the clearing price and one level above. In production, ct×ct Hadamard mask-multiply (depth 1) + relinearization zeroes all other slots before decryption.
+4. **Per-bidder decryption**: Committee threshold-decrypts each bidder's ciphertext and reads only the SIMD slot blocks at the clearing price and one level above. The committee encrypts a mask with 1s at the target SIMD slot blocks, multiplies ct×ct (Hadamard, depth 1), relinearizes, and threshold-decrypts only the masked ciphertext — all non-target slots are zeroed before decryption.
 5. **Allocation**: Clearing price, strict-winner quantities, and marginal pro-rata shares are computed in plaintext from the decrypted slot values.
 
 ## Comparison with Vickrey demo
@@ -106,7 +106,7 @@ The marginal allocation uses the **largest-remainder method** (Hamilton's method
 | Feature | Vickrey Demo | Uniform-Price Demo |
 |---------|--------------|-------------------|
 | Ciphertexts per bidder | 64 (bit-planes) | 1 (demand vector) |
-| Multiplicative depth | 1 (ct × ct) | 0 (additions only) |
+| Multiplicative depth | 1 (ct × ct) | 1 (mask-multiply for per-bidder extraction) |
 | Core rotations | Required (reduce-tree) | None for core computation (SIMD slot blocks) |
 | Privacy | Second price only | Clearing price + allocations |
 
@@ -114,7 +114,7 @@ The marginal allocation uses the **largest-remainder method** (Hamilton's method
 
 ### Distributed evaluation keys
 
-While the core accumulation requires no rotations, the committee still generates Galois and relinearization keys using the repo's **distributed eval-key MPC** flow. Under `Encoding::simd()`, this also enables privacy-preserving ct×ct mask-multiply: the committee can encrypt a mask, apply a Hadamard product, relinearize, and decrypt only the target SIMD slots needed for settlement without ever reconstructing the joint secret key.
+While the core accumulation requires no rotations, the committee still generates Galois and relinearization keys using the repo's **distributed eval-key MPC** flow. The relinearization key is used for the ct×ct mask-multiply that isolates per-bidder SIMD slot blocks during allocation without ever reconstructing the joint secret key.
 
 ### Smudging noise
 

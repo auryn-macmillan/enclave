@@ -30,7 +30,7 @@ Per-bidder lot allocations are determined based on the clearing price:
 - **Losers** (price < P*) receive zero.
 - **Marginal bidders** (price == P*) receive a pro-rata share of remaining lots, resolved using **largest-remainder rounding** to maintain discrete lot units.
 
-Under SIMD encoding, the committee can also perform privacy-preserving ct×ct mask-multiply via Hadamard multiplication to isolate target SIMD slot blocks at depth 1 before threshold decryption. The functional settlement logic is unchanged.
+Under SIMD encoding, the committee performs privacy-preserving ct×ct mask-multiply via Hadamard multiplication to isolate target SIMD slot blocks at depth 1 before threshold decryption. The functional settlement logic is unchanged.
 
 ## What is revealed vs. what stays hidden
 
@@ -42,7 +42,7 @@ Under SIMD encoding, the committee can also perform privacy-preserving ct×ct ma
 | Bidder's unclamped (raw) quantity | ❌ No | Never | Clamped client-side before encryption; never enters a ciphertext |
 | Bidder's full 64-level demand vector | ❌ No | Never | Only targeted SIMD slot blocks at clearing and above are decrypted |
 | Bidder's exact max price | ❌ No | Never | Only at-clearing and above-clearing quantities are read |
-| Lot counts at non-clearing levels | ❌ No | Never | Not decrypted (zeroed by mask-multiply in production) |
+| Lot counts at non-clearing levels | ❌ No | Never | Zeroed by ct×ct mask-multiply before decryption |
 
 ### Ciphertext lifecycle
 
@@ -50,7 +50,7 @@ Under SIMD encoding, the committee can also perform privacy-preserving ct×ct ma
 2. **Encryption**: 2048-slot SIMD plaintext (64 levels × 16 bits) encrypted under joint public key → 1 ciphertext per bidder.
 3. **Accumulation**: Homomorphic sum (depth 0) → 1 aggregate ciphertext.
 4. **Aggregate decryption**: 2-of-3 threshold decrypt with 80-bit smudging → plaintext demand curve.
-5. **Per-bidder decryption**: Committee decrypts targeted SIMD slot blocks at clearing level and one above. In production, mask-multiply (depth 1) isolates these slots first.
+5. **Per-bidder decryption**: Committee decrypts targeted SIMD slot blocks at clearing level and one above. The committee encrypts a mask, multiplies ct×ct (Hadamard, depth 1), relinearizes, and threshold-decrypts only the masked result.
 6. **Settlement**: Allocations, payments, and refunds computed in plaintext from decrypted slot values.
 
 ### 6. Settlement

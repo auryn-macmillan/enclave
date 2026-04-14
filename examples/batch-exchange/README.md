@@ -47,7 +47,7 @@ Once the clearing price index `k` is found, the committee determines which side 
 *   If `demand > supply` at the clearing price, buyers are rationed.
 *   If `supply > demand`, sellers are rationed.
 
-Under SIMD encoding, ct×ct mask-multiply is possible via Hadamard multiplication. The committee can encrypt a mask with 1s at the target SIMD slots and isolate the relevant SIMD slot blocks at depth 1 before threshold decryption. In this demo, the committee still threshold-decrypts the full ciphertexts of relevant participants and reads the needed SIMD slot blocks directly. Buyers use blocks at price levels `(k, k+1)` to distinguish strict winners from marginal demand. Sellers use blocks at price levels `(k, k-1)` (or just `k` at the lowest price). Pro-rata allocation with largest-remainder rounding is applied only to the rationed side.
+Under SIMD encoding, the committee uses ct×ct mask-multiply via Hadamard multiplication. The committee encrypts a mask with 1s at the target SIMD slot blocks, multiplies ct×ct (Hadamard, depth 1), relinearizes, and threshold-decrypts only the masked ciphertext. This ensures that non-target slots remain zeroed and unreadable during the allocation phase. Buyers use blocks at price levels `(k, k+1)` to distinguish strict winners from marginal demand. Sellers use blocks at price levels `(k, k-1)` (or just `k` at the lowest price). Pro-rata allocation with largest-remainder rounding is applied only to the rationed side.
 
 ## What is revealed vs. what stays hidden
 
@@ -59,7 +59,7 @@ Under SIMD encoding, ct×ct mask-multiply is possible via Hadamard multiplicatio
 | Seller's quantity at clearing level k and k-1 | ✅ Yes | During allocation | Distinguishes strict sellers from marginal sellers |
 | Any participant's full 64-level demand/supply vector | ❌ No | Never | Only 2 adjacent SIMD slot blocks per participant are read |
 | Buyer's max price or seller's min price | ❌ No | Never | Only quantities at specific levels are revealed, not reservation prices |
-| Quantities at non-adjacent price levels | ❌ No | Never | Not decrypted (zeroed by mask-multiply in production) |
+| Quantities at non-adjacent price levels | ❌ No | Never | Zeroed by ct×ct mask-multiply before decryption |
 
 ### Ciphertext lifecycle
 
@@ -67,7 +67,7 @@ Under SIMD encoding, ct×ct mask-multiply is possible via Hadamard multiplicatio
 2. **Accumulation**: Separate Hadamard sums for buy and sell sides (depth 0) → 2 aggregate ciphertexts.
 3. **Curve decryption**: 2-of-3 threshold decrypt both aggregates with 80-bit smudging → 2 plaintext curves.
 4. **Clearing**: Committee performs descending scan in plaintext to find intersection → clearing price.
-5. **Per-participant decryption**: Committee threshold-decrypts each participant's ciphertext and reads only the 2 relevant SIMD slot blocks (at k and k±1). In production, ct×ct mask-multiply (depth 1) would isolate these slots before decryption.
+5. **Per-participant decryption**: The committee encrypts a mask, multiplies ct×ct (Hadamard, depth 1), relinearizes, and threshold-decrypts only the masked result. This isolates the two relevant SIMD slot blocks (at k and k±1) while leaving all other slots zeroed.
 6. **Allocation**: Pro-rata with largest-remainder rounding applied to the rationed side.
 
 ## Production considerations

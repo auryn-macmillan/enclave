@@ -94,7 +94,7 @@ Both use `n-1` homomorphic additions (depth 0). Since additions are slot-wise, t
 | Masking | `V × slot_mask` | 2 ct×pt multiplies | 0 |
 | Threshold decrypt | Decrypt curves + masks | Standard protocol | 0 |
 
-**Total multiplicative depth: 0 for the direct-decrypt demo path; 1 if private ct×ct slot extraction is used.**
+**Total multiplicative depth: 1 (ct×ct mask-multiply for per-participant slot extraction).**
 
 ### 4.2 Noise and Range Constraints
 
@@ -131,7 +131,7 @@ fn find_clearing_price(
 
 ### 6.1 Slot Extraction Per Side
 
-Under SIMD encoding, mask-multiply works because ciphertext multiplication is Hadamard (slot-wise). The committee can encrypt a mask with 1s at the target SIMD slots, perform a ct×ct multiply plus relinearization at depth 1, and threshold-decrypt the isolated SIMD slot blocks before extraction.
+Under SIMD encoding, mask-multiply works because ciphertext multiplication is Hadamard (slot-wise). The committee encrypts a mask with 1s at the target SIMD slots, performs a ct×ct multiply plus relinearization at depth 1, and threshold-decrypts the isolated SIMD slot blocks before extraction.
 
 - **Buyers** (descending step): Extract SIMD slot blocks for price levels `k` and `k+1`.
   - `strict_fill_buy_i` is extracted from the block at `k+1`.
@@ -171,8 +171,8 @@ Rationing uses the same largest-remainder method as M1. Only the "marginal" side
 3.  **Aggregation**: Aggregator sums buy ciphertexts and sell ciphertexts separately.
 4.  **Decryption**:
     - Threshold-decrypt `V_buy` and `V_sell`.
-    - Committee finds `P*` and identifies which side is rationed.
-    - Committee either threshold-decrypts participant ciphertexts directly or uses ct×ct masks to isolate the needed SIMD slot blocks before decryption.
+- Committee finds `P*` and identifies which side is rationed.
+- Committee uses ct×ct masks to isolate the needed SIMD slot blocks before decryption.
 5.  **Settlement**: Compute final allocations with largest-remainder rounding.
 
 ## 8. Comparison: M1 vs M4
@@ -191,7 +191,7 @@ Rationing uses the same largest-remainder method as M1. Only the "marginal" side
 - Buyers: `n_buy`
 - Sellers: `n_sell`
 - Aggregates: 2
-- Total threshold decryptions: `2 + n_buy + n_sell` in the direct-decrypt demo path (mask-based extraction adds masked ciphertexts as needed)
+- Total threshold decryptions: `2 + n_buy + n_sell` (includes aggregate curves and masked per-participant slot-block ciphertexts)
 
 ## 10. Edge Cases
 
