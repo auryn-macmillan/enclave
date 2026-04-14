@@ -3,10 +3,11 @@
 use batch_exchange_example::{
     accumulate_demand, aggregate_public_key, aggregate_sk_shares_for_party,
     build_eval_key_from_committee, build_params, build_price_ladder, compute_decryption_shares,
-    compute_two_sided_allocations, decode_demand_slot, encode_buy_demand_vector,
-    encode_sell_supply_vector, encrypt_demand, find_two_sided_clearing_price, generate_crp,
-    generate_eval_key_root_seed, generate_smudging_noise, member_keygen, threshold_decrypt,
-    COMMITTEE_N, PRICE_LEVELS, SLOTS,
+    compute_two_sided_allocations, decode_demand_curve, decode_demand_slot,
+    encode_buy_demand_vector, encode_sell_supply_vector, encrypt_demand,
+    find_two_sided_clearing_price, generate_crp, generate_eval_key_root_seed,
+    generate_smudging_noise, member_keygen, threshold_decrypt, COMMITTEE_N, PRICE_LEVELS,
+    SLOT_WIDTH,
 };
 use fhe::bfv::{BfvParameters, Ciphertext, Encoding, Plaintext};
 use fhe_math::rq::Poly;
@@ -83,11 +84,9 @@ fn decrypt_curve(
         })
         .collect();
     let pts = threshold_decrypt(&party_shares, std::slice::from_ref(ct), params);
-    let slots = Vec::<u64>::try_decode(&pts[0], Encoding::simd()).expect("decode curve");
+    let coeffs = Vec::<u64>::try_decode(&pts[0], Encoding::poly()).expect("decode curve");
 
-    (0..PRICE_LEVELS)
-        .map(|idx| decode_demand_slot(slots[idx], params.plaintext()))
-        .collect()
+    decode_demand_curve(&coeffs, PRICE_LEVELS, params.plaintext())
 }
 
 fn decrypt_masked_slots(
@@ -97,13 +96,12 @@ fn decrypt_masked_slots(
     sk_poly_sums: &[Poly],
     params: &Arc<BfvParameters>,
 ) -> Vec<u64> {
-    let masked_ct = ct * mask_pt;
     let party_shares: Vec<(usize, Vec<_>)> = participating
         .iter()
         .map(|&i| {
             let smudging = generate_smudging_noise(params, 1);
             let shares = compute_decryption_shares(
-                std::slice::from_ref(&masked_ct),
+                std::slice::from_ref(ct),
                 &sk_poly_sums[i],
                 &smudging,
                 params,
@@ -111,8 +109,15 @@ fn decrypt_masked_slots(
             (i + 1, shares)
         })
         .collect();
-    let pts = threshold_decrypt(&party_shares, std::slice::from_ref(&masked_ct), params);
-    Vec::<u64>::try_decode(&pts[0], Encoding::simd()).expect("decode masked slots")
+    let pts = threshold_decrypt(&party_shares, std::slice::from_ref(ct), params);
+    let coeffs = Vec::<u64>::try_decode(&pts[0], Encoding::poly()).expect("decode masked slots");
+    let mask_coeffs = Vec::<u64>::try_decode(mask_pt, Encoding::poly()).expect("decode mask");
+
+    coeffs
+        .into_iter()
+        .zip(mask_coeffs)
+        .map(|(coeff, mask)| coeff * mask)
+        .collect()
 }
 
 fn main() {
@@ -180,23 +185,13 @@ fn main() {
         (SELLER_NAMES[4], 60, p45),
     ];
 
-    let total_buy_qty: u64 = buyers_plain.iter().map(|(_, qty, _)| *qty).sum();
-    let total_sell_qty: u64 = sellers_plain.iter().map(|(_, qty, _)| *qty).sum();
     assert!(
-        total_buy_qty < 6_144,
-        "total buy quantity must stay below t/2"
+        buyers_plain.len() < params.plaintext() as usize / 2,
+        "too many buyers for plaintext modulus"
     );
     assert!(
-        total_sell_qty < 6_144,
-        "total sell quantity must stay below t/2"
-    );
-    assert!(
-        buyers_plain.len() <= SLOTS,
-        "too many buyers for SIMD slots"
-    );
-    assert!(
-        sellers_plain.len() <= SLOTS,
-        "too many sellers for SIMD slots"
+        sellers_plain.len() < params.plaintext() as usize / 2,
+        "too many sellers for plaintext modulus"
     );
 
     let mut aggregate_buy_ct: Option<Ciphertext> = None;
@@ -263,35 +258,51 @@ fn main() {
         format_quantity(sell_supply[clearing_idx])
     );
 
-    let mut buyer_mask_slots = vec![0u64; SLOTS];
-    buyer_mask_slots[clearing_idx] = 1;
-    if clearing_idx + 1 < PRICE_LEVELS {
-        buyer_mask_slots[clearing_idx + 1] = 1;
+    let mut buyer_mask_coeffs = vec![0u64; params.degree()];
+    for bit in 0..SLOT_WIDTH {
+        buyer_mask_coeffs[clearing_idx * SLOT_WIDTH + bit] = 1;
+        if clearing_idx + 1 < PRICE_LEVELS {
+            buyer_mask_coeffs[(clearing_idx + 1) * SLOT_WIDTH + bit] = 1;
+        }
     }
-    let buyer_mask_pt = Plaintext::try_encode(&buyer_mask_slots, Encoding::simd(), &params)
+    let buyer_mask_pt = Plaintext::try_encode(&buyer_mask_coeffs, Encoding::poly(), &params)
         .expect("encode buyer mask");
 
-    let mut seller_mask_slots = vec![0u64; SLOTS];
-    seller_mask_slots[clearing_idx] = 1;
-    if clearing_idx > 0 {
-        seller_mask_slots[clearing_idx - 1] = 1;
+    let mut seller_mask_coeffs = vec![0u64; params.degree()];
+    for bit in 0..SLOT_WIDTH {
+        seller_mask_coeffs[clearing_idx * SLOT_WIDTH + bit] = 1;
+        if clearing_idx > 0 {
+            seller_mask_coeffs[(clearing_idx - 1) * SLOT_WIDTH + bit] = 1;
+        }
     }
-    let seller_mask_pt = Plaintext::try_encode(&seller_mask_slots, Encoding::simd(), &params)
+    let seller_mask_pt = Plaintext::try_encode(&seller_mask_coeffs, Encoding::poly(), &params)
         .expect("encode seller mask");
 
     let buyer_values: Vec<(u64, u64)> = buyer_orders
         .iter()
         .map(|order| {
-            let slots = decrypt_masked_slots(
+            let coeffs = decrypt_masked_slots(
                 &order.ct,
                 &buyer_mask_pt,
                 &participating,
                 &sk_poly_sums,
                 &params,
             );
-            let at_clearing = decode_demand_slot(slots[clearing_idx], params.plaintext());
+            let at_clearing = (0..SLOT_WIDTH)
+                .map(|bit| {
+                    decode_demand_slot(coeffs[clearing_idx * SLOT_WIDTH + bit], params.plaintext())
+                        * (1u64 << bit)
+                })
+                .sum::<u64>();
             let above_clearing = if clearing_idx + 1 < PRICE_LEVELS {
-                decode_demand_slot(slots[clearing_idx + 1], params.plaintext())
+                (0..SLOT_WIDTH)
+                    .map(|bit| {
+                        decode_demand_slot(
+                            coeffs[(clearing_idx + 1) * SLOT_WIDTH + bit],
+                            params.plaintext(),
+                        ) * (1u64 << bit)
+                    })
+                    .sum::<u64>()
             } else {
                 0
             };
@@ -302,16 +313,28 @@ fn main() {
     let seller_values: Vec<(u64, u64)> = seller_orders
         .iter()
         .map(|order| {
-            let slots = decrypt_masked_slots(
+            let coeffs = decrypt_masked_slots(
                 &order.ct,
                 &seller_mask_pt,
                 &participating,
                 &sk_poly_sums,
                 &params,
             );
-            let at_clearing = decode_demand_slot(slots[clearing_idx], params.plaintext());
+            let at_clearing = (0..SLOT_WIDTH)
+                .map(|bit| {
+                    decode_demand_slot(coeffs[clearing_idx * SLOT_WIDTH + bit], params.plaintext())
+                        * (1u64 << bit)
+                })
+                .sum::<u64>();
             let below_clearing = if clearing_idx > 0 {
-                decode_demand_slot(slots[clearing_idx - 1], params.plaintext())
+                (0..SLOT_WIDTH)
+                    .map(|bit| {
+                        decode_demand_slot(
+                            coeffs[(clearing_idx - 1) * SLOT_WIDTH + bit],
+                            params.plaintext(),
+                        ) * (1u64 << bit)
+                    })
+                    .sum::<u64>()
             } else {
                 0
             };

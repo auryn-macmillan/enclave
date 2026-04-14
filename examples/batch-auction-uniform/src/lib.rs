@@ -3,7 +3,7 @@
 //! # Uniform-Price Batch Auction — Threshold FHE Library
 //!
 //! A sealed-bid **uniform-price** batch auction built on threshold BFV
-//! fully-homomorphic encryption with SIMD batching.
+//! fully-homomorphic encryption with polynomial-coefficient demand encoding.
 //!
 //! ## Committee & Key Generation
 //!
@@ -14,10 +14,10 @@
 //!
 //! ## Encoding
 //!
-//! Each bidder encodes their `(quantity, price)` pair as a SIMD
-//! **cumulative demand vector** over a public ascending price ladder.  Slot
-//! `p` holds `quantity` when `price_ladder[p] <= price`, and 0 otherwise.
-//! Slots beyond the ladder length are always 0.
+//! Each bidder encodes their `(quantity, price)` pair as a coefficient-packed
+//! **cumulative demand vector** over a public ascending price ladder. Each
+//! logical price level occupies `SLOT_WIDTH` consecutive polynomial
+//! coefficients containing a bit decomposition of the bidder quantity.
 //!
 //! ## Demand Accumulation (FHE Phase — Depth 0)
 //!
@@ -63,6 +63,9 @@ use std::sync::Arc;
 /// Number of discrete price levels in the public ladder.
 pub const PRICE_LEVELS: usize = 64;
 
+/// Number of polynomial coefficients used per logical price level.
+pub const SLOT_WIDTH: usize = 16;
+
 /// Build an ascending public price ladder with `levels` evenly-spaced values.
 ///
 /// The first level is `min_price`; the last is `max_price`.  Intermediate
@@ -84,8 +87,9 @@ pub fn build_price_ladder(min_price: u64, max_price: u64, levels: usize) -> Vec<
 
 /// Encode one bidder's `(quantity, price)` pair as a cumulative demand vector.
 ///
-/// Slot `p` holds `qty` when `price_ladder[p] <= price`, and 0 otherwise.
-/// Slots beyond `price_ladder.len()` are zero-filled.
+/// Each logical price level `p` spans `SLOT_WIDTH` polynomial coefficients.
+/// When `price_ladder[p] <= price`, those coefficients store the bit
+/// decomposition of `qty`; otherwise the whole block is zero-filled.
 pub fn encode_demand_vector(
     qty: u64,
     price: u64,
@@ -93,18 +97,20 @@ pub fn encode_demand_vector(
     params: &Arc<BfvParameters>,
 ) -> Plaintext {
     assert!(
-        price_ladder.len() <= params.degree(),
-        "price ladder exceeds SIMD slots"
+        price_ladder.len() * SLOT_WIDTH <= params.degree(),
+        "price ladder × SLOT_WIDTH exceeds polynomial degree"
     );
 
-    let mut slots = vec![0u64; params.degree()];
-    for (slot, &ladder_price) in slots.iter_mut().zip(price_ladder.iter()) {
+    let mut coeffs = vec![0u64; params.degree()];
+    for (level_idx, &ladder_price) in price_ladder.iter().enumerate() {
         if ladder_price <= price {
-            *slot = qty;
+            for bit in 0..SLOT_WIDTH {
+                coeffs[level_idx * SLOT_WIDTH + bit] = ((qty >> bit) & 1) as u64;
+            }
         }
     }
 
-    Plaintext::try_encode(&slots, Encoding::simd(), params).expect("encode demand vector")
+    Plaintext::try_encode(&coeffs, Encoding::poly(), params).expect("encode demand vector")
 }
 
 /// Encrypt a cumulative-demand plaintext with the joint public key.
@@ -231,7 +237,7 @@ pub fn compute_allocations(
     allocations
 }
 
-/// Decode a single decrypted demand slot, treating large values (> `t / 2`)
+/// Decode a single decrypted coefficient count, treating large values (> `t / 2`)
 /// as zero.
 ///
 /// BFV arithmetic is mod `t`.  A true zero can decrypt as `t − ε` due to
@@ -244,13 +250,31 @@ pub fn decode_demand_slot(raw: u64, plaintext_modulus: u64) -> u64 {
     }
 }
 
+/// Reconstruct the aggregate demand curve from decrypted polynomial coefficients.
+///
+/// Each logical price level spans `SLOT_WIDTH` consecutive coefficients.
+/// The aggregate quantity at level `p` is `Σ_{j=0}^{SLOT_WIDTH-1} count[p*SLOT_WIDTH + j] * 2^j`.
+pub fn decode_demand_curve(coeffs: &[u64], num_levels: usize, plaintext_modulus: u64) -> Vec<u64> {
+    (0..num_levels)
+        .map(|level| {
+            let mut qty = 0u64;
+            for bit in 0..SLOT_WIDTH {
+                let raw = coeffs[level * SLOT_WIDTH + bit];
+                let count = decode_demand_slot(raw, plaintext_modulus);
+                qty += count * (1u64 << bit);
+            }
+            qty
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use fhe_traits::FheDecoder;
 
     fn decode_slots(pt: &Plaintext) -> Vec<u64> {
-        Vec::<u64>::try_decode(pt, Encoding::simd()).expect("decode demand vector")
+        Vec::<u64>::try_decode(pt, Encoding::poly()).expect("decode demand vector")
     }
 
     #[test]
@@ -272,16 +296,21 @@ mod tests {
         let params = build_params();
         let ladder = build_price_ladder(100, 1000, 10);
         let pt = encode_demand_vector(100, 500, &ladder, &params);
-        let slots = decode_slots(&pt);
+        let coeffs = decode_slots(&pt);
 
         for (idx, &level) in ladder.iter().enumerate() {
             let expected = if level <= 500 { 100 } else { 0 };
-            assert_eq!(
-                slots[idx], expected,
-                "slot {idx} mismatch at price level {level}"
-            );
+            let qty = (0..SLOT_WIDTH)
+                .map(|bit| {
+                    decode_demand_slot(coeffs[idx * SLOT_WIDTH + bit], params.plaintext())
+                        * (1u64 << bit)
+                })
+                .sum::<u64>();
+            assert_eq!(qty, expected, "level {idx} mismatch at price level {level}");
         }
-        assert!(slots[ladder.len()..].iter().all(|&value| value == 0));
+        assert!(coeffs[ladder.len() * SLOT_WIDTH..]
+            .iter()
+            .all(|&value| value == 0));
     }
 
     #[test]
@@ -289,9 +318,19 @@ mod tests {
         let params = build_params();
         let ladder = vec![100, 200, 300, 400, 500];
         let pt = encode_demand_vector(55, 300, &ladder, &params);
-        let slots = decode_slots(&pt);
+        let coeffs = decode_slots(&pt);
+        let curve: Vec<u64> = (0..ladder.len())
+            .map(|level| {
+                (0..SLOT_WIDTH)
+                    .map(|bit| {
+                        decode_demand_slot(coeffs[level * SLOT_WIDTH + bit], params.plaintext())
+                            * (1u64 << bit)
+                    })
+                    .sum()
+            })
+            .collect();
 
-        assert_eq!(&slots[..5], &[55, 55, 55, 0, 0]);
+        assert_eq!(&curve[..5], &[55, 55, 55, 0, 0]);
     }
 
     #[test]
@@ -299,9 +338,11 @@ mod tests {
         let params = build_params();
         let ladder = vec![100, 200, 300, 400];
         let pt = encode_demand_vector(25, 99, &ladder, &params);
-        let slots = decode_slots(&pt);
+        let coeffs = decode_slots(&pt);
 
-        assert!(slots[..ladder.len()].iter().all(|&value| value == 0));
+        assert!(coeffs[..ladder.len() * SLOT_WIDTH]
+            .iter()
+            .all(|&value| value == 0));
     }
 
     #[test]

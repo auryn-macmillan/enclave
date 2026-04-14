@@ -16,6 +16,8 @@ use rand::rngs::OsRng;
 use std::cmp::Reverse;
 use std::sync::Arc;
 
+pub const SLOT_WIDTH: usize = 16;
+
 pub fn encode_buy_demand_vector(
     qty: u64,
     max_price: u64,
@@ -23,18 +25,20 @@ pub fn encode_buy_demand_vector(
     params: &Arc<BfvParameters>,
 ) -> Plaintext {
     assert!(
-        price_ladder.len() <= params.degree(),
-        "price ladder exceeds SIMD slots"
+        price_ladder.len() * SLOT_WIDTH <= params.degree(),
+        "price ladder × SLOT_WIDTH exceeds polynomial degree"
     );
 
-    let mut slots = vec![0u64; params.degree()];
-    for (slot, &ladder_price) in slots.iter_mut().zip(price_ladder.iter()) {
+    let mut coeffs = vec![0u64; params.degree()];
+    for (level_idx, &ladder_price) in price_ladder.iter().enumerate() {
         if ladder_price <= max_price {
-            *slot = qty;
+            for bit in 0..SLOT_WIDTH {
+                coeffs[level_idx * SLOT_WIDTH + bit] = ((qty >> bit) & 1) as u64;
+            }
         }
     }
 
-    Plaintext::try_encode(&slots, Encoding::simd(), params).expect("encode buy demand vector")
+    Plaintext::try_encode(&coeffs, Encoding::poly(), params).expect("encode buy demand vector")
 }
 
 pub fn encode_sell_supply_vector(
@@ -44,18 +48,34 @@ pub fn encode_sell_supply_vector(
     params: &Arc<BfvParameters>,
 ) -> Plaintext {
     assert!(
-        price_ladder.len() <= params.degree(),
-        "price ladder exceeds SIMD slots"
+        price_ladder.len() * SLOT_WIDTH <= params.degree(),
+        "price ladder × SLOT_WIDTH exceeds polynomial degree"
     );
 
-    let mut slots = vec![0u64; params.degree()];
-    for (slot, &ladder_price) in slots.iter_mut().zip(price_ladder.iter()) {
+    let mut coeffs = vec![0u64; params.degree()];
+    for (level_idx, &ladder_price) in price_ladder.iter().enumerate() {
         if ladder_price >= min_price {
-            *slot = qty;
+            for bit in 0..SLOT_WIDTH {
+                coeffs[level_idx * SLOT_WIDTH + bit] = ((qty >> bit) & 1) as u64;
+            }
         }
     }
 
-    Plaintext::try_encode(&slots, Encoding::simd(), params).expect("encode sell supply vector")
+    Plaintext::try_encode(&coeffs, Encoding::poly(), params).expect("encode sell supply vector")
+}
+
+pub fn decode_demand_curve(coeffs: &[u64], num_levels: usize, plaintext_modulus: u64) -> Vec<u64> {
+    (0..num_levels)
+        .map(|level| {
+            let mut qty = 0u64;
+            for bit in 0..SLOT_WIDTH {
+                let raw = coeffs[level * SLOT_WIDTH + bit];
+                let count = decode_demand_slot(raw, plaintext_modulus);
+                qty += count * (1u64 << bit);
+            }
+            qty
+        })
+        .collect()
 }
 
 pub fn encrypt_demand(pt: &Plaintext, pk: &PublicKey) -> Ciphertext {
@@ -240,7 +260,7 @@ mod tests {
     use fhe_traits::FheDecoder;
 
     fn decode_slots(pt: &Plaintext) -> Vec<u64> {
-        Vec::<u64>::try_decode(pt, Encoding::simd()).expect("decode vector")
+        Vec::<u64>::try_decode(pt, Encoding::poly()).expect("decode vector")
     }
 
     #[test]
@@ -248,10 +268,18 @@ mod tests {
         let params = build_params();
         let ladder = vec![100, 200, 300, 400, 500];
         let pt = encode_buy_demand_vector(25, 300, &ladder, &params);
-        let slots = decode_slots(&pt);
+        let coeffs = decode_slots(&pt);
 
-        assert_eq!(&slots[..5], &[25, 25, 25, 0, 0]);
-        assert!(slots[5..].iter().all(|&value| value == 0));
+        for (level_idx, &price) in ladder.iter().enumerate() {
+            let qty = (0..SLOT_WIDTH)
+                .map(|bit| coeffs[level_idx * SLOT_WIDTH + bit] * (1u64 << bit))
+                .sum::<u64>();
+            let expected = if price <= 300 { 25 } else { 0 };
+            assert_eq!(qty, expected, "unexpected qty at level {level_idx}");
+        }
+        assert!(coeffs[ladder.len() * SLOT_WIDTH..]
+            .iter()
+            .all(|&value| value == 0));
     }
 
     #[test]
@@ -259,10 +287,18 @@ mod tests {
         let params = build_params();
         let ladder = vec![100, 200, 300, 400, 500];
         let pt = encode_sell_supply_vector(40, 300, &ladder, &params);
-        let slots = decode_slots(&pt);
+        let coeffs = decode_slots(&pt);
 
-        assert_eq!(&slots[..5], &[0, 0, 40, 40, 40]);
-        assert!(slots[5..].iter().all(|&value| value == 0));
+        for (level_idx, &price) in ladder.iter().enumerate() {
+            let qty = (0..SLOT_WIDTH)
+                .map(|bit| coeffs[level_idx * SLOT_WIDTH + bit] * (1u64 << bit))
+                .sum::<u64>();
+            let expected = if price >= 300 { 40 } else { 0 };
+            assert_eq!(qty, expected, "unexpected qty at level {level_idx}");
+        }
+        assert!(coeffs[ladder.len() * SLOT_WIDTH..]
+            .iter()
+            .all(|&value| value == 0));
     }
 
     #[test]

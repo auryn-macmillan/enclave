@@ -3,10 +3,10 @@
 use batch_auction_fba_example::{
     aggregate_public_key, aggregate_sk_shares_for_party, allocate_fba, build_classification_masks,
     build_eval_key_from_committee, build_params, build_price_ladder, compute_decryption_shares,
-    compute_residual_qty, decrypt_one_hot_slot, encode_demand_vector, encrypt_demand,
-    encrypt_one_hot_residual, find_clearing_price, generate_crp, generate_eval_key_root_seed,
-    generate_smudging_noise, histogram_to_demand_curve, member_keygen, threshold_decrypt,
-    to_one_hot, BatchState, EvaluationKey, Order, COMMITTEE_N, PRICE_LEVELS,
+    compute_residual_qty, decode_demand_slot, decrypt_demand_slot_qty, encode_demand_vector,
+    encrypt_demand, encrypt_residual, find_clearing_price, generate_crp,
+    generate_eval_key_root_seed, generate_smudging_noise, member_keygen, threshold_decrypt,
+    BatchState, Order, COMMITTEE_N, PRICE_LEVELS, SLOT_WIDTH,
 };
 use fhe::bfv::{BfvParameters, Ciphertext, Encoding, PublicKey};
 use fhe_math::rq::Poly;
@@ -19,17 +19,10 @@ const NAMES: [&str; 10] = [
 ];
 
 #[derive(Clone)]
-enum ActiveCiphertext {
-    OriginalCumulative(Ciphertext),
-    ResidualOneHot(Ciphertext),
-}
-
-#[derive(Clone)]
 struct EncryptedOrder {
     name: &'static str,
     order_id: usize,
-    original_ct: Ciphertext,
-    active_ct: ActiveCiphertext,
+    ct: Ciphertext,
 }
 
 struct RoundReport {
@@ -71,12 +64,7 @@ fn submit_encrypted_order(
     let order_id = state.submit_order(bidder_slot, qty, price);
     let pt = encode_demand_vector(qty, price, &state.price_ladder, params);
     let ct = encrypt_demand(&pt, joint_pk);
-    book.push(EncryptedOrder {
-        name,
-        order_id,
-        original_ct: ct.clone(),
-        active_ct: ActiveCiphertext::OriginalCumulative(ct),
-    });
+    book.push(EncryptedOrder { name, order_id, ct });
     order_id
 }
 
@@ -101,51 +89,39 @@ fn threshold_decrypt_ciphertext(
         .collect();
 
     let plaintexts = threshold_decrypt(&party_shares, std::slice::from_ref(ct), params);
-    Vec::<u64>::try_decode(&plaintexts[0], Encoding::simd()).expect("decode ciphertext")
+    Vec::<u64>::try_decode(&plaintexts[0], Encoding::poly()).expect("decode ciphertext")
 }
 
-fn decrypt_histogram(
+fn decrypt_demand_curve(
     aggregate_ct: &Ciphertext,
     participating: &[usize],
     sk_poly_sums: &[Poly],
     params: &Arc<BfvParameters>,
 ) -> Vec<u64> {
-    threshold_decrypt_ciphertext(aggregate_ct, participating, sk_poly_sums, params)
-        .into_iter()
-        .take(PRICE_LEVELS)
+    let coeffs = threshold_decrypt_ciphertext(aggregate_ct, participating, sk_poly_sums, params);
+    (0..PRICE_LEVELS)
+        .map(|level| {
+            let mut qty = 0u64;
+            for bit in 0..SLOT_WIDTH {
+                let raw = coeffs[level * SLOT_WIDTH + bit];
+                qty += decode_demand_slot(raw, params.plaintext()) * (1u64 << bit);
+            }
+            qty
+        })
         .collect()
 }
 
-fn shadow_histogram(orders: &[Order], price_ladder: &[u64]) -> Vec<u64> {
-    let mut histogram = vec![0u64; price_ladder.len()];
-    for order in orders {
-        let idx = price_ladder
-            .iter()
-            .position(|&price| price == order.price)
-            .expect("order price must be on ladder");
-        histogram[idx] += order.qty;
-    }
-    histogram
-}
-
-fn one_hot_for_round(
-    entry: &EncryptedOrder,
-    eval_key: &EvaluationKey,
-    params: &Arc<BfvParameters>,
-) -> Ciphertext {
-    match &entry.active_ct {
-        ActiveCiphertext::OriginalCumulative(ct) => to_one_hot(ct, eval_key, params),
-        ActiveCiphertext::ResidualOneHot(ct) => ct.clone(),
-    }
-}
-
-fn active_ciphertext_clone(entry: &EncryptedOrder) -> ActiveCiphertext {
-    match &entry.active_ct {
-        ActiveCiphertext::OriginalCumulative(ct) => {
-            ActiveCiphertext::OriginalCumulative(ct.clone())
-        }
-        ActiveCiphertext::ResidualOneHot(ct) => ActiveCiphertext::ResidualOneHot(ct.clone()),
-    }
+fn shadow_demand_curve(orders: &[Order], price_ladder: &[u64]) -> Vec<u64> {
+    price_ladder
+        .iter()
+        .map(|&level| {
+            orders
+                .iter()
+                .filter(|order| order.price >= level)
+                .map(|order| order.qty)
+                .sum()
+        })
+        .collect()
 }
 
 fn run_round(
@@ -154,7 +130,6 @@ fn run_round(
     book: &mut Vec<EncryptedOrder>,
     params: &Arc<BfvParameters>,
     joint_pk: &PublicKey,
-    eval_key: &EvaluationKey,
     participating: &[usize],
     sk_poly_sums: &[Poly],
 ) -> RoundReport {
@@ -170,20 +145,15 @@ fn run_round(
         format_quantity(state.supply)
     );
     println!(
-        "The committee converts active orders into one-hot price buckets for this round only."
+        "The committee sums the active cumulative demand ciphertexts directly for this round."
     );
 
-    let one_hot_book: Vec<(usize, Ciphertext)> = book
+    let aggregate_ct = book
         .iter()
-        .map(|entry| (entry.order_id, one_hot_for_round(entry, eval_key, params)))
-        .collect();
-
-    let aggregate_histogram = one_hot_book
-        .iter()
-        .map(|(_, ct)| ct)
-        .fold(None, |aggregate: Option<Ciphertext>, ct| {
-            if let Some(mut running) = aggregate {
-                batch_auction_fba_example::accumulate_one_hot(&mut running, ct);
+        .map(|entry| &entry.ct)
+        .fold(None, |agg: Option<Ciphertext>, ct| {
+            if let Some(mut running) = agg {
+                batch_auction_fba_example::accumulate_demand(&mut running, ct);
                 Some(running)
             } else {
                 Some(ct.clone())
@@ -191,17 +161,14 @@ fn run_round(
         })
         .expect("at least one active order");
 
-    let histogram = decrypt_histogram(&aggregate_histogram, participating, sk_poly_sums, params);
-    let demand_curve = histogram_to_demand_curve(&histogram);
+    let demand_curve = decrypt_demand_curve(&aggregate_ct, participating, sk_poly_sums, params);
     let (clearing_idx, clearing_price) =
         find_clearing_price(&demand_curve, state.supply, &state.price_ladder);
 
-    let shadow_hist = shadow_histogram(&state.active_orders, &state.price_ladder);
-    let shadow_curve = histogram_to_demand_curve(&shadow_hist);
+    let shadow_curve = shadow_demand_curve(&state.active_orders, &state.price_ladder);
     let (shadow_idx, shadow_price) =
         find_clearing_price(&shadow_curve, state.supply, &state.price_ladder);
 
-    assert_eq!(histogram, shadow_hist, "round {round}: histogram mismatch");
     assert_eq!(
         demand_curve, shadow_curve,
         "round {round}: demand curve mismatch"
@@ -217,10 +184,10 @@ fn run_round(
 
     let (winner_mask, _loser_mask, marginal_mask) =
         build_classification_masks(clearing_idx, params);
-
-    let one_hot_by_order: HashMap<usize, &Ciphertext> = one_hot_book
+    let entry_map: HashMap<usize, EncryptedOrder> = book
         .iter()
-        .map(|(order_id, ct)| (*order_id, ct))
+        .cloned()
+        .map(|entry| (entry.order_id, entry))
         .collect();
 
     let allocation_view: Vec<Order> = state
@@ -233,8 +200,8 @@ fn run_round(
                 .position(|&price| price == order.price)
                 .expect("order price must be on ladder");
             let qty = if order.price > clearing_price {
-                decrypt_one_hot_slot(
-                    one_hot_by_order[&order.order_id],
+                decrypt_demand_slot_qty(
+                    &entry_map[&order.order_id].ct,
                     &winner_mask,
                     order_idx,
                     participating,
@@ -242,8 +209,8 @@ fn run_round(
                     params,
                 )
             } else if order.price == clearing_price {
-                decrypt_one_hot_slot(
-                    one_hot_by_order[&order.order_id],
+                decrypt_demand_slot_qty(
+                    &entry_map[&order.order_id].ct,
                     &marginal_mask,
                     clearing_idx,
                     participating,
@@ -290,11 +257,6 @@ fn run_round(
     );
 
     let allocation_map: HashMap<usize, u64> = fhe_allocations.iter().copied().collect();
-    let entry_map: HashMap<usize, EncryptedOrder> = book
-        .iter()
-        .cloned()
-        .map(|entry| (entry.order_id, entry))
-        .collect();
 
     let named_allocations: Vec<(&'static str, u64)> = state
         .active_orders
@@ -321,19 +283,10 @@ fn run_round(
         }
 
         let entry = &entry_map[&order.order_id];
-        let next_active_ct = if order.price < clearing_price {
-            active_ciphertext_clone(entry)
+        let next_ct = if order.price < clearing_price {
+            entry.ct.clone()
         } else {
-            ActiveCiphertext::ResidualOneHot(encrypt_one_hot_residual(
-                residual,
-                state
-                    .price_ladder
-                    .iter()
-                    .position(|&price| price == order.price)
-                    .expect("order price must be on ladder"),
-                params,
-                joint_pk,
-            ))
+            encrypt_residual(residual, order.price, &state.price_ladder, params, joint_pk)
         };
 
         carry_forward.push((entry.name, residual));
@@ -347,8 +300,7 @@ fn run_round(
         next_book.push(EncryptedOrder {
             name: entry.name,
             order_id: entry.order_id,
-            original_ct: entry.original_ct.clone(),
-            active_ct: next_active_ct,
+            ct: next_ct,
         });
     }
 
@@ -420,7 +372,7 @@ fn main() {
         .collect();
 
     let member_sk_refs: Vec<&_> = members.iter().map(|member| &member.sk).collect();
-    let (eval_key, _relin_key) =
+    let (_eval_key, _relin_key) =
         build_eval_key_from_committee(&member_sk_refs, &params, &eval_key_root_seed);
     println!("The committee generates distributed Galois and relinearization keys without reconstructing the joint secret key.");
 
@@ -460,7 +412,6 @@ fn main() {
         &mut book,
         &params,
         &joint_pk,
-        &eval_key,
         &participating,
         &sk_poly_sums,
     ));
@@ -492,7 +443,6 @@ fn main() {
         &mut book,
         &params,
         &joint_pk,
-        &eval_key,
         &participating,
         &sk_poly_sums,
     ));
@@ -515,7 +465,6 @@ fn main() {
         &mut book,
         &params,
         &joint_pk,
-        &eval_key,
         &participating,
         &sk_poly_sums,
     ));

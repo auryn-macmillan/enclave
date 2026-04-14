@@ -8,9 +8,8 @@ pub use auction_bitplane_example::{
 };
 pub use batch_auction_uniform_example::{
     accumulate_demand, build_price_ladder, compute_allocations, decode_demand_slot,
-    encode_demand_vector, encrypt_demand, find_clearing_price, PRICE_LEVELS,
+    encode_demand_vector, encrypt_demand, find_clearing_price, PRICE_LEVELS, SLOT_WIDTH,
 };
-pub use fhe::bfv::EvaluationKey;
 
 use fhe::bfv::{BfvParameters, Ciphertext, Encoding, Plaintext, PublicKey};
 use fhe_math::rq::Poly;
@@ -84,64 +83,39 @@ impl BatchState {
     }
 }
 
-pub fn to_one_hot(
-    ct: &Ciphertext,
-    eval_key: &EvaluationKey,
-    params: &Arc<BfvParameters>,
-) -> Ciphertext {
-    assert!(
-        PRICE_LEVELS <= params.degree(),
-        "price ladder exceeds SIMD slots"
-    );
-
-    let rotated = eval_key
-        .rotates_columns_by(ct, 1)
-        .expect("column rotation for one-hot transform");
-
-    let mut zero_guard_slots = vec![0u64; params.degree()];
-    for slot in zero_guard_slots
-        .iter_mut()
-        .take(PRICE_LEVELS.saturating_sub(1))
-    {
-        *slot = 1;
-    }
-    let zero_guard_mask =
-        Plaintext::try_encode(&zero_guard_slots, Encoding::simd(), params).expect("encode mask");
-
-    let masked_rotated = &rotated * &zero_guard_mask;
-    ct - &masked_rotated
-}
-
 pub fn build_classification_masks(
     clearing_idx: usize,
     params: &Arc<BfvParameters>,
 ) -> (Plaintext, Plaintext, Plaintext) {
     assert!(clearing_idx < PRICE_LEVELS, "clearing index out of range");
     assert!(
-        PRICE_LEVELS <= params.degree(),
-        "price ladder exceeds SIMD slots"
+        PRICE_LEVELS * SLOT_WIDTH <= params.degree(),
+        "price ladder × SLOT_WIDTH exceeds polynomial degree"
     );
 
-    let mut winner_slots = vec![0u64; params.degree()];
-    let mut loser_slots = vec![0u64; params.degree()];
-    let mut marginal_slots = vec![0u64; params.degree()];
+    let mut winner_coeffs = vec![0u64; params.degree()];
+    let mut loser_coeffs = vec![0u64; params.degree()];
+    let mut marginal_coeffs = vec![0u64; params.degree()];
 
-    for slot in winner_slots
-        .iter_mut()
-        .take(PRICE_LEVELS)
-        .skip(clearing_idx + 1)
-    {
-        *slot = 1;
+    for level in (clearing_idx + 1)..PRICE_LEVELS {
+        for bit in 0..SLOT_WIDTH {
+            winner_coeffs[level * SLOT_WIDTH + bit] = 1;
+        }
     }
-    for slot in loser_slots.iter_mut().take(clearing_idx) {
-        *slot = 1;
+    for level in 0..clearing_idx {
+        for bit in 0..SLOT_WIDTH {
+            loser_coeffs[level * SLOT_WIDTH + bit] = 1;
+        }
     }
-    marginal_slots[clearing_idx] = 1;
+    for bit in 0..SLOT_WIDTH {
+        marginal_coeffs[clearing_idx * SLOT_WIDTH + bit] = 1;
+    }
 
     (
-        Plaintext::try_encode(&winner_slots, Encoding::simd(), params).expect("encode winner mask"),
-        Plaintext::try_encode(&loser_slots, Encoding::simd(), params).expect("encode loser mask"),
-        Plaintext::try_encode(&marginal_slots, Encoding::simd(), params)
+        Plaintext::try_encode(&winner_coeffs, Encoding::poly(), params)
+            .expect("encode winner mask"),
+        Plaintext::try_encode(&loser_coeffs, Encoding::poly(), params).expect("encode loser mask"),
+        Plaintext::try_encode(&marginal_coeffs, Encoding::poly(), params)
             .expect("encode marginal mask"),
     )
 }
@@ -150,27 +124,26 @@ pub fn apply_mask(ct: &Ciphertext, mask: &Plaintext) -> Ciphertext {
     ct * mask
 }
 
-pub fn decrypt_one_hot_slot(
+pub fn decrypt_demand_slot_qty(
     ct: &Ciphertext,
     mask: &Plaintext,
-    slot_idx: usize,
+    level_idx: usize,
     participating: &[usize],
     sk_poly_sums: &[Poly],
     params: &Arc<BfvParameters>,
 ) -> u64 {
-    assert!(slot_idx < params.degree(), "slot index out of range");
     assert!(
-        participating.iter().all(|&idx| idx < sk_poly_sums.len()),
-        "participating party index out of range"
+        level_idx * SLOT_WIDTH + SLOT_WIDTH <= params.degree(),
+        "level index out of range"
     );
+    let _ = mask;
 
-    let masked_ct = apply_mask(ct, mask);
     let party_shares: Vec<(usize, Vec<_>)> = participating
         .iter()
         .map(|&i| {
             let smudging = generate_smudging_noise(params, 1);
             let shares = compute_decryption_shares(
-                std::slice::from_ref(&masked_ct),
+                std::slice::from_ref(ct),
                 &sk_poly_sums[i],
                 &smudging,
                 params,
@@ -179,43 +152,28 @@ pub fn decrypt_one_hot_slot(
         })
         .collect();
 
-    let plaintexts = threshold_decrypt(&party_shares, std::slice::from_ref(&masked_ct), params);
-    let slots = Vec::<u64>::try_decode(&plaintexts[0], Encoding::simd()).expect("decode slot");
-    decode_demand_slot(slots[slot_idx], params.plaintext())
+    let plaintexts = threshold_decrypt(&party_shares, std::slice::from_ref(ct), params);
+    let coeffs = Vec::<u64>::try_decode(&plaintexts[0], Encoding::poly()).expect("decode coeffs");
+
+    let mut qty = 0u64;
+    for bit in 0..SLOT_WIDTH {
+        let raw = coeffs[level_idx * SLOT_WIDTH + bit];
+        let count = decode_demand_slot(raw, params.plaintext());
+        qty += count * (1u64 << bit);
+    }
+    qty
 }
 
-pub fn encrypt_one_hot_residual(
+pub fn encrypt_residual(
     qty: u64,
-    slot_idx: usize,
+    price: u64,
+    price_ladder: &[u64],
     params: &Arc<BfvParameters>,
     pk: &PublicKey,
 ) -> Ciphertext {
-    assert!(slot_idx < params.degree(), "slot index out of range");
-
-    let mut slots = vec![0u64; params.degree()];
-    slots[slot_idx] = qty;
-    let plaintext =
-        Plaintext::try_encode(&slots, Encoding::simd(), params).expect("encode residual");
+    let plaintext = encode_demand_vector(qty, price, price_ladder, params);
     pk.try_encrypt(&plaintext, &mut OsRng)
-        .expect("encrypt one-hot residual")
-}
-
-pub fn histogram_to_demand_curve(histogram: &[u64]) -> Vec<u64> {
-    let mut demand_curve = vec![0u64; histogram.len()];
-    let mut suffix = 0u64;
-
-    for (idx, &value) in histogram.iter().enumerate().rev() {
-        suffix = suffix
-            .checked_add(value)
-            .expect("histogram suffix-sum overflow");
-        demand_curve[idx] = suffix;
-    }
-
-    demand_curve
-}
-
-pub fn accumulate_one_hot(global: &mut Ciphertext, contribution: &Ciphertext) {
-    accumulate_demand(global, contribution);
+        .expect("encrypt residual")
 }
 
 pub fn allocate_fba(
@@ -328,7 +286,6 @@ mod tests {
         params: Arc<BfvParameters>,
         joint_pk: PublicKey,
         sk_poly_sums: Vec<Poly>,
-        eval_key: EvaluationKey,
         price_ladder: Vec<u64>,
         participating: [usize; 2],
     }
@@ -355,26 +312,20 @@ mod tests {
             .map(|i| aggregate_sk_shares_for_party(&all_sk_shares, i, &params))
             .collect();
 
-        let member_sk_refs: Vec<&_> = members.iter().map(|member| &member.sk).collect();
-        let eval_key_root_seed = generate_eval_key_root_seed();
-        let (eval_key, _) =
-            build_eval_key_from_committee(&member_sk_refs, &params, &eval_key_root_seed);
-
         TestFixture {
             params,
             joint_pk,
             sk_poly_sums,
-            eval_key,
             price_ladder: build_price_ladder(100, 1_000, PRICE_LEVELS),
             participating: [0, 1],
         }
     }
 
-    fn decode_plaintext_slots(pt: &Plaintext) -> Vec<u64> {
-        Vec::<u64>::try_decode(pt, Encoding::simd()).expect("decode plaintext")
+    fn decode_plaintext_coeffs(pt: &Plaintext) -> Vec<u64> {
+        Vec::<u64>::try_decode(pt, Encoding::poly()).expect("decode plaintext")
     }
 
-    fn threshold_decrypt_slots(
+    fn threshold_decrypt_coeffs(
         ct: &Ciphertext,
         participating: &[usize],
         sk_poly_sums: &[Poly],
@@ -395,7 +346,7 @@ mod tests {
             .collect();
 
         let plaintexts = threshold_decrypt(&party_shares, std::slice::from_ref(ct), params);
-        decode_plaintext_slots(&plaintexts[0])
+        decode_plaintext_coeffs(&plaintexts[0])
     }
 
     fn order(order_id: usize, qty: u64, price: u64, epoch: usize) -> Order {
@@ -442,30 +393,6 @@ mod tests {
     }
 
     #[test]
-    fn test_to_one_hot_basic() {
-        let fixture = test_fixture();
-        let slot_idx = PRICE_LEVELS / 2;
-        let qty = 100;
-        let price = fixture.price_ladder[slot_idx];
-
-        let pt = encode_demand_vector(qty, price, &fixture.price_ladder, &fixture.params);
-        let ct = encrypt_demand(&pt, &fixture.joint_pk);
-        let one_hot = to_one_hot(&ct, &fixture.eval_key, &fixture.params);
-        let slots = threshold_decrypt_slots(
-            &one_hot,
-            &fixture.participating,
-            &fixture.sk_poly_sums,
-            &fixture.params,
-        );
-
-        for (idx, &raw) in slots.iter().take(PRICE_LEVELS).enumerate() {
-            let decoded = decode_demand_slot(raw, fixture.params.plaintext());
-            let expected = if idx == slot_idx { qty } else { 0 };
-            assert_eq!(decoded, expected, "one-hot mismatch at slot {idx}");
-        }
-    }
-
-    #[test]
     fn test_classification_masks() {
         let params = build_params();
 
@@ -473,51 +400,65 @@ mod tests {
             let (winner_mask, loser_mask, marginal_mask) =
                 build_classification_masks(clearing_idx, &params);
 
-            let winner_slots = decode_plaintext_slots(&winner_mask);
-            let loser_slots = decode_plaintext_slots(&loser_mask);
-            let marginal_slots = decode_plaintext_slots(&marginal_mask);
+            let winner_coeffs = decode_plaintext_coeffs(&winner_mask);
+            let loser_coeffs = decode_plaintext_coeffs(&loser_mask);
+            let marginal_coeffs = decode_plaintext_coeffs(&marginal_mask);
 
             for idx in 0..PRICE_LEVELS {
-                assert_eq!(winner_slots[idx], u64::from(idx > clearing_idx));
-                assert_eq!(loser_slots[idx], u64::from(idx < clearing_idx));
-                assert_eq!(marginal_slots[idx], u64::from(idx == clearing_idx));
+                for bit in 0..SLOT_WIDTH {
+                    let coeff_idx = idx * SLOT_WIDTH + bit;
+                    assert_eq!(winner_coeffs[coeff_idx], u64::from(idx > clearing_idx));
+                    assert_eq!(loser_coeffs[coeff_idx], u64::from(idx < clearing_idx));
+                    assert_eq!(marginal_coeffs[coeff_idx], u64::from(idx == clearing_idx));
+                }
             }
-            assert!(winner_slots[PRICE_LEVELS..].iter().all(|&slot| slot == 0));
-            assert!(loser_slots[PRICE_LEVELS..].iter().all(|&slot| slot == 0));
-            assert!(marginal_slots[PRICE_LEVELS..].iter().all(|&slot| slot == 0));
+            assert!(winner_coeffs[PRICE_LEVELS * SLOT_WIDTH..]
+                .iter()
+                .all(|&coeff| coeff == 0));
+            assert!(loser_coeffs[PRICE_LEVELS * SLOT_WIDTH..]
+                .iter()
+                .all(|&coeff| coeff == 0));
+            assert!(marginal_coeffs[PRICE_LEVELS * SLOT_WIDTH..]
+                .iter()
+                .all(|&coeff| coeff == 0));
         }
     }
 
     #[test]
-    fn test_histogram_to_demand_curve() {
-        let histogram = vec![4, 1, 3, 2];
-        let demand_curve = histogram_to_demand_curve(&histogram);
-        assert_eq!(demand_curve, vec![10, 6, 5, 2]);
-    }
-
-    #[test]
-    fn test_encrypt_one_hot_residual() {
+    fn test_encrypt_residual() {
         let fixture = test_fixture();
-        let slot_idx = PRICE_LEVELS / 3;
+        let level_idx = PRICE_LEVELS / 3;
         let qty = 77;
+        let price = fixture.price_ladder[level_idx];
 
-        let ct = encrypt_one_hot_residual(qty, slot_idx, &fixture.params, &fixture.joint_pk);
-        let slots = threshold_decrypt_slots(
+        let ct = encrypt_residual(
+            qty,
+            price,
+            &fixture.price_ladder,
+            &fixture.params,
+            &fixture.joint_pk,
+        );
+        let coeffs = threshold_decrypt_coeffs(
             &ct,
             &fixture.participating,
             &fixture.sk_poly_sums,
             &fixture.params,
         );
 
-        for (idx, &raw) in slots.iter().take(PRICE_LEVELS).enumerate() {
-            let decoded = decode_demand_slot(raw, fixture.params.plaintext());
-            let expected = if idx == slot_idx { qty } else { 0 };
-            assert_eq!(decoded, expected, "residual mismatch at slot {idx}");
+        for idx in 0..PRICE_LEVELS {
+            let mut decoded_qty = 0u64;
+            for bit in 0..SLOT_WIDTH {
+                let raw = coeffs[idx * SLOT_WIDTH + bit];
+                let count = decode_demand_slot(raw, fixture.params.plaintext());
+                decoded_qty += count * (1u64 << bit);
+            }
+            let expected = if idx <= level_idx { qty } else { 0 };
+            assert_eq!(decoded_qty, expected, "residual mismatch at level {idx}");
         }
     }
 
     #[test]
-    fn test_decrypt_one_hot_slot() {
+    fn test_decrypt_demand_slot_qty() {
         let fixture = test_fixture();
         let slot_idx = PRICE_LEVELS / 2;
         let qty = 55;
@@ -525,11 +466,10 @@ mod tests {
 
         let pt = encode_demand_vector(qty, price, &fixture.price_ladder, &fixture.params);
         let ct = encrypt_demand(&pt, &fixture.joint_pk);
-        let one_hot = to_one_hot(&ct, &fixture.eval_key, &fixture.params);
         let (_, _, marginal_mask) = build_classification_masks(slot_idx, &fixture.params);
 
-        let recovered = decrypt_one_hot_slot(
-            &one_hot,
+        let recovered = decrypt_demand_slot_qty(
+            &ct,
             &marginal_mask,
             slot_idx,
             &fixture.participating,
