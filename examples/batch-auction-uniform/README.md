@@ -86,19 +86,19 @@ The marginal allocation uses the **largest-remainder method** (Hamilton's method
 | Data | Revealed to committee? | When? | Why? |
 |------|----------------------|-------|------|
 | Aggregate demand curve (64 price levels) | ✅ Yes | After threshold decryption of summed ciphertext | Needed to find clearing price |
-| Individual bidder's full demand vector | ❌ No | Never | Only targeted SIMD slot blocks are decrypted |
+| Individual bidder's full demand vector | ❌ Not in the intended flow | Never directly in the demo flow | The committee mask-extracts only the clearing-level slot blocks before decryption |
 | Bidder's quantity at clearing price | ✅ Yes (per-bidder) | During allocation | Needed for pro-rata calculation |
 | Bidder's quantity above clearing price | ✅ Yes (per-bidder) | During allocation | Needed to identify strict winners |
-| Bidder's exact bid price | ❌ No | Never | Only the at-clearing and above-clearing quantities are read |
-| Bidder's quantity at non-clearing levels | ❌ No | Never | These SIMD slots are zeroed by ct×ct Hadamard mask-multiply before decryption |
-| Any individual's raw bid (qty, price) pair | ❌ No | Never | Bids are only visible through encrypted ciphertexts |
+| Bidder's exact bid price | ❌ Not generally | Sometimes inferable at the margin | Marginal bidders are known to be exactly at the public clearing price |
+| Bidder's quantity at non-clearing levels | ❌ Not in the intended flow | Never directly in the demo flow | These SIMD slots are zeroed by mask-multiply before the demo's selective decryption step |
+| Any individual's raw bid (qty, price) pair | ❌ Not as a direct plaintext order book | Never directly in the demo flow | The demo reveals only the aggregate curve plus selected per-bidder slot values needed for allocation |
 
 ### Ciphertext lifecycle
 
 1. **Encryption**: Bidder encodes a 2048-slot SIMD plaintext (64 levels × 16 bits), encrypts under joint public key → 1 BFV ciphertext per bidder.
 2. **Accumulation**: All ciphertexts are summed homomorphically (depth 0) → 1 aggregate ciphertext.
 3. **Aggregate decryption**: 2-of-3 committee threshold-decrypts the aggregate → plaintext demand curve. Smudging noise (λ=80 bits) protects the secret key.
-4. **Per-bidder decryption**: Committee threshold-decrypts each bidder's ciphertext and reads only the SIMD slot blocks at the clearing price and one level above. The committee encrypts a mask with 1s at the target SIMD slot blocks, multiplies ct×ct (Hadamard, depth 1), relinearizes, and threshold-decrypts only the masked ciphertext — all non-target slots are zeroed before decryption.
+4. **Per-bidder decryption**: In the intended demo flow, the committee threshold-decrypts only the SIMD slot blocks at the clearing price and one level above. It applies a plaintext mask with 1s at the target SIMD slot blocks using ct×pt slot-wise multiplication, then threshold-decrypts the masked ciphertext so non-target slots are zeroed before this selective decryption step.
 5. **Allocation**: Clearing price, strict-winner quantities, and marginal pro-rata shares are computed in plaintext from the decrypted slot values.
 
 ## Comparison with Vickrey demo
@@ -106,7 +106,7 @@ The marginal allocation uses the **largest-remainder method** (Hamilton's method
 | Feature | Vickrey Demo | Uniform-Price Demo |
 |---------|--------------|-------------------|
 | Ciphertexts per bidder | 64 (bit-planes) | 1 (demand vector) |
-| Multiplicative depth | 1 (ct × ct) | 1 (mask-multiply for per-bidder extraction) |
+| Multiplicative depth | 1 (ct × ct) | 0 (ct×pt masked extraction) |
 | Core rotations | Required (reduce-tree) | None for core computation (SIMD slot blocks) |
 | Privacy | Second price only | Clearing price + allocations |
 
@@ -114,7 +114,11 @@ The marginal allocation uses the **largest-remainder method** (Hamilton's method
 
 ### Distributed evaluation keys
 
-While the core accumulation requires no rotations, the committee still generates Galois and relinearization keys using the repo's **distributed eval-key MPC** flow. The relinearization key is used for the ct×ct mask-multiply that isolates per-bidder SIMD slot blocks during allocation without ever reconstructing the joint secret key.
+While the core accumulation requires no rotations, the committee still generates Galois and relinearization keys using the repo's **distributed eval-key MPC** flow for consistency with the broader threshold-BFV stack. The masked extraction path in this demo now uses a plaintext SIMD mask via ct×pt multiplication, so it does not require relinearization.
+
+### Trust model
+
+This demo assumes the decrypting 2-of-3 committee follows the protocol and only decrypts the masked ciphertexts authorized by the auction flow. The mask-multiply step narrows what an honest committee learns, but it is not cryptographic access control against a colluding threshold quorum. In production, this would typically be paired with governance, auditability, and economic penalties such as slashing for unauthorized decryptions.
 
 ### Smudging noise
 

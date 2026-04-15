@@ -99,10 +99,10 @@ avoids carry propagation during FHE execution.
 | Encoding | Client-side plaintext construction | None | 0 |
 | Encryption | `pk.encrypt(v_i)` | 1 encryption/bidder | 0 |
 | Accumulation | `V = Σ v_i` | n-1 ct additions | 0 |
-| Masking | `v_i_masked = v_i × mask_i` | 1 ct×ct multiply + relin | 1 |
+| Masking | `v_i_masked = v_i × mask_i` | 1 ct×pt multiply | 0 |
 | Threshold decrypt | Decrypt masked ciphertext | Standard protocol | — |
 | Clearing price | Plaintext search on `V` | None (plaintext) | 0 |
-| Allocation prep | See §6 | ct×ct mask-multiplies | 1 |
+| Allocation prep | See §6 | ct×pt plaintext-mask multiplies | 0 |
 
 **Total multiplicative depth: 0 for core demand-curve computation; 1 for per-bidder masked extraction.**
 
@@ -127,7 +127,7 @@ Each ct addition grows noise additively. With `n` bidders:
 - After `n-1` additions: ~n·σ
 - With 6×62-bit moduli (372-bit total), noise budget is ~330 bits
 - Each addition costs ~1 bit, so we can handle thousands of bidders
-- The mask-multiply + relin costs a few more bits but is negligible
+- The plaintext-mask multiply adds negligible noise and no extra multiplicative depth in this demo path
 
 **Verdict**: Current parameters handle up to ~2048 bidders with margin.
 
@@ -220,7 +220,7 @@ For bidders with `price_i < P*`: allocation = 0.
 These are determined entirely by the bidder's cumulative demand vector.
 The bidder's SIMD slot block at price index `k+1` (one above clearing)
 gives their strict-winner quantity directly. Under `Encoding::simd()`, the
-committee can isolate that block with an encrypted mask because ct×ct
+committee can isolate that block with a plaintext mask because ct×pt
 multiplication is Hadamard (slot-wise):
 
 ```
@@ -290,25 +290,25 @@ This is deterministic and publicly verifiable.
 **Mode A: Exact settlement (decrypt masked SIMD slot blocks)**
 
 1. From the decrypted demand curve, compute `P*`, `D_strict`, `Q_marginal`, `R`.
-2. For each bidder ciphertext `v_i`, the committee encrypts a mask with 1s
+2. For each bidder ciphertext `v_i`, the committee builds a plaintext mask with 1s
    at the target SIMD slots for blocks `k` and `k+1`, and 0s elsewhere.
-3. Compute `v_i_masked = v_i × mask_i`, relinearize, and threshold-decrypt
+3. Compute `v_i_masked = v_i × mask_i` via ct×pt multiplication, then threshold-decrypt
    only the masked ciphertext.
 4. Extract `strict_fill_i` from the SIMD slot block at `k+1` and
    `marginal_qty_i` by subtracting the decoded block at `k+1` from the
    decoded block at `k`.
 5. Compute exact pro-rata in plaintext with deterministic rounding.
 
-**Privacy note**: Under SIMD encoding, ct×ct multiplication is Hadamard
-(slot-wise), so an encrypted mask cleanly zeroes all non-target slots.
+**Privacy note**: Under SIMD encoding, ct×pt multiplication is slot-wise,
+so a plaintext mask cleanly zeroes all non-target slots.
 Only the selected SIMD slot blocks are revealed during threshold
 decryption; the rest of each bidder's cumulative demand vector remains
 hidden.
 
 **Mode B: Private settlement**
 
-The committee encrypts a mask,
-computes a ct×ct Hadamard product, relinearizes, and threshold-decrypts only
+The committee builds a plaintext mask,
+computes a ct×pt slot-wise product, and threshold-decrypts only
 the masked SIMD slots needed for settlement. This
 improves privacy relative to full per-bidder decryption because only the
 selected slots are revealed, not the bidder's full demand vector. This is the
@@ -352,7 +352,7 @@ implemented approach for per-bidder extraction.
 | Encoding | 64 bitplane ciphertexts/bidder | 1 cumulative-demand ciphertext/bidder |
 | FHE computation | Tally per bitplane (depth 1) | Sum across bidders (depth 0) |
 | Rotations used | 11 per bitplane × 64 = 704 | 0 for core computation (SIMD slot blocks; no reductions needed) |
-| Relin used | Yes (64 relinearizations) | No for core sum; yes for per-bidder masked extraction |
+| Relin used | Yes (64 relinearizations) | No |
 | Depth consumed | 1 | 0 for core computation; 1 with per-bidder masked extraction |
 | Decryption surface | 64 tally ciphertexts + winner's bid | 1 aggregate ciphertext + n masked bidder ciphertexts |
 | Privacy | Individual bids never decrypted | Clearing price + allocations; only masked SIMD slot blocks are revealed |
