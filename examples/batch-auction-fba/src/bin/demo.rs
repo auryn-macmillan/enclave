@@ -8,7 +8,7 @@ use batch_auction_fba_example::{
     generate_eval_key_root_seed, generate_smudging_noise, member_keygen, threshold_decrypt,
     BatchState, Order, COMMITTEE_N, PRICE_LEVELS, SLOT_WIDTH,
 };
-use fhe::bfv::{BfvParameters, Ciphertext, Encoding, PublicKey, RelinearizationKey};
+use fhe::bfv::{BfvParameters, Ciphertext, Encoding, PublicKey};
 use fhe_math::rq::Poly;
 use fhe_traits::FheDecoder;
 use std::collections::HashMap;
@@ -130,7 +130,6 @@ fn run_round(
     book: &mut Vec<EncryptedOrder>,
     params: &Arc<BfvParameters>,
     joint_pk: &PublicKey,
-    relin_key: &RelinearizationKey,
     participating: &[usize],
     sk_poly_sums: &[Poly],
 ) -> RoundReport {
@@ -209,8 +208,6 @@ fn run_round(
                     participating,
                     sk_poly_sums,
                     params,
-                    joint_pk,
-                    relin_key,
                 )
             } else if order.price == clearing_price {
                 decrypt_demand_slot_qty(
@@ -220,8 +217,6 @@ fn run_round(
                     participating,
                     sk_poly_sums,
                     params,
-                    joint_pk,
-                    relin_key,
                 )
             } else {
                 0
@@ -261,7 +256,7 @@ fn run_round(
         "  ✅ Aggregate demand at clearing: {}",
         format_quantity(demand_curve[clearing_idx])
     );
-    println!("To compute allocations, the committee classifies each order by its price relative to the clearing level. For strict winners and marginal orders, it encrypts the relevant plaintext mask, performs a ct×ct Hadamard mask-multiply, relinearizes, and threshold-decrypts only the targeted SIMD slot block needed for allocation. Strict losers are carried forward with zero information revealed — their ciphertexts pass through untouched.");
+    println!("To compute allocations, the committee classifies each order by its public price metadata relative to the clearing level. For strict winners and marginal orders, it applies the relevant plaintext SIMD mask with ct×pt slot-wise multiplication and threshold-decrypts only the targeted SIMD slot block needed for allocation. Strict winners now use the single block at k+1, marginals use the single block at k, and strict losers are carried forward without per-order quantity decryption in the intended flow.");
 
     let allocation_map: HashMap<usize, u64> = fhe_allocations.iter().copied().collect();
 
@@ -322,7 +317,7 @@ fn run_round(
             println!("     • {name:<7} carries {}", format_quantity(qty));
         }
     }
-    println!("Marginal residuals are re-encrypted as fresh ciphertexts under the joint public key. Strict losers' original ciphertexts persist, preserving all privacy. Each decryption share includes 80-bit smudging noise to protect the joint secret key across rounds.");
+    println!("Marginal residuals are re-encrypted as fresh ciphertexts under the joint public key. Strict losers' original ciphertexts persist without per-order quantity decryption in the intended flow. Each decryption share includes 80-bit smudging noise to protect the joint secret key across rounds.");
 
     RoundReport {
         round,
@@ -385,7 +380,7 @@ fn main() {
         .collect();
 
     let member_sk_refs: Vec<&_> = members.iter().map(|member| &member.sk).collect();
-    let (_eval_key, relin_key) =
+    let (_eval_key, _relin_key) =
         build_eval_key_from_committee(&member_sk_refs, &params, &eval_key_root_seed);
     println!("The committee generates distributed Galois and relinearization keys without reconstructing the joint secret key.");
     println!("Galois keys (for SIMD slot rotations) and a relinearization key (for post-multiply noise control) are produced via distributed MPC — the full joint secret key is never reconstructed.");
@@ -427,7 +422,6 @@ fn main() {
         &mut book,
         &params,
         &joint_pk,
-        &relin_key,
         &participating,
         &sk_poly_sums,
     ));
@@ -459,7 +453,6 @@ fn main() {
         &mut book,
         &params,
         &joint_pk,
-        &relin_key,
         &participating,
         &sk_poly_sums,
     ));
@@ -482,7 +475,6 @@ fn main() {
         &mut book,
         &params,
         &joint_pk,
-        &relin_key,
         &participating,
         &sk_poly_sums,
     ));
@@ -519,5 +511,5 @@ fn main() {
     println!(
         "✅ Verified: the FHE frequent batch auction matched all three rounds with correct clearing prices, epoch-priority allocations, and committee-managed carry-forward residuals."
     );
-    println!("Across all rounds, the committee saw only: (1) the aggregate demand curve per round, and (2) targeted SIMD slot blocks for winners and marginal bidders. Losers' quantities, prices, and full demand vectors were never revealed.");
+    println!("Across all rounds, the committee saw: (1) the aggregate demand curve per round, (2) public order-price metadata, and (3) targeted SIMD slot blocks for winners and marginal bidders in the intended flow. Strict losers' quantities and full demand vectors were not directly decrypted in the demo flow.");
 }
