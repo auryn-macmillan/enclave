@@ -76,7 +76,7 @@ Same as M1. A public ascending ladder of `P = 64` discrete price levels.
 
 The implementation uses **SIMD bit-decomposed encoding** (`Encoding::simd()`). Each logical price level spans `SLOT_WIDTH = 16` SIMD slots.
 
-Bidders submit encrypted (quantity, price) pairs. The quantity is bit-decomposed, and each bit is stored in one of the 16 SIMD slots within the block corresponding to the price level. Under SIMD encoding, ciphertext-ciphertext multiplication is Hadamard (slot-wise), so encrypted masks are applied via ct×ct mask-multiply for privacy-preserving extraction during settlement.
+Bidders submit encrypted (quantity, price) pairs. The quantity is bit-decomposed, and each bit is stored in one of the 16 SIMD slots within the block corresponding to the price level. Under SIMD encoding, ciphertext-plaintext multiplication is slot-wise, so plaintext masks can be applied via ct×pt multiplication for privacy-preserving extraction during settlement.
 
 With $N=2048$ and `SLOT_WIDTH=16`, the system supports up to 128 price levels (the demo uses 64).
 
@@ -97,7 +97,7 @@ After clearing at public price index `k` with clearing price `P*`:
 The clearing index `k` is public. For each active order's ciphertext `V_i`:
 
 - Determine if it is a **Strict Winner**, **Strict Loser**, or **Marginal** based on the public price metadata associated with the order.
-- Classification masks (`build_classification_masks`) target the relevant SIMD slot blocks for the clearing price level. Under SIMD encoding, these masks are applied homomorphically via Hadamard ct×ct mask-multiply (depth 1) to zero non-target slots before threshold decryption.
+- Classification masks (`build_classification_masks`) target the relevant SIMD slot blocks for the clearing price level. Under SIMD encoding, these masks are applied via ct×pt slot-wise multiplication to zero non-target slots before threshold decryption.
 
 ### Step 2: Handle strict winners
 
@@ -116,7 +116,7 @@ unchanged** as the carried-forward ciphertext. This requires zero per-order decr
 
 For orders priced exactly at `P*`:
 
-1. **Threshold-decrypt quantity**: The committee uses `decrypt_demand_slot_qty` to perform ct×ct mask-multiply (isolating the target slot block) followed by threshold decryption of the bidder's ciphertext to read the SIMD slot block at index `k`, revealing `q_i`.
+1. **Threshold-decrypt quantity**: The committee uses `decrypt_demand_slot_qty` to apply a plaintext mask via ct×pt multiplication (isolating the target slot block), then threshold-decrypts the bidder's ciphertext to read the SIMD slot block at index `k`, revealing `q_i`.
 
 2. **Compute pro-rata allocation** in plaintext: Using all marginal
    quantities, epoch metadata, and the remaining supply after strict winners
@@ -166,7 +166,7 @@ The plaintext range constraint is `t > z` (number of bidders), as each SIMD slot
 
 ### 5.4 Noise Budget
 
-The pipeline is now primarily composed of ciphertext additions and threshold decryptions, so the noise growth is extremely slow. SIMD encoding also makes depth-1 Hadamard ct×ct mask-multiply available for privacy-preserving extraction, while the main carry-forward flow remains addition-dominated and supports a very large number of rounds before noise becomes a factor.
+The pipeline is now primarily composed of ciphertext additions and threshold decryptions, so the noise growth is extremely slow. SIMD encoding also supports plaintext-mask ct×pt extraction for privacy-preserving slot isolation, while the main carry-forward flow remains addition-dominated and supports a very large number of rounds before noise becomes a factor.
 
 ## 6. Clearing Price Computation
 
@@ -183,7 +183,7 @@ When multiple bidders are at the marginal price `P*`:
 
 ### 7.2 Per-Order Quantity Discovery
 
-The committee identifies non-loser orders using public price metadata. It uses `decrypt_demand_slot_qty()` to threshold-decrypt the relevant SIMD slot block for each such order. This reveals the individual quantity `q_i` required for allocation and residual calculation.
+The committee identifies non-loser orders using public price metadata. It uses `decrypt_demand_slot_qty()` to threshold-decrypt the relevant SIMD slot block for each such order. Strict winners now use the single block at `k + 1`; marginals use the single block at `k`. This reveals the individual quantity `q_i` required for allocation and residual calculation in the intended demo flow.
 
 ## 8. Protocol Flow
 
@@ -213,8 +213,8 @@ Submit bids          Sum vectors          Classify orders     Submit new bids
 ### Phase 1: Library changes (`src/lib.rs`)
 
 Key implementation details:
-- `build_classification_masks(clearing_idx, params)`: Generates SIMD slot-range masks for Hadamard ct×ct mask-multiply during per-order slot extraction.
-- `decrypt_demand_slot_qty(ct, slot_idx, ...)`: First applies ct×ct mask-multiply to isolate the target slot block, then threshold-decrypts the specific price-level SIMD slot block from a bidder's ciphertext.
+- `build_classification_masks(clearing_idx, params)`: Generates SIMD slot-range masks for ct×pt slot extraction during per-order decryption.
+- `decrypt_demand_slot_qty(ct, slot_idx, ...)`: First applies a plaintext mask via ct×pt multiplication to isolate the target slot block, then threshold-decrypts the specific price-level SIMD slot block from a bidder's ciphertext.
 - `encrypt_residual(qty, price_idx, ...)`: Re-encrypts a residual quantity into a new SIMD-encoded ciphertext.
 
 The functions `to_one_hot`, `accumulate_one_hot`, and `histogram_to_demand_curve` from the original design were removed as the pipeline was simplified to use direct cumulative aggregation.
@@ -245,7 +245,7 @@ The demo implements the homomorphic carry-forward flow:
 | Clearing price and index | Public | Each round |
 | Individual quantity (winners) | Committee (2-of-3) | Round where order is filled |
 | Individual quantity (marginal bidders) | Committee (2-of-3) | Round where order is marginal |
-| Individual quantity (strict losers) | Nobody | Never (until filled or cancelled) |
+| Individual quantity (strict losers) | Nobody in the intended flow | Never directly in the demo flow |
 | Order price level | Public | Submission time |
 | Order epoch | Public | Submission time |
 
