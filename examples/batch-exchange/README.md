@@ -1,6 +1,6 @@
 # Two-Sided Batch Exchange (Threshold FHE Demand-Supply Demo)
 
-A sealed-bid **two-sided batch exchange** for a single trading pair where both buy and sell orders are encrypted under threshold BFV fully-homomorphic encryption. A **2-of-3 committee** jointly determines the clearing price by intersecting aggregate demand and supply curves, then threshold-decrypts per-participant allocations without revealing individual order details.
+A sealed-bid **two-sided batch exchange** for a single trading pair where both buy and sell orders are encrypted under threshold BFV fully-homomorphic encryption. A **2-of-3 committee** jointly determines the clearing price by intersecting aggregate demand and supply curves, then selectively decrypts the per-participant slot values needed for allocation in the intended demo flow.
 
 ## Quick start
 
@@ -31,7 +31,7 @@ The aggregator maintains two separate encrypted accumulators. It sums all buyer 
 
 ### 4. Threshold Decryption of Curves
 
-The committee threshold-decrypts both aggregate curves. Since these curves only reveal the total bit-counts at each SIMD slot position across price levels, individual participant quantities and prices stay private.
+The committee threshold-decrypts both aggregate curves. These curves reveal only the aggregate bit-counts at each price level, not a full plaintext order book. Additional per-participant slot extraction happens later during allocation.
 
 ### 5. Clearing Price Computation
 
@@ -47,7 +47,7 @@ Once the clearing price index `k` is found, the committee determines which side 
 *   If `demand > supply` at the clearing price, buyers are rationed.
 *   If `supply > demand`, sellers are rationed.
 
-Under SIMD encoding, the committee uses ct×ct mask-multiply via Hadamard multiplication. The committee encrypts a mask with 1s at the target SIMD slot blocks, multiplies ct×ct (Hadamard, depth 1), relinearizes, and threshold-decrypts only the masked ciphertext. This ensures that non-target slots remain zeroed and unreadable during the allocation phase. Buyers use blocks at price levels `(k, k+1)` to distinguish strict winners from marginal demand. Sellers use blocks at price levels `(k, k-1)` (or just `k` at the lowest price). Pro-rata allocation with largest-remainder rounding is applied only to the rationed side.
+Under SIMD encoding, the committee uses a plaintext SIMD mask via ct×pt slot-wise multiplication. Buyers use blocks at price levels `(k, k+1)` to distinguish strict winners from marginal demand. Sellers use blocks at price levels `(k, k-1)` (or just `k` at the lowest price). Pro-rata allocation with largest-remainder rounding is applied only to the rationed side.
 
 ## What is revealed vs. what stays hidden
 
@@ -57,9 +57,9 @@ Under SIMD encoding, the committee uses ct×ct mask-multiply via Hadamard multip
 | Aggregate sell supply curve (64 levels) | ✅ Yes | After threshold decryption | Needed for clearing price intersection |
 | Buyer's quantity at clearing level k and k+1 | ✅ Yes | During allocation | Distinguishes strict winners from marginal buyers |
 | Seller's quantity at clearing level k and k-1 | ✅ Yes | During allocation | Distinguishes strict sellers from marginal sellers |
-| Any participant's full 64-level demand/supply vector | ❌ No | Never | Only 2 adjacent SIMD slot blocks per participant are read |
-| Buyer's max price or seller's min price | ❌ No | Never | Only quantities at specific levels are revealed, not reservation prices |
-| Quantities at non-adjacent price levels | ❌ No | Never | Zeroed by ct×ct mask-multiply before decryption |
+| Any participant's full 64-level demand/supply vector | ❌ Not in the intended flow | Never directly in the demo flow | Only 2 adjacent SIMD slot blocks per participant are selectively decrypted |
+| Buyer's max price or seller's min price | ❌ Not generally | Sometimes inferable at the margin | Marginal participants are known to sit exactly at the public clearing price |
+| Quantities at non-adjacent price levels | ❌ Not in the intended flow | Never directly in the demo flow | Non-adjacent levels are zeroed by mask-multiply before the demo's selective decryption step |
 
 ### Ciphertext lifecycle
 
@@ -67,8 +67,12 @@ Under SIMD encoding, the committee uses ct×ct mask-multiply via Hadamard multip
 2. **Accumulation**: Separate Hadamard sums for buy and sell sides (depth 0) → 2 aggregate ciphertexts.
 3. **Curve decryption**: 2-of-3 threshold decrypt both aggregates with 80-bit smudging → 2 plaintext curves.
 4. **Clearing**: Committee performs descending scan in plaintext to find intersection → clearing price.
-5. **Per-participant decryption**: The committee encrypts a mask, multiplies ct×ct (Hadamard, depth 1), relinearizes, and threshold-decrypts only the masked result. This isolates the two relevant SIMD slot blocks (at k and k±1) while leaving all other slots zeroed.
+5. **Per-participant decryption**: The committee applies a plaintext mask via ct×pt slot-wise multiplication and threshold-decrypts only the masked result. This isolates the two relevant SIMD slot blocks (at k and k±1) while leaving all other slots zeroed.
 6. **Allocation**: Pro-rata with largest-remainder rounding applied to the rationed side.
+
+### Trust model
+
+This demo assumes the decrypting 2-of-3 committee follows the protocol and only decrypts the masked ciphertexts authorized by settlement. The selective plaintext-mask extraction flow narrows what an honest committee learns, but it is not cryptographic access control against a colluding threshold quorum.
 
 ## Production considerations
 
