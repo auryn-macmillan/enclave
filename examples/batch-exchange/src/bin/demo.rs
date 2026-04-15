@@ -261,13 +261,28 @@ fn main() {
         "  ✅ Aggregate sell supply at clearing: {}",
         format_quantity(sell_supply[clearing_idx])
     );
-    println!("To determine per-participant allocations, the committee extracts targeted SIMD slot blocks from each participant's ciphertext. Buyers need blocks at the clearing price (k) and one level above (k+1) to distinguish marginal from strict winners. Sellers need blocks at k and one level below (k-1).");
+    let buyers_rationed = buy_demand[clearing_idx] > sell_supply[clearing_idx];
+    let sellers_rationed = sell_supply[clearing_idx] > buy_demand[clearing_idx];
+
+    if buyers_rationed {
+        println!(
+            "Buy demand exceeds sell supply at the clearing price, so buyers are rationed. The committee extracts buyer blocks at k and k+1, while sellers reveal only their clearing block k."
+        );
+    } else if sellers_rationed {
+        println!(
+            "Sell supply exceeds buy demand at the clearing price, so sellers are rationed. The committee extracts seller blocks at k and k-1, while buyers reveal only their clearing block k."
+        );
+    } else {
+        println!(
+            "Buy demand and sell supply match exactly at the clearing price, so neither side is rationed. The committee reveals only the clearing block k on both sides."
+        );
+    }
     println!("The committee now applies a plaintext SIMD mask with 1s at the target positions using ct×pt slot-wise multiplication and threshold-decrypts only the masked result.");
 
     let mut buyer_mask_slots = vec![0u64; params.degree()];
     for bit in 0..SLOT_WIDTH {
         buyer_mask_slots[clearing_idx * SLOT_WIDTH + bit] = 1;
-        if clearing_idx + 1 < PRICE_LEVELS {
+        if buyers_rationed && clearing_idx + 1 < PRICE_LEVELS {
             buyer_mask_slots[(clearing_idx + 1) * SLOT_WIDTH + bit] = 1;
         }
     }
@@ -277,7 +292,7 @@ fn main() {
     let mut seller_mask_slots = vec![0u64; params.degree()];
     for bit in 0..SLOT_WIDTH {
         seller_mask_slots[clearing_idx * SLOT_WIDTH + bit] = 1;
-        if clearing_idx > 0 {
+        if sellers_rationed && clearing_idx > 0 {
             seller_mask_slots[(clearing_idx - 1) * SLOT_WIDTH + bit] = 1;
         }
     }
@@ -300,7 +315,7 @@ fn main() {
                         * (1u64 << bit)
                 })
                 .sum::<u64>();
-            let above_clearing = if clearing_idx + 1 < PRICE_LEVELS {
+            let above_clearing = if buyers_rationed && clearing_idx + 1 < PRICE_LEVELS {
                 (0..SLOT_WIDTH)
                     .map(|bit| {
                         decode_demand_slot(
@@ -332,7 +347,7 @@ fn main() {
                         * (1u64 << bit)
                 })
                 .sum::<u64>();
-            let below_clearing = if clearing_idx > 0 {
+            let below_clearing = if sellers_rationed && clearing_idx > 0 {
                 (0..SLOT_WIDTH)
                     .map(|bit| {
                         decode_demand_slot(
@@ -370,7 +385,13 @@ fn main() {
             format_quantity(*allocation)
         );
     }
-    println!("The committee saw: (1) aggregate buy and sell curves, (2) masked decryptions revealing each buyer's quantity at levels k and k+1, and (3) masked decryptions revealing each seller's quantity at levels k and k-1. In the intended demo flow, they did not directly decrypt full demand/supply vectors or quantities at non-adjacent levels. Marginal participants are, however, known to sit at the public clearing price.");
+    if buyers_rationed {
+        println!("The committee saw: (1) aggregate buy and sell curves, (2) masked decryptions revealing each buyer's quantity at levels k and k+1, and (3) masked decryptions revealing each seller's quantity only at level k. In the intended demo flow, they did not directly decrypt full demand/supply vectors or quantities at non-adjacent levels. Marginal participants are, however, known to sit at the public clearing price.");
+    } else if sellers_rationed {
+        println!("The committee saw: (1) aggregate buy and sell curves, (2) masked decryptions revealing each buyer's quantity only at level k, and (3) masked decryptions revealing each seller's quantity at levels k and k-1. In the intended demo flow, they did not directly decrypt full demand/supply vectors or quantities at non-adjacent levels. Marginal participants are, however, known to sit at the public clearing price.");
+    } else {
+        println!("The committee saw: (1) aggregate buy and sell curves and (2) masked decryptions revealing each participant's quantity only at level k. In the intended demo flow, they did not directly decrypt full demand/supply vectors or quantities at non-adjacent levels.");
+    }
 
     act("Act 5 — Shadow Verification");
     let expected_buy_curve = shadow_buy_curve(&buyer_orders, &price_ladder);
@@ -378,6 +399,10 @@ fn main() {
     let (expected_clearing_idx, expected_clearing_price) =
         find_two_sided_clearing_price(&expected_buy_curve, &expected_sell_curve, &price_ladder)
             .expect("shadow market should clear");
+    let expected_buyers_rationed =
+        expected_buy_curve[expected_clearing_idx] > expected_sell_curve[expected_clearing_idx];
+    let expected_sellers_rationed =
+        expected_sell_curve[expected_clearing_idx] > expected_buy_curve[expected_clearing_idx];
     let expected_buyer_values: Vec<(u64, u64)> = buyer_orders
         .iter()
         .map(|order| {
@@ -386,7 +411,8 @@ fn main() {
             } else {
                 0
             };
-            let above_clearing = if expected_clearing_idx + 1 < PRICE_LEVELS
+            let above_clearing = if expected_buyers_rationed
+                && expected_clearing_idx + 1 < PRICE_LEVELS
                 && order.price >= price_ladder[expected_clearing_idx + 1]
             {
                 order.qty
@@ -404,7 +430,8 @@ fn main() {
             } else {
                 0
             };
-            let below_clearing = if expected_clearing_idx > 0
+            let below_clearing = if expected_sellers_rationed
+                && expected_clearing_idx > 0
                 && order.price <= price_ladder[expected_clearing_idx - 1]
             {
                 order.qty
@@ -431,6 +458,11 @@ fn main() {
     assert_eq!(
         clearing_price, expected_clearing_price,
         "clearing price mismatch"
+    );
+    assert_eq!(buyer_values, expected_buyer_values, "buyer value mismatch");
+    assert_eq!(
+        seller_values, expected_seller_values,
+        "seller value mismatch"
     );
     assert_eq!(
         buyer_allocations, expected_buyer_allocations,

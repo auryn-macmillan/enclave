@@ -47,7 +47,7 @@ Once the clearing price index `k` is found, the committee determines which side 
 *   If `demand > supply` at the clearing price, buyers are rationed.
 *   If `supply > demand`, sellers are rationed.
 
-Under SIMD encoding, the committee uses a plaintext SIMD mask via ct×pt slot-wise multiplication. Buyers use blocks at price levels `(k, k+1)` to distinguish strict winners from marginal demand. Sellers use blocks at price levels `(k, k-1)` (or just `k` at the lowest price). Pro-rata allocation with largest-remainder rounding is applied only to the rationed side.
+Under SIMD encoding, the committee first identifies which side is rationed from the aggregate curves. The rationed side uses adjacent blocks to separate strict interest from marginal interest: buyers use `(k, k+1)`, while sellers use `(k, k-1)` (or just `k` at the lowest price). The non-rationed side reveals only the clearing block `k`, which is enough to report final allocations because that side fully fills at the clearing price. Pro-rata allocation with largest-remainder rounding is applied only to the rationed side.
 
 ## What is revealed vs. what stays hidden
 
@@ -55,9 +55,9 @@ Under SIMD encoding, the committee uses a plaintext SIMD mask via ct×pt slot-wi
 |------|-----------|-------|------|
 | Aggregate buy demand curve (64 levels) | ✅ Yes | After threshold decryption | Needed for clearing price intersection |
 | Aggregate sell supply curve (64 levels) | ✅ Yes | After threshold decryption | Needed for clearing price intersection |
-| Buyer's quantity at clearing level k and k+1 | ✅ Yes | During allocation | Distinguishes strict winners from marginal buyers |
-| Seller's quantity at clearing level k and k-1 | ✅ Yes | During allocation | Distinguishes strict sellers from marginal sellers |
-| Any participant's full 64-level demand/supply vector | ❌ Not in the intended flow | Never directly in the demo flow | Only 2 adjacent SIMD slot blocks per participant are selectively decrypted |
+| Rationed-side quantity at clearing level k and adjacent level k±1 | ✅ Yes | During allocation | Distinguishes strict participants from marginal participants on the rationed side |
+| Non-rationed-side quantity at clearing level k | ✅ Yes | During allocation | Enough to report final fills for the fully filled side |
+| Any participant's full 64-level demand/supply vector | ❌ Not in the intended flow | Never directly in the demo flow | The demo decrypts only the clearing block on the non-rationed side and only the necessary adjacent blocks on the rationed side |
 | Buyer's max price or seller's min price | ❌ Not generally | Sometimes inferable at the margin | Marginal participants are known to sit exactly at the public clearing price |
 | Quantities at non-adjacent price levels | ❌ Not in the intended flow | Never directly in the demo flow | Non-adjacent levels are zeroed by mask-multiply before the demo's selective decryption step |
 
@@ -67,7 +67,7 @@ Under SIMD encoding, the committee uses a plaintext SIMD mask via ct×pt slot-wi
 2. **Accumulation**: Separate Hadamard sums for buy and sell sides (depth 0) → 2 aggregate ciphertexts.
 3. **Curve decryption**: 2-of-3 threshold decrypt both aggregates with 80-bit smudging → 2 plaintext curves.
 4. **Clearing**: Committee performs descending scan in plaintext to find intersection → clearing price.
-5. **Per-participant decryption**: The committee applies a plaintext mask via ct×pt slot-wise multiplication and threshold-decrypts only the masked result. This isolates the two relevant SIMD slot blocks (at k and k±1) while leaving all other slots zeroed.
+5. **Per-participant decryption**: The committee applies a plaintext mask via ct×pt slot-wise multiplication and threshold-decrypts only the masked result. It extracts `(k, k±1)` only on the rationed side and only `k` on the non-rationed side, leaving all other slots zeroed.
 6. **Allocation**: Pro-rata with largest-remainder rounding applied to the rationed side.
 
 ### Trust model

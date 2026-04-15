@@ -325,7 +325,7 @@ mod tests {
     #[test]
     fn test_allocations_buy_side_rationed() {
         let buyer_values = vec![(5, 3), (4, 1), (1, 0)];
-        let seller_values = vec![(2, 0), (3, 1), (3, 2)];
+        let seller_values = vec![(2, 0), (3, 0), (3, 0)];
         let buy_demand = vec![12, 10, 4];
         let sell_supply = vec![5, 8, 8];
 
@@ -345,7 +345,7 @@ mod tests {
 
     #[test]
     fn test_allocations_sell_side_rationed() {
-        let buyer_values = vec![(3, 1), (3, 2), (2, 0)];
+        let buyer_values = vec![(3, 0), (3, 0), (2, 0)];
         let seller_values = vec![(5, 2), (2, 1), (3, 0)];
         let buy_demand = vec![10, 8, 3];
         let sell_supply = vec![7, 10, 10];
@@ -366,8 +366,8 @@ mod tests {
 
     #[test]
     fn test_allocations_exact_match() {
-        let buyer_values = vec![(4, 1), (5, 3)];
-        let seller_values = vec![(6, 2), (3, 1)];
+        let buyer_values = vec![(4, 0), (5, 0)];
+        let seller_values = vec![(6, 0), (3, 0)];
         let buy_demand = vec![12, 9, 4];
         let sell_supply = vec![4, 9, 9];
 
