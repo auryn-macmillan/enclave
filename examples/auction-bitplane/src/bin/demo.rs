@@ -5,10 +5,9 @@ use auction_bitplane_example::{
     build_eval_key_from_committee, build_params, build_price_ladder, build_top_bucket_mask,
     compute_decryption_shares, compute_pair_curve, decode_curve_bucket_presence_plaintext,
     decode_top_bucket_signal, encode_bid, encrypt_bid, find_second_price_bucket_progressive,
-    find_top_bucket_progressive, generate_crp, generate_eval_key_root_seed,
-    generate_smudging_noise, identify_top_bucket_winner, identify_unique_bucket_winner,
-    mask_top_bucket, member_keygen, resolve_progressive_vickrey_outcome, threshold_decrypt,
-    COMMITTEE_N,
+    generate_crp, generate_eval_key_root_seed, generate_smudging_noise, identify_top_bucket_winner,
+    identify_unique_bucket_winner, mask_top_bucket, member_keygen,
+    resolve_progressive_vickrey_outcome, threshold_decrypt, COMMITTEE_N,
 };
 use fhe::bfv::Ciphertext;
 
@@ -119,57 +118,58 @@ fn main() {
         pair_bucket_reveals
     );
 
-    let mut occupancy_bucket_reveals = Vec::new();
-    let (top_bucket, top_price) =
-        find_top_bucket_progressive(&price_ladder, second_bucket, |level_idx| {
-            let mask = build_curve_bucket_mask(level_idx, &params);
-            let masked = vec![&aggregate_ct * &mask];
-            let shares: Vec<(usize, Vec<_>)> = participating
-                .iter()
-                .map(|&i| {
-                    let smudging = generate_smudging_noise(&params, 1);
-                    let shares =
-                        compute_decryption_shares(&masked, &sk_poly_sums[i], &smudging, &params);
-                    (i + 1, shares)
-                })
-                .collect();
-            let pt = threshold_decrypt(&shares, &masked, &params)
-                .into_iter()
-                .next()
-                .expect("curve bucket plaintext");
-            let present = decode_curve_bucket_presence_plaintext(&pt, level_idx, &params);
-            occupancy_bucket_reveals.push((level_idx, present));
-            present
-        })
-        .expect("top bucket");
-
     println!(
-        "Additional occupancy bucket reveals above the second-price bucket: {:?}",
-        occupancy_bucket_reveals
-    );
-    println!(
-        "These reveals identify the price bucket where a second bidder is present ({}). The winner-identification step only needs the next ladder step above that bucket.",
+        "These reveals identify the price bucket where a second bidder is present ({}).",
         second_price.map_or("none".to_string(), |p| p.to_string())
     );
 
-    let reveal_bucket = if second_bucket == Some(top_bucket) {
+    let reveal_bucket = second_bucket
+        .map(|bucket| bucket + 1)
+        .filter(|&bucket| bucket < price_ladder.len())
+        .unwrap_or_else(|| price_ladder.len().saturating_sub(1));
+
+    let next_bucket_present = if let Some(bucket) = second_bucket
+        .map(|bucket| bucket + 1)
+        .filter(|&bucket| bucket < price_ladder.len())
+    {
+        let mask = build_curve_bucket_mask(bucket, &params);
+        let masked = vec![&aggregate_ct * &mask];
+        let shares: Vec<(usize, Vec<_>)> = participating
+            .iter()
+            .map(|&i| {
+                let smudging = generate_smudging_noise(&params, 1);
+                let shares =
+                    compute_decryption_shares(&masked, &sk_poly_sums[i], &smudging, &params);
+                (i + 1, shares)
+            })
+            .collect();
+        let pt = threshold_decrypt(&shares, &masked, &params)
+            .into_iter()
+            .next()
+            .expect("next bucket plaintext");
+        let present = decode_curve_bucket_presence_plaintext(&pt, bucket, &params);
         println!(
-            "The top bucket contains multiple bidders. The earliest submission at price {} wins.",
-            top_price
+            "The committee now checks the aggregate next ladder step above the second price: bucket {} (price {}). Present = {}.",
+            bucket,
+            price_ladder[bucket],
+            present
         );
-        top_bucket
+        present
     } else {
-        let reveal_bucket = second_bucket
-            .map(|bucket| bucket + 1)
-            .expect("strict-winner path requires second-price bucket");
-        println!(
-            "There's a unique bidder above the second-price bucket. Only bidder presence at the next ladder step ({}) is revealed to confirm the winner.",
-            price_ladder[reveal_bucket]
-        );
-        reveal_bucket
+        false
     };
 
-    println!("The committee now performs a targeted threshold decryption of bucket {reveal_bucket} for each bidder.");
+    if next_bucket_present {
+        println!(
+            "There is a unique bidder above the second-price bucket. Only bidder presence at price {} is revealed to confirm the winner.",
+            price_ladder[reveal_bucket]
+        );
+    } else {
+        println!(
+            "No bidder is present one bucket above the second price, so the top bid is tied at the second-price bucket. The earliest submission at price {} wins.",
+            second_price.expect("top tie requires second price")
+        );
+    }
 
     let presence_mask = build_curve_bucket_mask(reveal_bucket, &params);
     let masked_presence_cts: Vec<Ciphertext> = per_bidder_cts
@@ -195,7 +195,11 @@ fn main() {
         .map(|pt| decode_curve_bucket_presence_plaintext(pt, reveal_bucket, &params))
         .collect();
 
-    let winner_idx = if let Some(idx) = identify_unique_bucket_winner(&presence) {
+    let winner_idx = if next_bucket_present {
+        println!(
+            "The committee now performs a targeted per-bidder presence reveal at bucket {reveal_bucket}."
+        );
+        let idx = identify_unique_bucket_winner(&presence).expect("unique winner");
         println!(
             "Winner identified by targeted reveal at price {}: {}.",
             price_ladder[reveal_bucket], bids[idx].0
@@ -204,7 +208,10 @@ fn main() {
     } else {
         println!(
             "Multiple bidders at price {}. Identifying the earliest submission.",
-            top_price
+            second_price.expect("top tie requires second price")
+        );
+        println!(
+            "The committee now performs a targeted per-bidder top-bucket signal reveal at bucket {reveal_bucket} (presence + submission order)."
         );
         let mask = build_top_bucket_mask(reveal_bucket, &params);
         let masked_bidder_cts: Vec<Ciphertext> = per_bidder_cts

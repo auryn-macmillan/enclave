@@ -1028,6 +1028,22 @@ mod tests {
     }
 
     #[test]
+    fn pair_indicator_polynomial_is_zero_only_for_counts_below_two() {
+        let plaintext_modulus = build_params().plaintext();
+
+        for count in 0u64..=32 {
+            let count_minus_one_mod_t = (count + plaintext_modulus - 1) % plaintext_modulus;
+            let pair_value = (count * count_minus_one_mod_t) % plaintext_modulus;
+
+            if count < 2 {
+                assert_eq!(pair_value, 0, "count={count} should map to zero");
+            } else {
+                assert_ne!(pair_value, 0, "count={count} should be non-zero");
+            }
+        }
+    }
+
+    #[test]
     fn masked_top_bucket_extraction_only_reveals_top_bucket_signal() {
         let params = build_params();
         let ladder = vec![100, 200, 300, 400];
