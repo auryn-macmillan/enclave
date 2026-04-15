@@ -157,7 +157,7 @@ fn main() {
         .collect();
 
     let member_sk_refs: Vec<&_> = members.iter().map(|m| &m.sk).collect();
-    let (_eval_key, relin_key) =
+    let (_eval_key, _relin_key) =
         build_eval_key_from_committee(&member_sk_refs, &params, &eval_key_root_seed);
     println!("The committee generates distributed Galois and relinearization keys without reconstructing the joint secret key.");
     println!("Galois keys and a relinearization key are generated via distributed MPC — the joint secret key is never reconstructed at any point.");
@@ -280,7 +280,7 @@ fn main() {
         "  ✅ Aggregate capped demand at clearing: {}",
         format_lots(demand_curve[clearing_idx])
     );
-    println!("The committee now encrypts an extraction mask, applies ct×ct Hadamard mask-multiply plus relinearization to each per-bidder ciphertext, and threshold-decrypts only the SIMD slot blocks at the clearing price level and one level above.");
+    println!("The committee now applies a plaintext extraction mask to each per-bidder ciphertext using ct×pt slot-wise multiplication, then threshold-decrypts only the SIMD slot blocks at the clearing price level and one level above.");
 
     let target_levels = if clearing_idx + 1 < PRICE_LEVELS {
         vec![clearing_idx, clearing_idx + 1]
@@ -291,7 +291,7 @@ fn main() {
 
     let mut bidder_slot_values = Vec::with_capacity(per_bidder_cts.len());
     for bidder_ct in &per_bidder_cts {
-        let masked_ct = mask_multiply(&extraction_mask, bidder_ct, &joint_pk, &relin_key);
+        let masked_ct = mask_multiply(&extraction_mask, bidder_ct);
         let party_bidder_shares: Vec<(usize, Vec<_>)> = participating
             .iter()
             .map(|&i| {
@@ -364,7 +364,7 @@ fn main() {
     println!("  ❌ No raw unclamped quantity was decrypted");
     println!("  ❌ No bidder's full demand vector was revealed");
     println!("  ❌ No committee member saw a plaintext order book");
-    println!("The committee learned: (1) the aggregate capped demand curve, and (2) each bidder's capped lot count at and above the clearing price. They never saw: any bidder's unclamped quantity, their full demand vector, their exact max price, or lot counts at non-clearing levels.");
+    println!("The committee learned: (1) the aggregate capped demand curve, and (2) each bidder's capped lot count at and above the clearing price. They did not directly decrypt any bidder's unclamped quantity, full demand vector, or lot counts at non-clearing levels in the intended demo flow. Marginal bidders are, however, known to sit at the public clearing price.");
 
     act("Act 5 — Lifting the Curtain");
     println!("Let's verify the encrypted sale against the plaintext shadow computation:");
