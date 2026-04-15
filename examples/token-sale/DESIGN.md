@@ -90,9 +90,9 @@ overflowing the BFV plaintext modulus `t`.
 | Masking | `V_masked = V × slot_mask` | 1 ct×pt multiply | 0 |
 | Threshold decrypt | Decrypt `V_masked` | Standard protocol | — |
 | Clearing price | Plaintext search on `V` | None | 0 |
-| Allocation prep | Per-bidder masked extraction | ct×ct mask-multiply + relin | 1 |
+| Allocation prep | Per-bidder masked extraction | ct×pt plaintext-mask multiply | 0 |
 
-**Total multiplicative depth: 1 (ct×ct mask-multiply for per-bidder slot extraction).**
+**Total multiplicative depth: 0 for the current demo path, including plaintext-mask ct×pt slot extraction.**
 
 ### 4.2 Noise Budget
 
@@ -135,7 +135,7 @@ The protocol operates in two distinct phases to ensure commitment integrity.
 1. **Accumulation**: Aggregator sums all encrypted `v_i` to get `V`.
 2. **Price Discovery**: Committee threshold-decrypts `V`. Search for clearing price `P*` where `demand >= total_supply_lots`.
 3. **Allocation Extraction**:
-   - Under SIMD encoding, privacy-preserving extraction is used: the committee encrypts a mask with 1s at the target SIMD slots and performs ct×ct mask-multiply (Hadamard, slot-wise) at depth 1 to isolate the relevant price-level slot blocks before threshold decryption.
+- Under SIMD encoding, privacy-preserving extraction is used: the committee applies a plaintext mask with 1s at the target SIMD slots via ct×pt slot-wise multiplication to isolate the relevant price-level slot blocks before threshold decryption.
    - The committee then reads the SIMD slot blocks at `P*` and `P* + 1` from the decrypted plaintext.
 4. **Finalization**:
    - Use `decode_demand_slot` from M1 to reconstruct `clamped_qty_i` from the bit-decomposed SIMD slots.
