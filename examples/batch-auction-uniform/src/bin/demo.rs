@@ -176,13 +176,13 @@ fn main() {
         .collect();
 
     let member_sk_refs: Vec<&_> = members.iter().map(|m| &m.sk).collect();
-    let (_eval_key, relin_key) =
+    let (_eval_key, _relin_key) =
         build_eval_key_from_committee(&member_sk_refs, &params, &eval_key_root_seed);
     println!("The committee generates distributed Galois and relinearization keys without reconstructing the joint secret key.");
     println!("  Galois keys (11 rotations) and a relinearization key are produced via distributed");
     println!("  MPC over each member's sk share — the full joint secret key is never assembled.");
     println!(
-        "  These eval keys enable slot rotations and ct*ct Hadamard multiply + relin (depth 1)"
+        "  These eval keys enable slot rotations and other advanced ciphertext operations when needed"
     );
 
     act("Act 3 — The Bids");
@@ -253,7 +253,7 @@ fn main() {
     println!(
         "  or carry propagation occurs. Result: 1 aggregate ciphertext, multiplicative depth 0."
     );
-    println!("All orders are now locked in encrypted form. Nobody — not even the committee — can see them.");
+    println!("All orders are now locked in encrypted form. No single committee member can decrypt them alone, and the intended protocol flow avoids direct per-order decryption.");
 
     act("Act 4 — The Computation");
     println!(
@@ -301,9 +301,9 @@ fn main() {
     );
     println!();
     println!("  The committee now needs each bidder's quantity at and above the clearing price");
-    println!("  to compute allocations. For each bidder ciphertext, they encrypt a SIMD mask");
-    println!("  with 1s only at the clearing-level slot blocks, ct*ct Hadamard-multiply at");
-    println!("  depth 1, relinearize, and threshold-decrypt only that masked result.");
+    println!("  to compute allocations. For each bidder ciphertext, they apply a plaintext SIMD");
+    println!("  mask with 1s only at the clearing-level slot blocks via ct*pt slot-wise");
+    println!("  multiplication, then threshold-decrypt only that masked result.");
     println!();
 
     let target_levels = if clearing_idx + 1 < PRICE_LEVELS {
@@ -315,7 +315,7 @@ fn main() {
 
     let mut bidder_slot_values = Vec::with_capacity(per_bidder_cts.len());
     for bidder_ct in &per_bidder_cts {
-        let masked_ct = mask_multiply(&extraction_mask, bidder_ct, &joint_pk, &relin_key);
+        let masked_ct = mask_multiply(&extraction_mask, bidder_ct);
         let party_bidder_shares: Vec<(usize, Vec<_>)> = participating
             .iter()
             .map(|&i| {
@@ -371,7 +371,7 @@ fn main() {
     }
 
     println!();
-    println!("  ❌ No individual bid price was revealed");
+    println!("  ❌ No full per-bidder price ladder position was revealed");
     println!("  ❌ No full bidder demand vector was revealed");
     println!("  ❌ No committee member saw any plaintext order book");
     println!();
@@ -379,7 +379,7 @@ fn main() {
     println!(
         "  values; (2) each bidder's quantity at the clearing price level and one level above."
     );
-    println!("  They never saw any bidder's full 64-level demand vector, exact bid price, or any");
+    println!("  They never saw any bidder's full 64-level demand vector or any");
     println!("  quantity at non-clearing price levels.");
 
     act("Act 5 — Lifting the Curtain");

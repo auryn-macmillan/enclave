@@ -19,7 +19,7 @@
 //! logical price level occupies `SLOT_WIDTH` consecutive SIMD slots
 //! containing a bit decomposition of the bidder quantity.  Uses
 //! `Encoding::simd()` so that multiplication is slot-wise (Hadamard),
-//! enabling ct×ct mask-multiply for privacy-preserving extraction.
+//! enabling plaintext-mask extraction for privacy-preserving slot isolation.
 //!
 //! ## Demand Accumulation (FHE Phase — Depth 0)
 //!
@@ -45,11 +45,10 @@
 //! ## Privacy Surface
 //!
 //! The core auction reveals only the aggregate demand curve needed to derive
-//! the clearing price.  Per-bidder allocations are extracted using ct×ct
-//! mask-multiply: the committee encrypts a mask ciphertext with 1s at the
-//! target slot range and 0s elsewhere, multiplies with the bidder's
-//! ciphertext (depth 1), relinearizes, and threshold-decrypts.  Only the
-//! isolated slot values are revealed, not the bidder's full demand vector.
+//! the clearing price.  Per-bidder allocations are extracted by multiplying
+//! each bidder ciphertext with a plaintext mask that has 1s at the target slot
+//! range and 0s elsewhere, then threshold-decrypting the masked result. Only
+//! the isolated slot values are revealed, not the bidder's full demand vector.
 
 pub use auction_bitplane_example::{
     aggregate_public_key, aggregate_sk_shares_for_party, build_eval_key_from_committee,
@@ -58,7 +57,7 @@ pub use auction_bitplane_example::{
     COMMITTEE_N, SLOTS, SMUDGING_LAMBDA,
 };
 
-use fhe::bfv::{BfvParameters, Ciphertext, Encoding, Plaintext, PublicKey, RelinearizationKey};
+use fhe::bfv::{BfvParameters, Ciphertext, Encoding, Plaintext, PublicKey};
 use fhe_traits::{FheEncoder, FheEncrypter};
 use rand::rngs::OsRng;
 use std::cmp::Reverse;
@@ -141,24 +140,8 @@ pub fn build_extraction_mask(target_levels: &[usize], params: &Arc<BfvParameters
     Plaintext::try_encode(&slots, Encoding::simd(), params).expect("encode extraction mask")
 }
 
-/// Encrypt a mask plaintext, Hadamard-multiply with the target ciphertext, and
-/// relinearize — isolating only the target SIMD slot blocks.
-///
-/// The mask is encrypted under the joint public key so that the multiply is
-/// ct × ct (depth 1).  After relinearization, the result can be threshold-
-/// decrypted to reveal only the masked slot values.
-pub fn mask_multiply(
-    mask: &Plaintext,
-    target: &Ciphertext,
-    pk: &PublicKey,
-    relin_key: &RelinearizationKey,
-) -> Ciphertext {
-    let mask_ct = pk.try_encrypt(mask, &mut OsRng).expect("encrypt mask");
-    let mut result = &mask_ct * target;
-    relin_key
-        .relinearizes(&mut result)
-        .expect("relinearize after mask multiply");
-    result
+pub fn mask_multiply(mask: &Plaintext, target: &Ciphertext) -> Ciphertext {
+    target * mask
 }
 
 /// Find the clearing price by scanning the demand curve from high to low.
