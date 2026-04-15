@@ -47,10 +47,12 @@ The demo then performs one extra depth-1 multiplication on that aggregate curve 
 The committee uses threshold decryption to reveal only the minimum information needed:
 
 1. **Second-price discovery**: Threshold-decrypt pair-indicator buckets from the top down. The first bucket whose decrypted indicator is non-zero is the **second-price bucket**.
-2. **Top bucket discovery**: If the top bucket is not already implied by the second-price bucket, threshold-decrypt cumulative occupancy buckets above the second price until the highest occupied bucket is found. This is an internal control step for the protocol flow; it does not need to be announced as the winner's full bucket price in the public narrative.
+2. **Aggregate next-step check**: Threshold-decrypt the aggregate cumulative occupancy at the **next ladder step above the second-price bucket**.
+   - If that aggregate value is `1`, there is a unique bidder above the second price.
+   - If that aggregate value is `0`, the top bid is tied at the second-price bucket.
 3. **Winner identification**:
-   - If the second-price bucket is strictly below the top bucket, the committee performs a targeted decryption of each bidder's presence bit at the **next ladder step above the second-price bucket**. This confirms which bidder is strictly above the second price without revealing the winner's exact higher bucket.
-   - If the second-price bucket equals the top bucket (a tie at the highest price), the committee decrypts the top bucket's presence and submission-order payloads for bidders in that bucket, then selects the earliest submission.
+   - If the aggregate next-step check returns `1`, the committee performs a targeted decryption of each bidder's presence bit at that next ladder step to identify the unique winner.
+   - If the aggregate next-step check returns `0`, the committee decrypts the second-price bucket's presence and submission-order payloads for bidders in that bucket, then selects the earliest submission.
 
 The winner's exact surplus and all individual bid amounts remain encrypted.
 

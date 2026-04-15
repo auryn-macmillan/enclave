@@ -37,8 +37,8 @@ cargo run --bin demo --release
 
 The demo prints:
 - the public ladder bids submitted by each participant,
-- the decrypted aggregate occupancy curve,
 - the second-price bucket,
+- the aggregate next-step check above the second price,
 - the minimal extra winner-identification reveal,
 - and a plaintext shadow verification.
 
