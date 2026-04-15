@@ -27,7 +27,7 @@ The aggregator sums all active ciphertexts into an **aggregate demand curve**. B
 ### 4. Order classification and allocation
 
 Using the public clearing index $k$, the committee classifies each order from its **public order-price metadata**:
-1. **Strict winners** (price > $P^*$): Fully filled. Committee threshold-decrypts the relevant price-level SIMD slot block at `k+1` for allocation reporting and drops the ciphertext.
+1. **Strict winners** (price > $P^*$): Fully filled. The demo uses the public `order.qty` metadata directly for allocation reporting because a full fill is already implied by `price > P^*`; no participant-level threshold decryption is needed.
 2. **Strict losers** (price < $P^*$): Unfilled. Ciphertext is carried forward untouched with zero per-order information revealed.
 3. **Marginal** (price = $P^*$): Partially filled. Committee threshold-decrypts the marginal quantity SIMD slot block, computes pro-rata in plaintext, and re-encrypts the residual.
 
@@ -40,7 +40,7 @@ FBA uses **epoch-based priority** where earlier-round orders fill first at the m
 | Data | Revealed? | When? | Why? |
 |------|-----------|-------|------|
 | Aggregate demand curve (per round) | ✅ Yes | Each round, after threshold decryption | Needed to find clearing price |
-| Strict winner's quantity at their price level | ✅ Yes | During allocation | Confirms full fill quantity |
+| Strict winner's quantity | ✅ Yes (from public metadata) | During allocation | Full fill is already implied by public `price > P^*`, so the demo reuses public `order.qty` |
 | Marginal bidder's quantity at clearing level | ✅ Yes | During allocation | Needed for pro-rata split |
 | Strict loser's quantity | ❌ Not in the intended flow | Never directly in the demo flow | Ciphertext carried forward untouched |
 | Strict loser's price | ✅ Yes | Submission time | This demo stores order price as public metadata for classification |
@@ -53,7 +53,7 @@ FBA uses **epoch-based priority** where earlier-round orders fill first at the m
 1. **Submission**: Bidder encodes a 2048-slot SIMD plaintext (64 levels × 16 bits), encrypts under joint public key → 1 BFV ciphertext.
 2. **Aggregation**: Per-round sum of all active ciphertexts (depth 0) → 1 aggregate ciphertext per round.
 3. **Aggregate decryption**: 2-of-3 threshold decrypt with 80-bit smudging noise → plaintext demand curve.
-4. **Classification decryption**: Committee isolates targeted SIMD slot blocks of winner/marginal ciphertexts using a plaintext SIMD mask and ct×pt slot-wise multiplication before threshold decryption. Strict winners use the single block at `k+1`; marginals use the single block at `k`. Losers' ciphertexts are not decrypted in the intended flow.
+4. **Classification decryption**: Committee uses public order metadata to identify strict winners and losers. Only marginal orders require plaintext SIMD masking plus ct×pt slot-wise multiplication before threshold decryption of the single block at `k`. Losers' ciphertexts are not decrypted in the intended flow, and strict winners need no participant-level quantity decryption.
 5. **Carry-forward**: Strict losers' original ciphertexts persist unchanged. Marginal residuals are re-encrypted as fresh ciphertexts. Winners' ciphertexts are dropped.
 6. **Cross-round**: Steps 2–5 repeat each epoch with the updated book. Earlier-epoch orders get priority at marginal fills.
 
@@ -61,11 +61,11 @@ FBA uses **epoch-based priority** where earlier-round orders fill first at the m
 
 ### Distributed evaluation keys
 
-While the core FBA pipeline under SIMD encoding uses pure ciphertext additions and threshold decryption, the repository's distributed eval-key MPC infrastructure remains fully integrated. The per-order extraction path now uses a plaintext SIMD mask via ct×pt slot-wise multiplication, while the existing distributed eval-key machinery remains available for other mechanisms that may require Galois rotations or relinearization.
+While the core FBA pipeline under SIMD encoding uses pure ciphertext additions and threshold decryption, the repository's distributed eval-key MPC infrastructure remains fully integrated. The only remaining per-order extraction path is the marginal-order branch, which uses a plaintext SIMD mask via ct×pt slot-wise multiplication; the existing distributed eval-key machinery remains available for other mechanisms that may require Galois rotations or relinearization.
 
 ### Smudging noise
 
-Threshold decryption shares include **80-bit smudging noise** to protect the secret key from leakage during the multi-round process. Because the main pipeline is dominated by additions, ciphertext noise growth is minimal. The demo uses plaintext-mask ct×pt extraction for protocol-guided per-order slot isolation.
+Threshold decryption shares include **80-bit smudging noise** to protect the secret key from leakage during the multi-round process. Because the main pipeline is dominated by additions, ciphertext noise growth is minimal. The demo now restricts plaintext-mask ct×pt extraction to marginal orders only.
 
 ### Trust model
 

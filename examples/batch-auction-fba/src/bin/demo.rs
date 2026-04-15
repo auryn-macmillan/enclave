@@ -8,7 +8,7 @@ use batch_auction_fba_example::{
     generate_eval_key_root_seed, generate_smudging_noise, member_keygen, threshold_decrypt,
     BatchState, Order, COMMITTEE_N, PRICE_LEVELS, SLOT_WIDTH,
 };
-use fhe::bfv::{BfvParameters, Ciphertext, Encoding, PublicKey};
+use fhe::bfv::{BfvParameters, Ciphertext, Encoding, Plaintext, PublicKey};
 use fhe_math::rq::Poly;
 use fhe_traits::FheDecoder;
 use std::collections::HashMap;
@@ -124,6 +124,32 @@ fn shadow_demand_curve(orders: &[Order], price_ladder: &[u64]) -> Vec<u64> {
         .collect()
 }
 
+fn allocation_view_qty(
+    order: &Order,
+    clearing_price: u64,
+    clearing_idx: usize,
+    marginal_mask: &Plaintext,
+    entry_map: &HashMap<usize, EncryptedOrder>,
+    participating: &[usize],
+    sk_poly_sums: &[Poly],
+    params: &Arc<BfvParameters>,
+) -> u64 {
+    if order.price > clearing_price {
+        order.qty
+    } else if order.price == clearing_price {
+        decrypt_demand_slot_qty(
+            &entry_map[&order.order_id].ct,
+            marginal_mask,
+            clearing_idx,
+            participating,
+            sk_poly_sums,
+            params,
+        )
+    } else {
+        0
+    }
+}
+
 fn run_round(
     round: usize,
     state: &mut BatchState,
@@ -183,8 +209,7 @@ fn run_round(
         "round {round}: clearing price mismatch"
     );
 
-    let (winner_mask, _loser_mask, marginal_mask) =
-        build_classification_masks(clearing_idx, params);
+    let (_, _, marginal_mask) = build_classification_masks(clearing_idx, params);
     let entry_map: HashMap<usize, EncryptedOrder> = book
         .iter()
         .cloned()
@@ -195,27 +220,16 @@ fn run_round(
         .active_orders
         .iter()
         .map(|order| {
-            let qty = if order.price > clearing_price {
-                decrypt_demand_slot_qty(
-                    &entry_map[&order.order_id].ct,
-                    &winner_mask,
-                    clearing_idx + 1,
-                    participating,
-                    sk_poly_sums,
-                    params,
-                )
-            } else if order.price == clearing_price {
-                decrypt_demand_slot_qty(
-                    &entry_map[&order.order_id].ct,
-                    &marginal_mask,
-                    clearing_idx,
-                    participating,
-                    sk_poly_sums,
-                    params,
-                )
-            } else {
-                0
-            };
+            let qty = allocation_view_qty(
+                order,
+                clearing_price,
+                clearing_idx,
+                &marginal_mask,
+                &entry_map,
+                participating,
+                sk_poly_sums,
+                params,
+            );
 
             Order {
                 order_id: order.order_id,
@@ -251,7 +265,7 @@ fn run_round(
         "  ✅ Aggregate demand at clearing: {}",
         format_quantity(demand_curve[clearing_idx])
     );
-    println!("To compute allocations, the committee classifies each order by its public price metadata relative to the clearing level. For strict winners and marginal orders, it applies the relevant plaintext SIMD mask with ct×pt slot-wise multiplication and threshold-decrypts only the targeted SIMD slot block needed for allocation. Strict winners now use the single block at k+1, marginals use the single block at k, and strict losers are carried forward without per-order quantity decryption in the intended flow.");
+    println!("To compute allocations, the committee classifies each order by its public price metadata relative to the clearing level. Strict winners use public order quantities directly because a full fill is already implied by price > clearing price. Only marginal orders require plaintext-mask ct×pt slot isolation and threshold decryption of the single SIMD slot block at k; strict losers are carried forward without per-order quantity decryption.");
 
     let allocation_map: HashMap<usize, u64> = fhe_allocations.iter().copied().collect();
 
@@ -506,5 +520,137 @@ fn main() {
     println!(
         "✅ Verified: the FHE frequent batch auction matched all three rounds with correct clearing prices, epoch-priority allocations, and committee-managed carry-forward residuals."
     );
-    println!("Across all rounds, the committee saw: (1) the aggregate demand curve per round, (2) public order-price metadata, and (3) targeted SIMD slot blocks for winners and marginal bidders in the intended flow. Strict losers' quantities and full demand vectors were not directly decrypted in the demo flow.");
+    println!("Across all rounds, the committee saw: (1) the aggregate demand curve per round, (2) public order-price metadata, and (3) targeted SIMD slot blocks only for marginal bidders in the intended flow. Strict winners used public order quantities, while strict losers' quantities and full demand vectors were not directly decrypted in the demo flow.");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_fixture() -> (
+        Arc<BfvParameters>,
+        PublicKey,
+        Vec<Poly>,
+        Vec<u64>,
+        [usize; 2],
+    ) {
+        let params = build_params();
+        let crp = generate_crp(&params);
+        let members: Vec<_> = (0..COMMITTEE_N)
+            .map(|_| member_keygen(&params, &crp))
+            .collect();
+
+        let joint_pk = aggregate_public_key(
+            members
+                .iter()
+                .map(|member| member.pk_share.clone())
+                .collect(),
+        );
+
+        let all_sk_shares: Vec<_> = members
+            .iter()
+            .map(|member| member.sk_shares.clone())
+            .collect();
+        let sk_poly_sums: Vec<_> = (0..COMMITTEE_N)
+            .map(|i| aggregate_sk_shares_for_party(&all_sk_shares, i, &params))
+            .collect();
+
+        (
+            params,
+            joint_pk,
+            sk_poly_sums,
+            build_price_ladder(100, 1_000, PRICE_LEVELS),
+            [0, 1],
+        )
+    }
+
+    #[test]
+    fn strict_winner_allocation_view_uses_public_qty_without_ciphertext_lookup() {
+        let (params, _, sk_poly_sums, _, participating) = test_fixture();
+        let (_, _, marginal_mask) = build_classification_masks(10, &params);
+        let order = Order {
+            order_id: 42,
+            bidder_slot: 0,
+            qty: 77,
+            price: 800,
+            epoch: 1,
+        };
+
+        let qty = allocation_view_qty(
+            &order,
+            700,
+            10,
+            &marginal_mask,
+            &HashMap::new(),
+            &participating,
+            &sk_poly_sums,
+            &params,
+        );
+
+        assert_eq!(qty, order.qty);
+    }
+
+    #[test]
+    fn marginal_allocation_view_still_decrypts_target_slot() {
+        let (params, joint_pk, sk_poly_sums, price_ladder, participating) = test_fixture();
+        let clearing_idx = PRICE_LEVELS / 2;
+        let clearing_price = price_ladder[clearing_idx];
+        let order = Order {
+            order_id: 7,
+            bidder_slot: 0,
+            qty: 55,
+            price: clearing_price,
+            epoch: 1,
+        };
+        let pt = encode_demand_vector(order.qty, order.price, &price_ladder, &params);
+        let ct = encrypt_demand(&pt, &joint_pk);
+        let (_, _, marginal_mask) = build_classification_masks(clearing_idx, &params);
+        let entry_map = HashMap::from([(
+            order.order_id,
+            EncryptedOrder {
+                name: "Alice",
+                order_id: order.order_id,
+                ct,
+            },
+        )]);
+
+        let qty = allocation_view_qty(
+            &order,
+            clearing_price,
+            clearing_idx,
+            &marginal_mask,
+            &entry_map,
+            &participating,
+            &sk_poly_sums,
+            &params,
+        );
+
+        assert_eq!(qty, order.qty);
+    }
+
+    #[test]
+    fn strict_loser_allocation_view_remains_zero_without_ciphertext_lookup() {
+        let (params, _, sk_poly_sums, _, participating) = test_fixture();
+        let (_, _, marginal_mask) = build_classification_masks(10, &params);
+        let order = Order {
+            order_id: 9,
+            bidder_slot: 0,
+            qty: 33,
+            price: 600,
+            epoch: 1,
+        };
+
+        let qty = allocation_view_qty(
+            &order,
+            700,
+            10,
+            &marginal_mask,
+            &HashMap::new(),
+            &participating,
+            &sk_poly_sums,
+            &params,
+        );
+
+        assert_eq!(qty, 0);
+    }
 }
