@@ -1,29 +1,16 @@
 // SPDX-License-Identifier: LGPL-3.0-only
-//
-//! Five-act threshold FHE Vickrey auction demo.
 
 use auction_bitplane_example::{
-    accumulate_bitplanes, aggregate_public_key, aggregate_sk_shares_for_party,
-    build_eval_key_from_committee, build_params, compute_decryption_shares, compute_tallies,
-    decode_bid, decode_tally_matrix, encode_bid_into_planes, encrypt_bitplanes, generate_crp,
-    generate_eval_key_root_seed, generate_smudging_noise, member_keygen, rank_bidders,
-    threshold_decrypt, BID_BITS, COMMITTEE_N, SLOTS,
+    accumulate_bid, aggregate_public_key, aggregate_sk_shares_for_party, build_curve_bucket_mask,
+    build_eval_key_from_committee, build_params, build_price_ladder, build_top_bucket_mask,
+    compute_decryption_shares, compute_pair_curve, decode_curve_bucket_presence_plaintext,
+    decode_top_bucket_signal, encode_bid, encrypt_bid, find_second_price_bucket_progressive,
+    find_top_bucket_progressive, generate_crp, generate_eval_key_root_seed,
+    generate_smudging_noise, identify_top_bucket_winner, identify_unique_bucket_winner,
+    mask_top_bucket, member_keygen, resolve_progressive_vickrey_outcome, threshold_decrypt,
+    COMMITTEE_N,
 };
 use fhe::bfv::Ciphertext;
-use rand::rngs::OsRng;
-use rand::Rng;
-
-const NAMES: [&str; 10] = [
-    "Alice", "Bob", "Charlie", "Dave", "Eve", "Frank", "Grace", "Heidi", "Ivan", "Judy",
-];
-
-fn format_eth(wei: u64) -> String {
-    let whole = wei / 1_000_000_000_000_000_000;
-    let frac = wei % 1_000_000_000_000_000_000;
-    // Show 4 decimal places for readability (truncate, don't round).
-    let frac4 = frac / 100_000_000_000_000;
-    format!("{whole}.{frac4:04} ETH")
-}
 
 fn act(title: &str) {
     println!("\n════════════════════════════════════════════════════════════");
@@ -32,14 +19,15 @@ fn act(title: &str) {
 }
 
 fn main() {
-    println!("Threshold FHE Sealed-Bid Vickrey Auction Demo");
+    println!("Threshold FHE Discrete-Ladder Vickrey Auction Demo");
 
     act("Act 1 — The Problem");
-    println!("In a traditional sealed-bid auction, the auctioneer sees every bid.");
-    println!("That creates an opportunity to cheat, leak information, or front-run.");
-    println!("What if we could determine the winner without anyone seeing the bids?");
+    println!("A classic Vickrey auction should reveal who won and what they pay, but not how much more the winner would have paid.");
+    println!("This demo maps bids onto a public price ladder and makes only authorized decryptions public.");
+    println!("The public transcript reveals the second-price bucket first, then only the minimum extra information needed to identify the winner.");
 
     let params = build_params();
+    let price_ladder = build_price_ladder(100, 500, 9);
 
     act("Act 2 — The Setup");
     println!("Three independent parties jointly create one BFV lattice encryption key.");
@@ -54,13 +42,8 @@ fn main() {
         })
         .collect();
 
-    let pk_shares: Vec<_> = members.iter().map(|m| m.pk_share.clone()).collect();
-    let joint_pk = aggregate_public_key(pk_shares);
+    let joint_pk = aggregate_public_key(members.iter().map(|m| m.pk_share.clone()).collect());
     println!("The committee aggregates those shares into one joint public key.");
-    let eval_key_root_seed = generate_eval_key_root_seed();
-    println!(
-        "The committee also agrees on shared eval-key randomness for distributed key generation."
-    );
 
     let all_sk_shares: Vec<_> = members.iter().map(|m| m.sk_shares.clone()).collect();
     let sk_poly_sums: Vec<_> = (0..COMMITTEE_N)
@@ -68,128 +51,227 @@ fn main() {
         .collect();
 
     let member_sk_refs: Vec<&_> = members.iter().map(|m| &m.sk).collect();
-    let (eval_key, relin_key) =
+    let eval_key_root_seed = generate_eval_key_root_seed();
+    let (_eval_key, relin_key) =
         build_eval_key_from_committee(&member_sk_refs, &params, &eval_key_root_seed);
-    println!("The committee generates distributed Galois and relinearization keys without reconstructing the joint secret key.");
+    println!("The committee also derives distributed evaluation keys without reconstructing the joint secret key.");
 
     act("Act 3 — The Bids");
-    let mut rng = OsRng;
-    let bids: Vec<(&str, u64)> = NAMES
-        .iter()
-        .map(|name| {
-            (
-                *name,
-                rng.gen_range(1_000_000_000_000_000_000u64..=15_000_000_000_000_000_000u64),
-            )
-        })
-        .collect();
-    assert!(bids.len() <= SLOTS, "too many bidders for SIMD slots");
+    let bids = vec![
+        ("Alice", 250u64),
+        ("Bob", 500),
+        ("Charlie", 400),
+        ("Dave", 200),
+        ("Eve", 350),
+    ];
 
-    let mut global_bitplanes: Vec<Ciphertext> = Vec::new();
-    let mut per_bidder_cts: Vec<Vec<Ciphertext>> = Vec::new();
+    let mut per_bidder_cts: Vec<Ciphertext> = Vec::new();
+    let mut aggregate_ct: Option<Ciphertext> = None;
 
-    for (slot, &(name, wei)) in bids.iter().enumerate() {
-        let planes = encode_bid_into_planes(wei, slot, &params);
-        let encrypted = encrypt_bitplanes(&planes, &joint_pk);
-
-        if global_bitplanes.is_empty() {
-            global_bitplanes = encrypted.clone();
+    for (submission_order, &(name, price)) in bids.iter().enumerate() {
+        let pt = encode_bid(price, submission_order, &price_ladder, &params);
+        let ct = encrypt_bid(&pt, &joint_pk);
+        if let Some(global) = aggregate_ct.as_mut() {
+            accumulate_bid(global, &ct);
         } else {
-            accumulate_bitplanes(&mut global_bitplanes, &encrypted);
+            aggregate_ct = Some(ct.clone());
         }
-        per_bidder_cts.push(encrypted);
-        println!("{name:<7} submits an encrypted bid.");
+        per_bidder_cts.push(ct);
+        println!("{name:<7} submits an encrypted bid at ladder price {price} (submission order {submission_order}).");
     }
 
-    println!("Bids are accumulated into encrypted bitplanes.");
-    println!("All bids are now locked in encrypted form. Nobody — not even the committee — can see them.");
+    println!("Each bidder encrypts a single ciphertext encoding cumulative willingness-to-pay over the public ladder.");
 
-    act("Act 4 — The Computation");
-    println!("The encrypted tally is computed homomorphically across {BID_BITS} bitplanes.");
-    println!("The winner is being determined without decrypting any bids...");
+    act("Act 4 — Progressive Public Decryption");
+    println!("First, the committee decrypts pair-indicator buckets from the top down until it finds the second-price bucket.");
 
-    let tally_cts = compute_tallies(
-        &global_bitplanes,
-        bids.len(),
-        &eval_key,
-        &relin_key,
-        &params,
-    );
-
-    let participating = [0usize, 1];
-    println!("Two committee members now cooperate for threshold decryption: 1 and 2.");
-
-    let tally_num_cts = tally_cts.len();
-    let party_tally_shares: Vec<(usize, Vec<_>)> = participating
-        .iter()
-        .map(|&i| {
-            let smudging = generate_smudging_noise(&params, tally_num_cts);
-            let shares =
-                compute_decryption_shares(&tally_cts, &sk_poly_sums[i], &smudging, &params);
-            (i + 1, shares)
-        })
-        .collect();
-
-    let tally_pts = threshold_decrypt(&party_tally_shares, &tally_cts, &params);
-    let tally_matrix = decode_tally_matrix(&tally_pts, bids.len(), &params);
-    let (winner_slot, second_slot) = rank_bidders(&tally_matrix);
-    let (winner_name, _) = bids[winner_slot];
-
-    let second_slot = match second_slot {
-        Some(s) => s,
-        None => {
-            println!("Winner: {winner_name}");
-            println!("Price to pay: no second price exists.");
-            println!("✅ Winner identity: {winner_name}");
-            println!("❌ The winning bid amount was never revealed");
-            println!("❌ No committee member saw any plaintext bid");
-            println!("\n(single bidder — no Vickrey second price)");
-            println!("✅ Single-bidder result verified.");
-            return;
-        }
+    let aggregate_ct = aggregate_ct.expect("at least one bid");
+    let participating = [0usize, 1usize];
+    let pair_curve = compute_pair_curve(&aggregate_ct, price_ladder.len(), &relin_key, &params);
+    let mut pair_bucket_reveals = Vec::new();
+    let second = find_second_price_bucket_progressive(&price_ladder, |level_idx| {
+        let mask = build_curve_bucket_mask(level_idx, &params);
+        let masked = vec![&pair_curve * &mask];
+        let shares: Vec<(usize, Vec<_>)> = participating
+            .iter()
+            .map(|&i| {
+                let smudging = generate_smudging_noise(&params, 1);
+                let shares =
+                    compute_decryption_shares(&masked, &sk_poly_sums[i], &smudging, &params);
+                (i + 1, shares)
+            })
+            .collect();
+        let pt = threshold_decrypt(&shares, &masked, &params)
+            .into_iter()
+            .next()
+            .expect("pair bucket plaintext");
+        let present = decode_curve_bucket_presence_plaintext(&pt, level_idx, &params);
+        pair_bucket_reveals.push((level_idx, present));
+        present
+    });
+    let (second_bucket, second_price) = match second {
+        Some((bucket, price)) => (Some(bucket), Some(price)),
+        None => (None, None),
     };
 
-    let bid_cts = &per_bidder_cts[second_slot];
-    let bid_num_cts = bid_cts.len();
-    let party_bid_shares: Vec<(usize, Vec<_>)> = participating
+    println!(
+        "Revealed pair-indicator buckets (high to low until stop): {:?}",
+        pair_bucket_reveals
+    );
+
+    let mut occupancy_bucket_reveals = Vec::new();
+    let (top_bucket, top_price) =
+        find_top_bucket_progressive(&price_ladder, second_bucket, |level_idx| {
+            let mask = build_curve_bucket_mask(level_idx, &params);
+            let masked = vec![&aggregate_ct * &mask];
+            let shares: Vec<(usize, Vec<_>)> = participating
+                .iter()
+                .map(|&i| {
+                    let smudging = generate_smudging_noise(&params, 1);
+                    let shares =
+                        compute_decryption_shares(&masked, &sk_poly_sums[i], &smudging, &params);
+                    (i + 1, shares)
+                })
+                .collect();
+            let pt = threshold_decrypt(&shares, &masked, &params)
+                .into_iter()
+                .next()
+                .expect("curve bucket plaintext");
+            let present = decode_curve_bucket_presence_plaintext(&pt, level_idx, &params);
+            occupancy_bucket_reveals.push((level_idx, present));
+            present
+        })
+        .expect("top bucket");
+
+    println!(
+        "Additional occupancy bucket reveals above the second-price bucket: {:?}",
+        occupancy_bucket_reveals
+    );
+    println!(
+        "These reveals identify the price bucket where a second bidder is present ({}). The winner-identification step only needs the next ladder step above that bucket.",
+        second_price.map_or("none".to_string(), |p| p.to_string())
+    );
+
+    let reveal_bucket = if second_bucket == Some(top_bucket) {
+        println!(
+            "The top bucket contains multiple bidders. The earliest submission at price {} wins.",
+            top_price
+        );
+        top_bucket
+    } else {
+        let reveal_bucket = second_bucket
+            .map(|bucket| bucket + 1)
+            .expect("strict-winner path requires second-price bucket");
+        println!(
+            "There's a unique bidder above the second-price bucket. Only bidder presence at the next ladder step ({}) is revealed to confirm the winner.",
+            price_ladder[reveal_bucket]
+        );
+        reveal_bucket
+    };
+
+    println!("The committee now performs a targeted threshold decryption of bucket {reveal_bucket} for each bidder.");
+
+    let presence_mask = build_curve_bucket_mask(reveal_bucket, &params);
+    let masked_presence_cts: Vec<Ciphertext> = per_bidder_cts
+        .iter()
+        .map(|ct| mask_top_bucket(ct, &presence_mask))
+        .collect();
+    let presence_party_shares: Vec<(usize, Vec<_>)> = participating
         .iter()
         .map(|&i| {
-            let smudging = generate_smudging_noise(&params, bid_num_cts);
-            let shares = compute_decryption_shares(bid_cts, &sk_poly_sums[i], &smudging, &params);
+            let smudging = generate_smudging_noise(&params, masked_presence_cts.len());
+            let shares = compute_decryption_shares(
+                &masked_presence_cts,
+                &sk_poly_sums[i],
+                &smudging,
+                &params,
+            );
             (i + 1, shares)
         })
         .collect();
+    let presence_pts = threshold_decrypt(&presence_party_shares, &masked_presence_cts, &params);
+    let presence: Vec<bool> = presence_pts
+        .iter()
+        .map(|pt| decode_curve_bucket_presence_plaintext(pt, reveal_bucket, &params))
+        .collect();
 
-    let bid_pts = threshold_decrypt(&party_bid_shares, bid_cts, &params);
-    let second_price = decode_bid(&bid_pts, second_slot, &params);
+    let winner_idx = if let Some(idx) = identify_unique_bucket_winner(&presence) {
+        println!(
+            "Winner identified by targeted reveal at price {}: {}.",
+            price_ladder[reveal_bucket], bids[idx].0
+        );
+        idx
+    } else {
+        println!(
+            "Multiple bidders at price {}. Identifying the earliest submission.",
+            top_price
+        );
+        let mask = build_top_bucket_mask(reveal_bucket, &params);
+        let masked_bidder_cts: Vec<Ciphertext> = per_bidder_cts
+            .iter()
+            .map(|ct| mask_top_bucket(ct, &mask))
+            .collect();
+        let bidder_party_shares: Vec<(usize, Vec<_>)> = participating
+            .iter()
+            .map(|&i| {
+                let smudging = generate_smudging_noise(&params, masked_bidder_cts.len());
+                let shares = compute_decryption_shares(
+                    &masked_bidder_cts,
+                    &sk_poly_sums[i],
+                    &smudging,
+                    &params,
+                );
+                (i + 1, shares)
+            })
+            .collect();
+        let bidder_plaintexts =
+            threshold_decrypt(&bidder_party_shares, &masked_bidder_cts, &params);
+        let signals: Vec<_> = bidder_plaintexts
+            .iter()
+            .map(|pt| decode_top_bucket_signal(pt, reveal_bucket, &params))
+            .collect();
+        identify_top_bucket_winner(&signals).expect("winner")
+    };
 
-    println!();
-    println!("  ✅ Winner: {winner_name}");
-    println!(
-        "  ✅ Price to pay (second-highest bid): {}",
-        format_eth(second_price)
-    );
-    println!();
-    println!("  ❌ The winning bid amount was never revealed");
-    println!("  ❌ No other bid amounts were revealed");
-    println!("  ❌ No committee member saw any plaintext bid");
+    let outcome = resolve_progressive_vickrey_outcome(
+        winner_idx,
+        &price_ladder,
+        second_bucket,
+        reveal_bucket,
+    )
+    .expect("outcome");
 
-    act("Act 5 — Lifting the Curtain");
-    println!("Let's peek behind the scenes to verify the result:");
-
-    let mut shadow: Vec<(usize, u64)> =
-        bids.iter().enumerate().map(|(i, &(_, w))| (i, w)).collect();
-    shadow.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-
-    for (rank, (slot, wei)) in shadow.iter().enumerate() {
-        println!("{:>2}. {:<7} {}", rank + 1, bids[*slot].0, format_eth(*wei));
+    act("Act 5 — Public Outcome");
+    println!("Winner: {}", bids[winner_idx].0);
+    match second_price {
+        Some(price) => println!("Clearing price (Vickrey): {price}"),
+        None => println!("Clearing price: none (only one bidder)"),
     }
-
-    assert_eq!(winner_slot, shadow[0].0, "winner mismatch");
-    assert_eq!(second_slot, shadow[1].0, "second-place mismatch");
-    assert_eq!(second_price, shadow[1].1, "Vickrey price mismatch");
-
     println!(
-        "✅ Verified: the FHE auction produced the correct result — without ever seeing the bids."
+        "Winner-identification reveal bucket price: {}",
+        price_ladder[reveal_bucket]
     );
+    println!(
+        "Outcome summary: winner bidder index {}, second-price bucket {:?}, tie at top {}.",
+        outcome.winner_bidder, outcome.second_price_bucket, outcome.top_tie
+    );
+    println!("What stayed hidden: individual bid amounts and how much higher the winner was willing to go.");
+
+    let mut shadow: Vec<(usize, u64, usize)> = bids
+        .iter()
+        .enumerate()
+        .map(|(submission_order, &(_, price))| (submission_order, price, submission_order))
+        .collect();
+    shadow.sort_by(|a, b| b.1.cmp(&a.1).then(a.2.cmp(&b.2)));
+    let expected_winner = shadow[0].0;
+    let expected_second_price = if shadow.len() >= 2 {
+        Some(shadow[1].1)
+    } else {
+        None
+    };
+
+    assert_eq!(winner_idx, expected_winner, "winner mismatch");
+    assert_eq!(second_price, expected_second_price, "second price mismatch");
+
+    println!("✅ Verified: the discrete-ladder threshold FHE auction produced the correct winner and second price.");
 }
