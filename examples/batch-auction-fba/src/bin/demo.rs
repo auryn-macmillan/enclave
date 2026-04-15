@@ -195,16 +195,11 @@ fn run_round(
         .active_orders
         .iter()
         .map(|order| {
-            let order_idx = state
-                .price_ladder
-                .iter()
-                .position(|&price| price == order.price)
-                .expect("order price must be on ladder");
             let qty = if order.price > clearing_price {
                 decrypt_demand_slot_qty(
                     &entry_map[&order.order_id].ct,
                     &winner_mask,
-                    order_idx,
+                    clearing_idx + 1,
                     participating,
                     sk_poly_sums,
                     params,
