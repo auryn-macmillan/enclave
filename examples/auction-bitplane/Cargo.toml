@@ -5,7 +5,7 @@ name = "auction_bitplane_example"
 version = "0.1.0"
 edition = "2021"
 license = "LGPL-3.0-only"
-description = "Sealed-bid Vickrey auction demo using BFV SIMD bit-plane encoding"
+description = "Discrete-ladder Vickrey auction demo using progressive threshold BFV decryption"
 
 [dependencies]
 e3-fhe-params = { path = "../../crates/fhe-params", features = ["abi-encoding"] }

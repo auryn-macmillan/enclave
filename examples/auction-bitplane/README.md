@@ -1,6 +1,6 @@
-# Bit-Plane Auction (Threshold FHE Vickrey Demo)
+# Discrete-Ladder Vickrey Auction (Threshold FHE Demo)
 
-A sealed-bid **Vickrey (second-price)** auction where bids are encrypted under threshold BFV fully-homomorphic encryption.  A **2-of-3 committee** jointly generates the encryption key (DKG), computes the tally homomorphically, and threshold-decrypts only the ranking and second price — without ever decrypting the raw bids.
+A sealed-bid **Vickrey (second-price)** auction where bids are encrypted under threshold BFV fully-homomorphic encryption. A **2-of-3 committee** jointly generates the encryption key (DKG), computes a cumulative occupancy curve and a pair-indicator curve, then makes only the authorized decryptions needed to reveal the second price and identify the winner.
 
 ## Quick start
 
@@ -8,99 +8,84 @@ A sealed-bid **Vickrey (second-price)** auction where bids are encrypted under t
 cargo run --bin demo --release
 ```
 
-This generates 10 random bids, runs the full threshold FHE pipeline, and asserts the result against a plaintext shadow.
+This runs the full threshold FHE pipeline on a fixed demo bid set, prints the progressive public transcript, and asserts the result against a plaintext shadow.
 
 ## How it works
 
 ### 1. Committee DKG (distributed key generation)
 
-Three committee members run a distributed key generation protocol — **no trusted dealer**.
+Three committee members run a distributed key generation protocol — no trusted dealer.
 
 Each member:
 1. Samples a fresh BFV secret key.
 2. Computes a **public key share** from their secret key and a shared common random polynomial (CRP).
 3. **Shamir-splits** their secret key into shares for distribution to all members.
 
-The public key shares are aggregated into a single **joint public key**.  Bidders encrypt to this key.  No single committee member knows the corresponding full secret key.
+The public key shares are aggregated into a single **joint public key**. Bidders encrypt to this key. No single committee member knows the corresponding full secret key.
 
 Each member also aggregates the Shamir shares they received from others into their **secret-key polynomial sum**, used later for threshold decryption.
 
-### 2. Encoding: BFV row-halves
+### 2. Encoding: discrete ladder buckets
 
-Each bidder occupies one SIMD **slot** (ring position) across 64 packed ciphertexts — one per bit of a `u64` bid.  Slot `i` of bitplane `j` holds bit `j` of bidder `i`'s bid (MSB first).
+Bidders map their willingness to pay onto a public ascending price ladder. Each bidder encrypts **one SIMD ciphertext** with two logical regions:
 
-With degree $N=2048$, BFV SIMD slots are organized as two rows of $N/2 = 1024$ slots each.  Rotations operate cyclically within each row.  To sum across all 2048 slots, the tally implementation performs $log_2(1024)$ column rotations followed by a row swap.
+1. a **cumulative occupancy curve** with value `1` at every price bucket at or below their chosen bucket, and
+2. a **submission-order payload** stored only at the bidder's chosen bucket.
 
-```
-            slot 0    slot 1    ...    slot 1023
-row 0       bidder 0  bidder 1         bidder 1023
-row 1       bidder 1024 ...            bidder 2047
-```
+This means the auction never needs to decrypt an exact raw bid amount. It works entirely with ladder buckets.
 
-Bidders encrypt their own bitplanes with the joint public key and submit them to the accumulator, which adds them slot-wise.
+### 3. Aggregate curves
 
-### 3. Tally: one multiply per bitplane (depth 1)
+Bidders submit their encrypted ladder vectors to the accumulator, which adds them slot-wise.
 
-For each bitplane `j`:
+This produces an **aggregate cumulative occupancy curve** where bucket `k` contains the number of bidders willing to pay at least price `P_k`.
 
-1. **`masked`** = `bitplane × slot_mask` — zero out unused SIMD slots (ct × pt, depth 0).  Without this, accumulated encryption noise in unused slots corrupts the all-slot sum.
-2. **`ones`** — rotation-reduce-tree sum of the masked bitplane.
-3. **`zeros`** = `n_bidders − ones`.
-4. **`tally`** = `bitplane × zeros` — one ct × ct multiply.
-5. **Relinearize** — reduce the degree-3 ciphertext back to degree 2 for threshold decryption.
+The demo then performs one extra depth-1 multiplication on that aggregate curve to derive a **pair-indicator curve** whose decrypted buckets are non-zero exactly when at least two bidders are present at-or-above that ladder price.
 
-`tally[j][i]` is non-zero only when bidder `i` has a 1 *and* some opponents have a 0.  The value equals how many opponents have 0 — a measure of "how much bidder `i` is winning this bit."
+### 4. Progressive public decryption
 
-Total multiplicative depth: **1** (a single ct × ct multiply per bitplane).
+The committee uses threshold decryption to reveal only the minimum information needed:
 
-### 4. Threshold decryption (2-of-3)
+1. **Second-price discovery**: Threshold-decrypt pair-indicator buckets from the top down. The first bucket whose decrypted indicator is non-zero is the **second-price bucket**.
+2. **Top bucket discovery**: If the top bucket is not already implied by the second-price bucket, threshold-decrypt cumulative occupancy buckets above the second price until the highest occupied bucket is found. This is an internal control step for the protocol flow; it does not need to be announced as the winner's full bucket price in the public narrative.
+3. **Winner identification**:
+   - If the second-price bucket is strictly below the top bucket, the committee performs a targeted decryption of each bidder's presence bit at the **next ladder step above the second-price bucket**. This confirms which bidder is strictly above the second price without revealing the winner's exact higher bucket.
+   - If the second-price bucket equals the top bucket (a tie at the highest price), the committee decrypts the top bucket's presence and submission-order payloads for bidders in that bucket, then selects the earliest submission.
 
-Any 2 of the 3 committee members can jointly decrypt ciphertexts:
+The winner's exact surplus and all individual bid amounts remain encrypted.
 
-1. Each participating member generates **smudging noise** (see below) and computes a **decryption share** for each ciphertext.
-2. The shares are combined via **Shamir reconstruction** to recover the plaintext.
+### 5. Privacy guarantees
 
-The committee first threshold-decrypts the 64 tally ciphertexts, then ranks bidders lexicographically.
-
-### 5. Ranking and Vickrey price
-
-The decrypted tally matrix is compared row-by-row (MSB → LSB).  The highest row is the winner; the second-highest identifies the Vickrey price source.  Ties are broken deterministically by slot index (lower wins).
-
-The FHE program **never decrypts raw bids**.  The committee uses the ranking to select which input ciphertext to threshold-decrypt — the second-ranked bidder's bitplanes — to recover the Vickrey price.
+- **Winner's surplus is protected**: The winner's exact willingness to pay above the revealed bucket is never revealed.
+- **Losing bids are protected**: No losing bidder's exact bid is revealed. The public sees only the aggregate occupancy / pair indicators plus the minimum per-bidder bucket data needed to identify the winner.
+- **No trusted auctioneer**: Authorized decryptions are public. The committee is not expected to keep authorized outputs secret; instead, the protocol minimizes what is authorized for decryption.
 
 ## Production considerations
 
 ### Distributed evaluation keys
 
-The rotation reduce-tree requires a Galois (evaluation) key, and relinearization requires a relinearization key.
-
-This demo now generates both keys with the repo's distributed eval-key MPC flow, reusing each committee member's additive BFV secret-key share. The joint BFV secret key is not reconstructed during eval-key generation.
-
-The current implementation is aligned with the repo's distributed Galois/relinearization protocols and public-verifiability work, rather than the old single-process shortcut.
+The demo still generates distributed Galois and relinearization keys using the repo's eval-key MPC flow, ensuring the joint secret key is never reconstructed. The current auction logic uses the relinearization key for the aggregate pair-indicator curve; future variants may also use the Galois keys for more advanced selection flows.
 
 ### Smudging noise
 
-Every BFV decryption leaks a small amount of information about the secret key through the noise term.  Each decryption share includes **smudging noise** — a large random term (λ = 80 bits of statistical security) that drowns the key-dependent component.
-
-This demo generates smudging noise via `TRBFV::generate_smudging_error` for every threshold decryption.
+Every BFV decryption leaks a small amount of information about the secret key through the noise term. Each decryption share includes **smudging noise** — a large random term (λ = 80 bits of statistical security) that drowns the key-dependent component.
 
 ## Project structure
 
 ```
 src/
-├── lib.rs          Core library: params, DKG, encoding, tally, threshold decryption, ranking
+├── lib.rs          Core library: params, DKG, ladder encoding, aggregate curves, threshold decryption, winner/price helpers
 └── bin/
-    └── demo.rs     10-bidder demo with 2-of-3 committee and shadow verification
+    └── demo.rs     5-bidder demo with 2-of-3 committee and shadow verification
 ```
 
 ## BFV parameters
 
 | Parameter | Value | Notes |
 |-----------|-------|-------|
-| N (degree) | 2048 | = max bidders (one SIMD slot each) |
+| N (degree) | 2048 | Enough for 64 ladder buckets × two logical regions × 16 bits |
 | t (plaintext mod) | 12289 | Prime, NTT-friendly |
-| Moduli | 6 × 62-bit | Noise budget for 1 multiply + rotations + relinearization |
-| Bid size | 64 bits | Full `u64` range |
+| Moduli | 6 × 62-bit | Noise budget for one depth-1 pair-indicator multiply plus threshold decryption |
 
 ## Threshold parameters
 

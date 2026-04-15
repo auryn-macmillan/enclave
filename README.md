@@ -20,7 +20,7 @@ The Interfold leverages a combination of Fully Homo morphic Encryption (FHE), Ze
 
 ## Auction Bit-Plane Demo
 
-This example demonstrates a sealed-bid auction using a bit-plane tallying approach. Unlike traditional tournament-based comparison circuits that require expensive column rotations, this implementation achieves $O(1)$ multiplicative depth by computing bitwise signals and aggregating them into a tally matrix.
+This example now demonstrates a sealed-bid **discrete-ladder Vickrey auction** using threshold BFV. Bids are mapped onto a public price ladder, aggregated into cumulative occupancy and pair-indicator curves, and only the minimum authorized decryptions needed for the second price and winner are made public.
 
 ### How to Run the Demo
 
@@ -30,53 +30,17 @@ cd examples/auction-bitplane
 cargo build --release
 ```
 
-#### 2. Start the Auction Server
-The server manages auction state and provides endpoints for bid submission and result retrieval.
+#### 2. Run the demo
 ```bash
-cargo run --example server
-```
-The server will start on `http://0.0.0.0:4001`.
-
-#### 3. Submit Bids
-Use `curl` to interact with the server. First, create an auction, then encrypt and submit bids.
-
-**Create an Auction:**
-```bash
-curl -X POST http://localhost:4001/auction/create
-```
-*Note the `id` returned in the JSON response.*
-
-**Encrypt a Bid (Client-side simulation):**
-```bash
-curl -X POST http://localhost:4001/auction/{id}/encrypt \
-     -H "Content-Type: application/json" \
-     -d '{"bid": 123}'
-```
-*Note the `ciphertext` returned.*
-
-**Submit the Encrypted Bid:**
-```bash
-curl -X POST http://localhost:4001/auction/{id}/bid \
-     -H "Content-Type: application/json" \
-     -d '{"address": "0xYourAddress", "ciphertext": "<CIPHERTEXT_B64>"}'
+cargo run --bin demo --release
 ```
 
-#### 4. Close Auction and Get Results
-**Close the Auction:**
-```bash
-curl -X POST http://localhost:4001/auction/{id}/close
-```
-
-**Get the Winner:**
-```bash
-curl -X GET http://localhost:4001/auction/{id}/result
-```
-
-#### 5. Run Benchmarks
-Compare the performance of the bit-plane tallying approach against the traditional tournament approach.
-```bash
-cargo bench --bench bench
-```
+The demo prints:
+- the public ladder bids submitted by each participant,
+- the decrypted aggregate occupancy curve,
+- the second-price bucket,
+- the minimal extra winner-identification reveal,
+- and a plaintext shadow verification.
 
 ## Documentation
 
