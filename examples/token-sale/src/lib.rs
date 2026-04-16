@@ -33,22 +33,25 @@
 //! This consumes **no multiplicative depth** and requires no rotations for the
 //! core sale computation.
 //!
-//! ## Clearing, Allocation, and Settlement (Plaintext Phase)
+//! ## Clearing, Allocation, and Settlement (Selective Plaintext Phase)
 //!
-//! After threshold-decrypting the aggregate demand vector, the committee
-//! searches the decrypted demand curve from the highest price down to find the
-//! clearing price.  Strict winners are fully filled; bidders exactly at the
-//! clearing price share the remaining supply via deterministic
-//! **largest-remainder rounding** with lower bidder index as the tiebreak.
-//! Payments are `clearing_price × allocated_lots × lot_size`, while refunds are
-//! the unused portion of each bidder's locked collateral.
+//! The sale no longer decrypts the full aggregate demand curve by default.
+//! Instead, the committee selectively decrypts aggregate buckets during the
+//! clearing search, yielding a small aggregate witness: demand at clearing and
+//! demand one ladder step above clearing.  Strict winners are then identified
+//! from the `k + 1` bucket, while bidders with zero strict demand are only
+//! decrypted at `k` when needed for marginal allocation.  Allocation uses
+//! deterministic **largest-remainder rounding** with lower bidder index as the
+//! tiebreak. Payments are `clearing_price × allocated_lots × lot_size`, while
+//! refunds are the unused portion of each bidder's locked collateral.
 //!
 //! ## Privacy Surface
 //!
-//! The core sale reveals only the aggregate demand curve needed to derive the
-//! clearing price.  Exact per-bidder allocations can be computed from the two
-//! relevant ladder slots (`k` and `k + 1`) of each bidder's masked demand
-//! vector, without revealing the bidder's raw unclamped quantity.
+//! The core sale reveals only the small aggregate witness needed to derive the
+//! clearing price and allocations. Exact per-bidder allocations are computed
+//! from the relevant ladder slots (`k` and sometimes `k + 1`) of each bidder's
+//! masked demand vector, without revealing the bidder's raw unclamped quantity
+//! or full demand curve by default.
 
 pub use auction_bitplane_example::{
     aggregate_public_key, aggregate_sk_shares_for_party, build_eval_key_from_committee,
@@ -58,9 +61,10 @@ pub use auction_bitplane_example::{
 };
 
 pub use batch_auction_uniform_example::{
-    accumulate_demand, build_extraction_mask, build_price_ladder, compute_allocations,
-    decode_demand_curve, decode_demand_slot, find_clearing_price, mask_multiply, PRICE_LEVELS,
-    SLOT_WIDTH,
+    accumulate_demand, build_clearing_witness_with_supply, build_extraction_mask,
+    build_price_ladder, compute_allocations, compute_allocations_from_witness, decode_demand_curve,
+    decode_demand_slot, decode_level_quantity, find_clearing_price, find_clearing_price_by_search,
+    mask_multiply, ClearingDemandWitness, PRICE_LEVELS, SLOT_WIDTH,
 };
 
 use batch_auction_uniform_example::encode_demand_vector;
@@ -198,6 +202,36 @@ mod tests {
                 (at_clear, above_clear)
             })
             .collect()
+    }
+
+    fn aggregate_witness_for_supply(
+        bids: &[(u64, u64)],
+        config: &SaleConfig,
+        params: &Arc<BfvParameters>,
+    ) -> ClearingDemandWitness {
+        let decoded_levels: Vec<u64> = (0..config.price_ladder.len())
+            .map(|level_idx| {
+                let mut aggregate_slots = vec![0u64; params.degree()];
+
+                for &(lots, price) in bids {
+                    let pt = encode_capped_demand_vector(lots, price, config, params);
+                    let slots = decode_slots(&pt);
+                    for bit in 0..SLOT_WIDTH {
+                        aggregate_slots[level_idx * SLOT_WIDTH + bit] +=
+                            slots[level_idx * SLOT_WIDTH + bit];
+                    }
+                }
+
+                decode_level_quantity(&aggregate_slots, level_idx, params.plaintext())
+            })
+            .collect();
+
+        let (clearing_idx, _) =
+            find_clearing_price_by_search(&config.price_ladder, config.total_supply_lots, |idx| {
+                decoded_levels[idx]
+            });
+
+        build_clearing_witness_with_supply(clearing_idx, &decoded_levels, config.total_supply_lots)
     }
 
     #[test]
@@ -370,5 +404,48 @@ mod tests {
         assert_eq!(demand_curve, vec![1_150, 1_150, 1_150, 200]);
         assert_eq!(allocations, vec![263, 237, 200]);
         assert_eq!(allocations.iter().sum::<u64>(), config.total_supply_lots);
+    }
+
+    #[test]
+    fn test_aggregate_witness_matches_full_curve_for_token_sale() {
+        let params = build_params();
+        let config = test_config(vec![100, 200, 300, 400, 500], 500, 700);
+        let bids = vec![(700, 300), (450, 300), (200, 400), (120, 100)];
+        let demand_curve = aggregate_curve(&bids, &config, &params);
+        let (clearing_idx, _) = find_clearing_price(
+            &demand_curve,
+            config.total_supply_lots,
+            &config.price_ladder,
+        );
+        let witness = aggregate_witness_for_supply(&bids, &config, &params);
+
+        assert_eq!(
+            witness,
+            build_clearing_witness_with_supply(
+                clearing_idx,
+                &demand_curve,
+                config.total_supply_lots,
+            )
+        );
+    }
+
+    #[test]
+    fn test_allocations_from_token_sale_witness_match_full_curve() {
+        let params = build_params();
+        let config = test_config(vec![100, 200, 300, 400], 500, 700);
+        let bids = vec![(700, 300), (450, 300), (200, 400)];
+        let demand_curve = aggregate_curve(&bids, &config, &params);
+        let witness = aggregate_witness_for_supply(&bids, &config, &params);
+        let bidder_values = bidder_values_at_clear(&bids, witness.clearing_idx, &config, &params);
+
+        assert_eq!(
+            compute_allocations_from_witness(&bidder_values, config.total_supply_lots, witness),
+            compute_allocations(
+                &bidder_values,
+                witness.clearing_idx,
+                config.total_supply_lots,
+                &demand_curve,
+            )
+        );
     }
 }

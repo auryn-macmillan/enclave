@@ -1,6 +1,6 @@
 # Capped Token Sale (Fair Launch)
 
-A sealed-bid **capped token sale** where bidders submit encrypted (quantity, price) pairs under threshold BFV fully-homomorphic encryption. A **2-of-3 committee** jointly determines the clearing price and per-bidder lot allocations while preserving the privacy of unclamped quantities and avoiding full per-bidder demand-vector decryption in the intended demo flow. The demo uses **client-side clamping** with lot-unit encoding; production deployments would add ZK input validation for cap compliance.
+A sealed-bid **capped token sale** where bidders submit encrypted (quantity, price) pairs under threshold BFV fully-homomorphic encryption. A **2-of-3 committee** jointly determines the clearing price and per-bidder lot allocations while preserving the privacy of unclamped quantities. The demo now follows an **aggregate-first, bidder-second** transcript: it derives a small aggregate witness first, then decrypts bidder-level buckets only when settlement actually needs them. The demo uses **client-side clamping** with lot-unit encoding; production deployments would add ZK input validation for cap compliance.
 
 ## Quick start
 
@@ -8,7 +8,7 @@ A sealed-bid **capped token sale** where bidders submit encrypted (quantity, pri
 cargo run --bin demo --release
 ```
 
-This generates 10 random bids (including some exceeding the cap), runs the threshold FHE pipeline, and asserts the result against a plaintext shadow.
+This runs the full threshold FHE pipeline on a fixed demo batch, including over-cap requests handled by client-side clamping, and asserts the result against a plaintext shadow without printing raw bids.
 
 ## How it works
 
@@ -21,8 +21,14 @@ Bidders specify their demand in discrete **lots** (e.g., 1 lot = 100 tokens). Fa
 ### 3. Accumulation: zero-depth sum
 The aggregator sums the encrypted demand vectors slot-wise. Because BFV addition is linear, this produces an encrypted aggregate demand curve with **zero multiplicative depth**. The plaintext range is constrained by the per-bit slot count: under the current centered-zero decoder, each bit-position count must stay comfortably below `t/2` for `t = 12289`. In this demo, that bound is far above the bidder count.
 
-### 4. Threshold decryption and price discovery
-The committee threshold-decrypts the aggregate demand curve using their secret-key shares and **smudging noise** for statistical security. They perform a plaintext search to find the **clearing price P***: the highest price level where total demand meets or exceeds the `total_supply_lots`.
+### 4. Threshold decryption and aggregate-first price discovery
+The committee no longer decrypts the full aggregate demand curve by default. Instead, it applies a plaintext SIMD mask to the **aggregate ciphertext** and threshold-decrypts only the aggregate bucket currently needed by the clearing search. Because cumulative demand is monotone across the public ladder, the committee can search for the **clearing price P*** using only these selectively revealed aggregate buckets.
+
+Once the clearing index `k` is known, the committee derives a minimal aggregate witness:
+- `D[k]`: aggregate capped demand at clearing
+- `D[k+1]`: aggregate capped demand one ladder step above clearing (or 0 at the top)
+
+These two values are sufficient for the allocation formulas.
 
 ### 5. Allocation and rounding
 Per-bidder lot allocations are determined based on the clearing price:
@@ -30,13 +36,22 @@ Per-bidder lot allocations are determined based on the clearing price:
 - **Losers** (price < P*) receive zero.
 - **Marginal bidders** (price == P*) receive a pro-rata share of remaining lots, resolved using **largest-remainder rounding** to maintain discrete lot units.
 
-Under SIMD encoding, the committee applies a plaintext SIMD mask via ct×pt slot-wise multiplication to isolate target SIMD slot blocks before threshold decryption. The functional settlement logic is unchanged.
+Under SIMD encoding, the committee applies a plaintext SIMD mask via ct×pt slot-wise multiplication to isolate target SIMD slot blocks before threshold decryption. The sale semantics, pro-rata rule, payment formula, refund formula, and cap behavior are unchanged.
+
+### 6. Aggregate-first bidder reveal
+The aggregate witness gates bidder-level decryptions:
+- The committee first decrypts each bidder's `k+1` bucket only, which identifies strict winners.
+- If a bidder has nonzero demand at `k+1`, that already determines their strict fill; the committee does **not** also decrypt that bidder's `k` bucket by default.
+- Only bidders with zero strict demand are candidates for marginal fill, so only those bidders have their `k` bucket decrypted.
+
+This means the demo no longer decrypts `{k, k+1}` for every bidder unconditionally.
 
 ## What is revealed vs. what stays hidden
 
 | Data | Revealed? | When? | Why? |
 |------|-----------|-------|------|
-| Aggregate capped demand curve | ✅ Yes | After threshold decryption of summed ciphertext | Needed to find clearing price |
+| Aggregate buckets touched by clearing search | ✅ Yes | During selective threshold decryption of summed ciphertext | Needed to find clearing price |
+| Final aggregate witness `D[k], D[k+1]` | ✅ Yes | After clearing is found | Needed for strict vs marginal allocation |
 | Bidder's capped lots at clearing price | ✅ Yes | During allocation | Needed for pro-rata at marginal |
 | Bidder's capped lots above clearing price | ✅ Yes | During allocation | Identifies strict winners |
 | Bidder's unclamped (raw) quantity | ❌ No | Never | Clamped client-side before encryption; never enters a ciphertext |
@@ -49,8 +64,8 @@ Under SIMD encoding, the committee applies a plaintext SIMD mask via ct×pt slot
 1. **Client-side clamping**: Bidder clamps `min(requested, cap_K)` before encoding. Unclamped quantity never enters FHE.
 2. **Encryption**: 2048-slot SIMD plaintext (64 levels × 16 bits) encrypted under joint public key → 1 ciphertext per bidder.
 3. **Accumulation**: Homomorphic sum (depth 0) → 1 aggregate ciphertext.
-4. **Aggregate decryption**: 2-of-3 threshold decrypt with 80-bit smudging → plaintext demand curve.
-5. **Per-bidder decryption**: Committee decrypts targeted SIMD slot blocks at clearing level and one above. It applies a plaintext mask via ct×pt slot-wise multiplication and threshold-decrypts only the masked result.
+4. **Aggregate-first decryption**: 2-of-3 threshold decrypt with 80-bit smudging → only the aggregate buckets touched by the clearing search, then the final witness `D[k], D[k+1]`.
+5. **Gated bidder decryption**: Committee first decrypts bidder bucket `k+1`; bidder bucket `k` is decrypted only for bidders that remain marginal candidates.
 6. **Settlement**: Allocations, payments, and refunds computed in plaintext from decrypted slot values.
 
 ### 6. Settlement
@@ -68,7 +83,7 @@ To prevent key leakage, every threshold decryption share includes **smudging noi
 
 ### Trust model
 
-This demo assumes the decrypting 2-of-3 committee follows the protocol and only decrypts the masked ciphertexts authorized by settlement. The plaintext-mask extraction step narrows what an honest committee learns, but it is not cryptographic access control against a colluding threshold quorum.
+This demo assumes the decrypting 2-of-3 committee follows the protocol and only decrypts the masked ciphertexts authorized by settlement. The aggregate-first transcript narrows what an honest committee learns, but it is not cryptographic access control against a colluding threshold quorum.
 
 ## Project structure
 
@@ -102,4 +117,4 @@ src/
 |-----------|-------|-------|
 | Lot size | 100 | Tokens per discrete lot |
 | Cap K | 500 | Max lots per bidder (clamped) |
-| Total supply | 2000 | Total lots available in the sale |
+| Total supply | 1600 | Total lots available in the sale |

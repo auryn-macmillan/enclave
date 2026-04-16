@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 
 use fhe::bfv::Encoding;
+use fhe_math::rq::Poly;
 use fhe_traits::FheDecoder;
 use token_sale_example::{
     accumulate_demand, aggregate_public_key, aggregate_sk_shares_for_party,
     build_eval_key_from_committee, build_extraction_mask, build_params, build_price_ladder,
-    compute_allocations, compute_collateral, compute_decryption_shares, compute_payment,
-    compute_refund, decode_demand_curve, decode_demand_slot, encode_capped_demand_vector,
-    encrypt_demand, find_clearing_price, generate_crp, generate_eval_key_root_seed,
-    generate_smudging_noise, mask_multiply, member_keygen, threshold_decrypt, SaleConfig,
-    COMMITTEE_N, PRICE_LEVELS, SLOT_WIDTH,
+    compute_allocations_from_witness, compute_collateral, compute_decryption_shares,
+    compute_payment, compute_refund, decode_level_quantity, encode_capped_demand_vector,
+    encrypt_demand, find_clearing_price, find_clearing_price_by_search, generate_crp,
+    generate_eval_key_root_seed, generate_smudging_noise, mask_multiply, member_keygen,
+    threshold_decrypt, ClearingDemandWitness, SaleConfig, COMMITTEE_N, PRICE_LEVELS,
 };
 
 const NAMES: [&str; 10] = [
@@ -105,6 +106,32 @@ fn shadow_allocations(
     }
 
     allocations
+}
+
+fn threshold_decrypt_single(
+    ct: &fhe::bfv::Ciphertext,
+    participating: &[usize],
+    sk_poly_sums: &[Poly],
+    params: &std::sync::Arc<fhe::bfv::BfvParameters>,
+) -> fhe::bfv::Plaintext {
+    let party_shares: Vec<(usize, Vec<_>)> = participating
+        .iter()
+        .map(|&i| {
+            let smudging = generate_smudging_noise(params, 1);
+            let shares = compute_decryption_shares(
+                std::slice::from_ref(ct),
+                &sk_poly_sums[i],
+                &smudging,
+                params,
+            );
+            (i + 1, shares)
+        })
+        .collect();
+
+    threshold_decrypt(&party_shares, std::slice::from_ref(ct), params)
+        .into_iter()
+        .next()
+        .expect("single ciphertext decrypt")
 }
 
 fn main() {
@@ -226,121 +253,120 @@ fn main() {
         per_bidder_cts.push(demand_ct);
         collaterals.push(collateral);
         println!(
-            "{:<7} submits encrypted demand: requested {:>8}, clamped {:>8}, max price {:>6}, collateral locked {}",
-            bid.name,
-            format_lots(bid.requested_lots),
-            format_lots(bid.clamped_lots),
-            format_price(bid.price),
-            format_price(collateral),
+            "{:<7} submits an encrypted capped lot-demand order.",
+            bid.name
         );
     }
 
     println!("All bids are now fixed in encrypted form.");
     println!("Each capped demand is encoded as a SIMD bit-decomposed cumulative vector (Encoding::simd()): 64 price levels × 16 bits = 1024 active SIMD slots. For each level where price_ladder[p] ≤ max_price, the clamped lot count is bit-decomposed across the 16 slots. One BFV ciphertext per bidder.");
     println!("The aggregator sums all ciphertexts homomorphically (Hadamard addition, depth 0). Each SIMD slot now holds the sum of individual bit-position values across all bidders. Because t=12289 far exceeds the bidder count, no overflow occurs.");
-    println!("Alice tried to request more than the cap, and the encoder clamped her bid before encryption.");
+    println!("Client-side clamping happens before encryption, so uncapped requests never enter a ciphertext.");
 
     act("Act 4 — The Settlement Phase");
     println!("The aggregator sums all encrypted capped demand vectors.");
-    println!("Two committee members now threshold-decrypt the market-wide demand curve and reconstruct per-bidder values at clearing.");
-    println!("Each member computes a decryption share by applying their Shamir-reconstructed secret-key polynomial to the aggregate ciphertext, adding 80-bit smudging noise to prevent key leakage. The shares are combined via Lagrange interpolation to recover the aggregate demand curve plaintext.");
+    println!("Two committee members first derive only a small aggregate witness: the demand buckets touched by the clearing search, then the two buckets needed for final allocation.");
+    println!("Each member computes a decryption share by applying their Shamir-reconstructed secret-key polynomial to a selectively masked aggregate ciphertext, adding 80-bit smudging noise to prevent key leakage.");
 
     let aggregate_ct = aggregate_ct.expect("at least one bidder");
     let participating = [0usize, 1];
-    let party_demand_shares: Vec<(usize, Vec<_>)> = participating
-        .iter()
-        .map(|&i| {
-            let smudging = generate_smudging_noise(&params, 1);
-            let shares = compute_decryption_shares(
-                std::slice::from_ref(&aggregate_ct),
-                &sk_poly_sums[i],
-                &smudging,
-                &params,
-            );
-            (i + 1, shares)
-        })
-        .collect();
-
-    let demand_pts = threshold_decrypt(
-        &party_demand_shares,
-        std::slice::from_ref(&aggregate_ct),
-        &params,
-    );
-    let demand_slots =
-        Vec::<u64>::try_decode(&demand_pts[0], Encoding::simd()).expect("decode demand");
-    let demand_curve = decode_demand_curve(&demand_slots, PRICE_LEVELS, params.plaintext());
-    let (clearing_idx, clearing_price) = find_clearing_price(
-        &demand_curve,
-        config.total_supply_lots,
+    let mut aggregate_bucket_values = vec![None; PRICE_LEVELS];
+    let (clearing_idx, clearing_price) = find_clearing_price_by_search(
         &config.price_ladder,
+        config.total_supply_lots,
+        |level_idx| {
+            if let Some(value) = aggregate_bucket_values[level_idx] {
+                return value;
+            }
+
+            let mask = build_extraction_mask(&[level_idx], &params);
+            let masked_ct = mask_multiply(&mask, &aggregate_ct);
+            let masked_pt =
+                threshold_decrypt_single(&masked_ct, &participating, &sk_poly_sums, &params);
+            let masked_slots =
+                Vec::<u64>::try_decode(&masked_pt, Encoding::simd()).expect("decode demand bucket");
+            let value = decode_level_quantity(&masked_slots, level_idx, params.plaintext());
+            aggregate_bucket_values[level_idx] = Some(value);
+            value
+        },
+    );
+    let demand_at_clearing = aggregate_bucket_values[clearing_idx].expect("clearing demand");
+    let demand_above_clearing = if clearing_idx + 1 < PRICE_LEVELS {
+        if let Some(value) = aggregate_bucket_values[clearing_idx + 1] {
+            value
+        } else {
+            let mask = build_extraction_mask(&[clearing_idx + 1], &params);
+            let masked_ct = mask_multiply(&mask, &aggregate_ct);
+            let masked_pt =
+                threshold_decrypt_single(&masked_ct, &participating, &sk_poly_sums, &params);
+            let masked_slots = Vec::<u64>::try_decode(&masked_pt, Encoding::simd())
+                .expect("decode strict demand bucket");
+            let value = decode_level_quantity(&masked_slots, clearing_idx + 1, params.plaintext());
+            aggregate_bucket_values[clearing_idx + 1] = Some(value);
+            value
+        }
+    } else {
+        0
+    };
+    let aggregate_witness = ClearingDemandWitness::new(
+        clearing_idx,
+        demand_at_clearing,
+        demand_above_clearing,
+        config.total_supply_lots,
     );
 
     println!("  ✅ Clearing price: {}", format_price(clearing_price));
     println!(
         "  ✅ Aggregate capped demand at clearing: {}",
-        format_lots(demand_curve[clearing_idx])
+        format_lots(demand_at_clearing)
     );
-    println!("The committee now applies a plaintext extraction mask to each per-bidder ciphertext using ct×pt slot-wise multiplication, then threshold-decrypts only the SIMD slot blocks at the clearing price level and one level above.");
-
-    let target_levels = if clearing_idx + 1 < PRICE_LEVELS {
-        vec![clearing_idx, clearing_idx + 1]
-    } else {
-        vec![clearing_idx]
-    };
-    let extraction_mask = build_extraction_mask(&target_levels, &params);
+    println!(
+        "  ✅ Aggregate capped demand one level above clearing: {}",
+        format_lots(demand_above_clearing)
+    );
+    println!("The committee now decrypts bidder-level data only when the aggregate witness says it is needed: strict winners need the clearing-plus-one bucket; marginal bidders need the clearing bucket too.");
 
     let mut bidder_slot_values = Vec::with_capacity(per_bidder_cts.len());
-    for bidder_ct in &per_bidder_cts {
-        let masked_ct = mask_multiply(&extraction_mask, bidder_ct);
-        let party_bidder_shares: Vec<(usize, Vec<_>)> = participating
-            .iter()
-            .map(|&i| {
-                let smudging = generate_smudging_noise(&params, 1);
-                let shares = compute_decryption_shares(
-                    std::slice::from_ref(&masked_ct),
-                    &sk_poly_sums[i],
-                    &smudging,
-                    &params,
-                );
-                (i + 1, shares)
-            })
-            .collect();
+    let strict_mask = if clearing_idx + 1 < PRICE_LEVELS {
+        Some(build_extraction_mask(&[clearing_idx + 1], &params))
+    } else {
+        None
+    };
+    let marginal_mask = build_extraction_mask(&[clearing_idx], &params);
+    let remaining_supply = config
+        .total_supply_lots
+        .saturating_sub(demand_above_clearing);
+    let total_marginal = demand_at_clearing.saturating_sub(demand_above_clearing);
 
-        let bidder_pts = threshold_decrypt(
-            &party_bidder_shares,
-            std::slice::from_ref(&masked_ct),
-            &params,
-        );
-        let bidder_slots =
-            Vec::<u64>::try_decode(&bidder_pts[0], Encoding::simd()).expect("decode masked bidder");
-        let at_clearing = (0..SLOT_WIDTH)
-            .map(|bit| {
-                decode_demand_slot(
-                    bidder_slots[clearing_idx * SLOT_WIDTH + bit],
-                    params.plaintext(),
-                ) * (1u64 << bit)
-            })
-            .sum::<u64>();
-        let above_clearing = if clearing_idx + 1 < PRICE_LEVELS {
-            (0..SLOT_WIDTH)
-                .map(|bit| {
-                    decode_demand_slot(
-                        bidder_slots[(clearing_idx + 1) * SLOT_WIDTH + bit],
-                        params.plaintext(),
-                    ) * (1u64 << bit)
-                })
-                .sum::<u64>()
+    for bidder_ct in &per_bidder_cts {
+        let above_clearing = if let Some(mask) = strict_mask.as_ref() {
+            let masked_ct = mask_multiply(mask, bidder_ct);
+            let masked_pt =
+                threshold_decrypt_single(&masked_ct, &participating, &sk_poly_sums, &params);
+            let bidder_slots = Vec::<u64>::try_decode(&masked_pt, Encoding::simd())
+                .expect("decode strict masked bidder");
+            decode_level_quantity(&bidder_slots, clearing_idx + 1, params.plaintext())
         } else {
             0
+        };
+
+        let at_clearing = if above_clearing > 0 || remaining_supply == 0 || total_marginal == 0 {
+            above_clearing
+        } else {
+            let masked_ct = mask_multiply(&marginal_mask, bidder_ct);
+            let masked_pt =
+                threshold_decrypt_single(&masked_ct, &participating, &sk_poly_sums, &params);
+            let bidder_slots = Vec::<u64>::try_decode(&masked_pt, Encoding::simd())
+                .expect("decode marginal masked bidder");
+            decode_level_quantity(&bidder_slots, clearing_idx, params.plaintext())
         };
         bidder_slot_values.push((at_clearing, above_clearing));
     }
 
-    let allocations = compute_allocations(
+    let allocations = compute_allocations_from_witness(
         &bidder_slot_values,
-        clearing_idx,
         config.total_supply_lots,
-        &demand_curve,
+        aggregate_witness,
     );
 
     println!();
@@ -350,10 +376,8 @@ fn main() {
         let payment = compute_payment(clearing_price, allocation, config.lot_size);
         let refund = compute_refund(collateral, payment);
         println!(
-            "{:<7} requested {:>8}, clamped {:>8}, allocation {:>8}, payment {:>10}, refund {:>10}",
+            "{:<7} allocation {:>8}, payment {:>10}, refund {:>10}",
             bid.name,
-            format_lots(bid.requested_lots),
-            format_lots(bid.clamped_lots),
             format_lots(allocation),
             format_price(payment),
             format_price(refund),
@@ -364,21 +388,11 @@ fn main() {
     println!("  ❌ No raw unclamped quantity was decrypted");
     println!("  ❌ No bidder's full demand vector was revealed");
     println!("  ❌ No committee member saw a plaintext order book");
-    println!("The committee learned: (1) the aggregate capped demand curve, and (2) each bidder's capped lot count at and above the clearing price. They did not directly decrypt any bidder's unclamped quantity, full demand vector, or lot counts at non-clearing levels in the intended demo flow. Marginal bidders are, however, known to sit at the public clearing price.");
+    println!("The committee learned: (1) a small aggregate witness consisting of the buckets touched by the clearing search plus the final {{k, k+1}} witness, and (2) bidder-level lots only where that witness made them necessary. They did not directly decrypt any bidder's unclamped quantity, full demand vector, or non-clearing buckets outside the selective settlement path. Marginal bidders are, however, known to sit at the public clearing price.");
 
     act("Act 5 — Lifting the Curtain");
-    println!("Let's verify the encrypted sale against the plaintext shadow computation:");
-
-    for (rank, bid) in bids.iter().enumerate() {
-        println!(
-            "{:>2}. {:<7} requested {:>8}, clamped {:>8}, max price {}",
-            rank + 1,
-            bid.name,
-            format_lots(bid.requested_lots),
-            format_lots(bid.clamped_lots),
-            format_price(bid.price),
-        );
-    }
+    println!("Verifying the encrypted sale against the plaintext shadow computation...");
+    println!("The shadow check includes cap-clamping logic, but raw bids are not printed.");
 
     let expected_curve = shadow_demand_curve(&bids, &config.price_ladder);
     let (expected_clearing_idx, expected_clearing_price) = find_clearing_price(
@@ -393,8 +407,16 @@ fn main() {
         config.total_supply_lots,
         &expected_curve,
     );
+    let expected_witness = ClearingDemandWitness::new(
+        expected_clearing_idx,
+        expected_curve[expected_clearing_idx],
+        expected_curve
+            .get(expected_clearing_idx + 1)
+            .copied()
+            .unwrap_or(0),
+        config.total_supply_lots,
+    );
 
-    assert_eq!(demand_curve, expected_curve, "demand curve mismatch");
     assert_eq!(
         clearing_idx, expected_clearing_idx,
         "clearing index mismatch"
@@ -402,6 +424,14 @@ fn main() {
     assert_eq!(
         clearing_price, expected_clearing_price,
         "clearing price mismatch"
+    );
+    assert_eq!(
+        demand_at_clearing, expected_witness.demand_at_clearing,
+        "clearing demand mismatch"
+    );
+    assert_eq!(
+        demand_above_clearing, expected_witness.demand_above_clearing,
+        "strict demand mismatch"
     );
     assert_eq!(allocations, expected_allocations, "allocation mismatch");
 
