@@ -42,6 +42,30 @@ The demo prints:
 - the minimal extra winner-identification reveal,
 - and a plaintext shadow verification.
 
+## Combinatorial Auction Demo
+
+This example demonstrates a **combinatorial batch auction** over multiple token pairs using threshold BFV. It compares encrypted solver scores, applies a fairness filter, and verifies the final settlement against a plaintext shadow run.
+
+### How to Run the Demo
+
+#### 1. Build the project
+```bash
+cd examples/combinatorial-auction
+cargo build --release
+```
+
+#### 2. Run the demo
+```bash
+cargo run --bin demo --release
+```
+
+The demo prints:
+- the synthetic directed pairs and public intents,
+- the encrypted solver score tables,
+- the round 1 reference outcome,
+- the round 2 fairness filter result,
+- and the final settlement branch with shadow verification.
+
 ## Documentation
 
 Full documentation is available at: https://docs.theinterfold.com
