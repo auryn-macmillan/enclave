@@ -36,19 +36,23 @@
 //!
 //! ## Clearing & Allocation (Plaintext Phase)
 //!
-//! After threshold-decrypting the aggregate demand vector, the committee
-//! searches the decrypted demand curve from the highest price down to find
-//! the clearing price.  Strict winners are fully filled; bidders exactly at
-//! the clearing price share the remaining supply via deterministic
-//! **largest-remainder rounding** with lower bidder index as the tiebreak.
+//! The committee first derives a small aggregate witness consisting of the
+//! clearing index `k`, aggregate demand at `k`, aggregate demand at `k + 1`
+//! (or 0 at the top of the ladder), and an undersubscription flag when
+//! needed.  Strict winners are fully filled; bidders exactly at the clearing
+//! price share the remaining supply via deterministic **largest-remainder
+//! rounding** with lower bidder index as the tiebreak.
 //!
 //! ## Privacy Surface
 //!
-//! The core auction reveals only the aggregate demand curve needed to derive
-//! the clearing price.  Per-bidder allocations are extracted by multiplying
-//! each bidder ciphertext with a plaintext mask that has 1s at the target slot
-//! range and 0s elsewhere, then threshold-decrypting the masked result. Only
-//! the isolated slot values are revealed, not the bidder's full demand vector.
+//! The core auction reveals only the aggregate witness needed to derive the
+//! clearing price.  Per-bidder allocations are extracted by multiplying each
+//! bidder ciphertext with a plaintext mask that has 1s at the target slot
+//! range and 0s elsewhere, then threshold-decrypting the masked result.
+//! Bidder-level decryptions are gated: only `k` is revealed in easy cases,
+//! and `k + 1` is revealed only when needed to separate strict winners from
+//! clearing-price bidders. Only the isolated slot values are revealed, not
+//! the bidder's full demand vector.
 
 pub use auction_bitplane_example::{
     aggregate_public_key, aggregate_sk_shares_for_party, build_eval_key_from_committee,
@@ -68,6 +72,61 @@ pub const PRICE_LEVELS: usize = 64;
 
 /// Number of SIMD slots used per logical price level (bit-decomposed quantity).
 pub const SLOT_WIDTH: usize = 16;
+
+/// Minimal aggregate witness needed for allocation after clearing is known.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClearingDemandWitness {
+    /// Clearing price index `k` on the public price ladder.
+    pub clearing_idx: usize,
+    /// Aggregate demand at the clearing level `D[k]`.
+    pub demand_at_clearing: u64,
+    /// Aggregate demand strictly above clearing `D[k + 1]`, or 0 at the top.
+    pub demand_above_clearing: u64,
+    /// Whether total demand remains below supply even at the lowest price.
+    pub undersubscribed: bool,
+}
+
+impl ClearingDemandWitness {
+    /// Construct a minimal witness once the two aggregate buckets are known.
+    pub fn new(
+        clearing_idx: usize,
+        demand_at_clearing: u64,
+        demand_above_clearing: u64,
+        supply: u64,
+    ) -> Self {
+        assert!(
+            demand_at_clearing >= demand_above_clearing,
+            "aggregate demand must be non-increasing across the witness boundary"
+        );
+
+        Self {
+            clearing_idx,
+            demand_at_clearing,
+            demand_above_clearing,
+            undersubscribed: clearing_idx == 0 && demand_at_clearing < supply,
+        }
+    }
+
+    /// Whether the protocol needs a bidder-level reveal at `k + 1`.
+    pub fn needs_above_clearing_reveal(&self, price_levels: usize) -> bool {
+        !self.undersubscribed
+            && self.clearing_idx + 1 < price_levels
+            && self.demand_above_clearing > 0
+    }
+
+    /// Whether a bidder still needs a reveal at `k` after seeing `k + 1`.
+    pub fn bidder_needs_at_clearing_reveal(
+        &self,
+        price_levels: usize,
+        above_clearing: Option<u64>,
+    ) -> bool {
+        if !self.needs_above_clearing_reveal(price_levels) {
+            return true;
+        }
+
+        matches!(above_clearing, Some(0))
+    }
+}
 
 /// Build an ascending public price ladder with `levels` evenly-spaced values.
 ///
@@ -169,54 +228,94 @@ pub fn find_clearing_price(
     (0, price_ladder[0])
 }
 
-/// Compute final per-bidder allocations from the two slots around clearing.
+/// Find the clearing price from a monotone demand oracle.
 ///
-/// Each entry in `bidder_values` is `(v_i[k], v_i[k + 1])` where `k` is the
-/// clearing index.  When `k` is the final ladder index, `v_i[k + 1]` is
-/// ignored and strict demand is treated as 0.
-pub fn compute_allocations(
-    bidder_values: &[(u64, u64)],
-    clearing_idx: usize,
+/// `demand_at_level(idx)` must return aggregate demand at price-ladder index
+/// `idx`, where demand is non-increasing as `idx` increases.
+pub fn find_clearing_price_by_search<F>(
+    price_ladder: &[u64],
     supply: u64,
-    demand_curve: &[u64],
-) -> Vec<u64> {
+    mut demand_at_level: F,
+) -> (usize, u64)
+where
+    F: FnMut(usize) -> u64,
+{
+    assert!(!price_ladder.is_empty(), "price ladder cannot be empty");
+
+    let mut lo = 0usize;
+    let mut hi = price_ladder.len();
+
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if demand_at_level(mid) >= supply {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+
+    let clearing_idx = lo.saturating_sub(1);
+    (clearing_idx, price_ladder[clearing_idx])
+}
+
+/// Build the minimal aggregate witness required for allocation.
+pub fn build_clearing_witness(clearing_idx: usize, demand_curve: &[u64]) -> ClearingDemandWitness {
     assert!(
         clearing_idx < demand_curve.len(),
         "clearing index out of range for demand curve"
     );
 
-    if clearing_idx == 0 && demand_curve[0] < supply {
+    ClearingDemandWitness::new(
+        clearing_idx,
+        demand_curve[clearing_idx],
+        demand_curve.get(clearing_idx + 1).copied().unwrap_or(0),
+        demand_curve[clearing_idx],
+    )
+}
+
+/// Build the minimal aggregate witness required for allocation from the public supply.
+pub fn build_clearing_witness_with_supply(
+    clearing_idx: usize,
+    demand_curve: &[u64],
+    supply: u64,
+) -> ClearingDemandWitness {
+    assert!(
+        clearing_idx < demand_curve.len(),
+        "clearing index out of range for demand curve"
+    );
+
+    ClearingDemandWitness::new(
+        clearing_idx,
+        demand_curve[clearing_idx],
+        demand_curve.get(clearing_idx + 1).copied().unwrap_or(0),
+        supply,
+    )
+}
+
+/// Compute final per-bidder allocations from a minimal aggregate witness.
+pub fn compute_allocations_from_witness(
+    bidder_values: &[(u64, u64)],
+    supply: u64,
+    witness: ClearingDemandWitness,
+) -> Vec<u64> {
+    if witness.undersubscribed {
         return bidder_values
             .iter()
             .map(|&(at_clear, _)| at_clear)
             .collect();
     }
 
-    let last_idx = demand_curve.len() - 1;
-    let d_strict = if clearing_idx == last_idx {
-        0
-    } else {
-        demand_curve[clearing_idx + 1]
-    };
-    let remaining_supply = supply.saturating_sub(d_strict);
+    let remaining_supply = supply.saturating_sub(witness.demand_above_clearing);
 
     let mut allocations = vec![0u64; bidder_values.len()];
     let mut marginal_entries = Vec::new();
     let mut total_marginal = 0u64;
 
     for (bidder_idx, &(at_clear, above_clear)) in bidder_values.iter().enumerate() {
-        let strict_fill = if clearing_idx == last_idx {
-            0
-        } else {
-            above_clear
-        };
-        let marginal_qty = if clearing_idx == last_idx {
-            at_clear
-        } else {
-            at_clear
-                .checked_sub(above_clear)
-                .expect("bidder demand must be non-increasing across price ladder")
-        };
+        let strict_fill = above_clear;
+        let marginal_qty = at_clear
+            .checked_sub(above_clear)
+            .expect("bidder demand must be non-increasing across price ladder");
 
         allocations[bidder_idx] = strict_fill;
         marginal_entries.push((bidder_idx, marginal_qty));
@@ -258,6 +357,29 @@ pub fn compute_allocations(
     allocations
 }
 
+/// Compute final per-bidder allocations from the two slots around clearing.
+///
+/// Each entry in `bidder_values` is `(v_i[k], v_i[k + 1])` where `k` is the
+/// clearing index.  When `k` is the final ladder index, `v_i[k + 1]` is
+/// ignored and strict demand is treated as 0.
+pub fn compute_allocations(
+    bidder_values: &[(u64, u64)],
+    clearing_idx: usize,
+    supply: u64,
+    demand_curve: &[u64],
+) -> Vec<u64> {
+    assert!(
+        clearing_idx < demand_curve.len(),
+        "clearing index out of range for demand curve"
+    );
+
+    compute_allocations_from_witness(
+        bidder_values,
+        supply,
+        build_clearing_witness_with_supply(clearing_idx, demand_curve, supply),
+    )
+}
+
 /// Decode a single decrypted SIMD slot count, treating large values (> `t / 2`)
 /// as zero.
 ///
@@ -277,16 +399,19 @@ pub fn decode_demand_slot(raw: u64, plaintext_modulus: u64) -> u64 {
 /// The aggregate quantity at level `p` is `Σ_{j=0}^{SLOT_WIDTH-1} count[p*SLOT_WIDTH + j] * 2^j`.
 pub fn decode_demand_curve(slots: &[u64], num_levels: usize, plaintext_modulus: u64) -> Vec<u64> {
     (0..num_levels)
-        .map(|level| {
-            let mut qty = 0u64;
-            for bit in 0..SLOT_WIDTH {
-                let raw = slots[level * SLOT_WIDTH + bit];
-                let count = decode_demand_slot(raw, plaintext_modulus);
-                qty += count * (1u64 << bit);
-            }
-            qty
-        })
+        .map(|level| decode_level_quantity(slots, level, plaintext_modulus))
         .collect()
+}
+
+/// Reconstruct one logical price-level quantity from decrypted SIMD slots.
+pub fn decode_level_quantity(slots: &[u64], level: usize, plaintext_modulus: u64) -> u64 {
+    let mut qty = 0u64;
+    for bit in 0..SLOT_WIDTH {
+        let raw = slots[level * SLOT_WIDTH + bit];
+        let count = decode_demand_slot(raw, plaintext_modulus);
+        qty += count * (1u64 << bit);
+    }
+    qty
 }
 
 #[cfg(test)]
@@ -388,6 +513,61 @@ mod tests {
     }
 
     #[test]
+    fn test_clearing_price_by_search_matches_full_curve_scan() {
+        let ladder = vec![100, 200, 300, 400, 500, 600];
+        let demand_curve = vec![20, 18, 15, 11, 7, 1];
+        let expected = find_clearing_price(&demand_curve, 10, &ladder);
+        let actual = find_clearing_price_by_search(&ladder, 10, |idx| demand_curve[idx]);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_clearing_price_by_search_undersupply() {
+        let ladder = vec![100, 200, 300, 400];
+        let demand_curve = vec![7, 5, 2, 0];
+
+        assert_eq!(
+            find_clearing_price_by_search(&ladder, 10, |idx| demand_curve[idx]),
+            (0, 100)
+        );
+    }
+
+    #[test]
+    fn test_clearing_witness_flags_undersupply() {
+        let demand_curve = vec![7, 5, 2, 0];
+        let witness = build_clearing_witness_with_supply(0, &demand_curve, 10);
+
+        assert_eq!(witness.clearing_idx, 0);
+        assert_eq!(witness.demand_at_clearing, 7);
+        assert_eq!(witness.demand_above_clearing, 5);
+        assert!(witness.undersubscribed);
+        assert!(!witness.needs_above_clearing_reveal(demand_curve.len()));
+        assert!(witness.bidder_needs_at_clearing_reveal(demand_curve.len(), None));
+    }
+
+    #[test]
+    fn test_clearing_witness_gates_bidder_reveals() {
+        let demand_curve = vec![20, 18, 12, 8, 3];
+        let witness = build_clearing_witness_with_supply(2, &demand_curve, 10);
+
+        assert!(!witness.undersubscribed);
+        assert!(witness.needs_above_clearing_reveal(demand_curve.len()));
+        assert!(!witness.bidder_needs_at_clearing_reveal(demand_curve.len(), Some(4)));
+        assert!(witness.bidder_needs_at_clearing_reveal(demand_curve.len(), Some(0)));
+    }
+
+    #[test]
+    fn test_clearing_witness_skips_above_reveal_when_no_strict_demand() {
+        let demand_curve = vec![11, 9, 5, 0];
+        let witness = build_clearing_witness_with_supply(2, &demand_curve, 3);
+
+        assert_eq!(witness.demand_above_clearing, 0);
+        assert!(!witness.needs_above_clearing_reveal(demand_curve.len()));
+        assert!(witness.bidder_needs_at_clearing_reveal(demand_curve.len(), None));
+    }
+
+    #[test]
     fn test_allocations_no_marginal() {
         let demand_curve = vec![20, 9, 9, 0];
         let bidder_values = vec![(5, 5), (9, 9), (0, 0)];
@@ -432,5 +612,18 @@ mod tests {
         let allocations = compute_allocations(&bidder_values, 1, 5, &demand_curve);
 
         assert_eq!(allocations, vec![0, 2, 3, 0]);
+    }
+
+    #[test]
+    fn test_allocations_from_witness_matches_full_curve() {
+        let demand_curve = vec![15, 9, 8, 2];
+        let bidder_values = vec![(4, 0), (2, 2), (0, 0), (2, 0), (0, 0)];
+        let expected = compute_allocations(&bidder_values, 2, 5, &demand_curve);
+        let witness = build_clearing_witness_with_supply(2, &demand_curve, 5);
+
+        assert_eq!(
+            compute_allocations_from_witness(&bidder_values, 5, witness),
+            expected
+        );
     }
 }

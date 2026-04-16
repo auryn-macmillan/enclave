@@ -1,6 +1,6 @@
 # Uniform-Price Batch Auction (Threshold FHE Demand Curve Demo)
 
-A sealed-bid **uniform-price** batch auction where bidders submit encrypted (quantity, price) pairs under threshold BFV fully-homomorphic encryption. A **2-of-3 committee** jointly generates the encryption key (DKG), aggregates the demand curve homomorphically, and threshold-decrypts only the clearing price and per-bidder allocations — without ever revealing individual bids.
+A sealed-bid **uniform-price** batch auction where bidders submit encrypted (quantity, price) pairs under threshold BFV fully-homomorphic encryption. A **2-of-3 committee** jointly generates the encryption key (DKG), aggregates the demand curve homomorphically, and threshold-decrypts only a small aggregate witness plus the bidder-level buckets needed for allocations — without ever revealing individual bids.
 
 ## Quick start
 
@@ -8,7 +8,7 @@ A sealed-bid **uniform-price** batch auction where bidders submit encrypted (qua
 cargo run --bin demo --release
 ```
 
-This generates 10 random bids, runs the full threshold FHE pipeline, and asserts the results against a plaintext shadow.
+This generates 10 random bids, runs the full threshold FHE pipeline, and checks the result against an internal plaintext shadow.
 
 ## How it works
 
@@ -60,17 +60,24 @@ Any 2 of the 3 committee members can jointly decrypt ciphertexts:
 2. The shares are combined via **Shamir reconstruction** to recover the
    plaintext.
 
-The committee first decrypts the aggregate demand ciphertext to find the
-clearing price, then decrypts masked per-bidder slot blocks to determine
-allocations.
+The committee first probes the aggregate demand ciphertext at a small set of
+price buckets to derive the clearing witness, then decrypts masked per-bidder
+slot blocks only when those reveals are needed for allocation.
 
 ### 5. Clearing price discovery
 
-The decrypted aggregate demand curve is reconstructed from the
-bit-summed SIMD slot blocks and searched in plaintext from highest price
-to lowest. The **clearing price $P^*$** is the highest price level where
-total demand meets or exceeds the public supply.
- If total demand is less than supply even at the lowest price, the auction clears at the lowest level (undersubscribed).
+The committee uses selective aggregate bucket decryptions (binary search in the
+demo) to find the highest price level where total demand meets or exceeds the
+public supply. The resulting aggregate witness is:
+
+- `k`: clearing index
+- `D[k]`: aggregate demand at the clearing bucket
+- `D[k+1]`: aggregate demand strictly above clearing (or 0 at the top)
+- undersubscribed flag when `k = 0` and `D[0] < supply`
+
+The **clearing price $P^*$** is `price_ladder[k]`. If total demand is less than
+supply even at the lowest price, the auction clears at the lowest level
+(undersubscribed).
 
 ### 6. Allocation: strict and marginal
 
@@ -79,27 +86,38 @@ Bidders are allocated based on their price relative to $P^*$:
 - **Losers** ($price_i < P^*$): Receive zero allocation.
 - **Marginal bidders** ($price_i = P^*$): Receive a pro-rata share of the remaining supply.
 
-The marginal allocation uses the **largest-remainder method** (Hamilton's method) to ensure integer fills sum exactly to the supply. Ties in fractional remainders are broken deterministically by the bidder's SIMD slot block index.
+The reveal policy is gated by the aggregate witness:
+
+- **Undersubscribed / no strict-demand easy cases**: decrypt only each bidder's
+  bucket at `k`.
+- **General case**: decrypt each bidder's bucket at `k+1` first; only bidders
+  with zero demand above clearing are still ambiguous, so only those bidders
+  get an additional reveal at `k`.
+
+The marginal allocation uses the **largest-remainder method** (Hamilton's
+method) to ensure integer fills sum exactly to the supply. Ties in fractional
+remainders are broken deterministically by the bidder's SIMD slot block index.
 
 ## What is revealed vs. what stays hidden
 
 | Data | Revealed to committee? | When? | Why? |
 |------|----------------------|-------|------|
-| Aggregate demand curve (64 price levels) | ✅ Yes | After threshold decryption of summed ciphertext | Needed to find clearing price |
+| Full aggregate demand curve (64 price levels) | ❌ No | Never in the default flow | Replaced by a small aggregate witness |
+| Aggregate witness `{k, D[k], D[k+1], undersubscribed?}` | ✅ Yes | After selective aggregate bucket decryptions | Needed to find clearing price and settlement mode |
 | Individual bidder's full demand vector | ❌ Not in the intended flow | Never directly in the demo flow | The committee mask-extracts only the clearing-level slot blocks before decryption |
-| Bidder's quantity at clearing price | ✅ Yes (per-bidder) | During allocation | Needed for pro-rata calculation |
-| Bidder's quantity above clearing price | ✅ Yes (per-bidder) | During allocation | Needed to identify strict winners |
+| Bidder's quantity at clearing price | ✅ Yes (per-bidder, gated) | During allocation | Needed for pro-rata calculation or undersupply fill |
+| Bidder's quantity above clearing price | ✅ Yes (per-bidder, gated) | Only in general settlement cases | Needed to identify strict winners without revealing `k` for everyone |
 | Bidder's exact bid price | ❌ Not generally | Sometimes inferable at the margin | Marginal bidders are known to be exactly at the public clearing price |
 | Bidder's quantity at non-clearing levels | ❌ Not in the intended flow | Never directly in the demo flow | These SIMD slots are zeroed by mask-multiply before the demo's selective decryption step |
-| Any individual's raw bid (qty, price) pair | ❌ Not as a direct plaintext order book | Never directly in the demo flow | The demo reveals only the aggregate curve plus selected per-bidder slot values needed for allocation |
+| Any individual's raw bid (qty, price) pair | ❌ Not as a direct plaintext order book | Never directly in the demo flow | The demo reveals only the aggregate witness plus selected per-bidder slot values needed for allocation |
 
 ### Ciphertext lifecycle
 
 1. **Encryption**: Bidder encodes a 2048-slot SIMD plaintext (64 levels × 16 bits), encrypts under joint public key → 1 BFV ciphertext per bidder.
 2. **Accumulation**: All ciphertexts are summed homomorphically (depth 0) → 1 aggregate ciphertext.
-3. **Aggregate decryption**: 2-of-3 committee threshold-decrypts the aggregate → plaintext demand curve. Smudging noise (λ=80 bits) protects the secret key.
-4. **Per-bidder decryption**: In the intended demo flow, the committee threshold-decrypts only the SIMD slot blocks at the clearing price and one level above. It applies a plaintext mask with 1s at the target SIMD slot blocks using ct×pt slot-wise multiplication, then threshold-decrypts the masked ciphertext so non-target slots are zeroed before this selective decryption step.
-5. **Allocation**: Clearing price, strict-winner quantities, and marginal pro-rata shares are computed in plaintext from the decrypted slot values.
+3. **Aggregate witness derivation**: 2-of-3 committee threshold-decrypts only selected aggregate buckets, using binary search to identify `k` and then revealing `D[k]` and `D[k+1]`. Smudging noise (λ=80 bits) protects the secret key.
+4. **Per-bidder gated decryption**: The committee applies plaintext masks with 1s at bucket `k` or `k+1` using ct×pt slot-wise multiplication, then threshold-decrypts only those masked ciphertexts authorized by the witness-driven settlement flow.
+5. **Allocation**: Clearing price, strict-winner quantities, and marginal pro-rata shares are computed in plaintext from the witness and the gated bidder reveals.
 
 ## Comparison with Vickrey demo
 
@@ -108,7 +126,7 @@ The marginal allocation uses the **largest-remainder method** (Hamilton's method
 | Ciphertexts per bidder | 64 (bit-planes) | 1 (demand vector) |
 | Multiplicative depth | 1 (ct × ct) | 0 (ct×pt masked extraction) |
 | Core rotations | Required (reduce-tree) | None for core computation (SIMD slot blocks) |
-| Privacy | Second price only | Clearing price + allocations |
+| Privacy | Second price only | Aggregate witness + allocations |
 
 ## Production considerations
 
