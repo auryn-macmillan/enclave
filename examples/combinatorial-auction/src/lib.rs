@@ -60,9 +60,31 @@ pub struct PublicUserIntent {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SolverScoreTable {
+pub struct StandaloneScoreTable {
     pub solver_id: usize,
     pub scores: [u64; NUM_PAIRS],
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BatchedScoreTable {
+    pub solver_id: usize,
+    pub scores: [u64; NUM_PAIRS],
+}
+
+trait ScoreTableView {
+    fn scores(&self) -> &[u64; NUM_PAIRS];
+}
+
+impl ScoreTableView for StandaloneScoreTable {
+    fn scores(&self) -> &[u64; NUM_PAIRS] {
+        &self.scores
+    }
+}
+
+impl ScoreTableView for BatchedScoreTable {
+    fn scores(&self) -> &[u64; NUM_PAIRS] {
+        &self.scores
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -102,15 +124,41 @@ pub enum AuctionSettlement {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FoundationError {
-    InvalidScore { index: usize, score: u64 },
-    WrongScoreCount { expected: usize, actual: usize },
-    NotEnoughSlots { expected: usize, actual: usize },
+    InvalidScore {
+        index: usize,
+        score: u64,
+    },
+    WrongScoreCount {
+        expected: usize,
+        actual: usize,
+    },
+    WrongSolverCount {
+        expected: usize,
+        actual: usize,
+    },
+    SolverIdMismatch {
+        index: usize,
+        expected: usize,
+        actual: usize,
+    },
+    NotEnoughSlots {
+        expected: usize,
+        actual: usize,
+    },
     EncodeFailed,
     DecodeFailed,
     EmptySolvers,
-    NotEnoughParties { required: usize, actual: usize },
-    InvalidPartyIndex { index: usize },
-    WrongCommitteeSize { expected: usize, actual: usize },
+    NotEnoughParties {
+        required: usize,
+        actual: usize,
+    },
+    InvalidPartyIndex {
+        index: usize,
+    },
+    WrongCommitteeSize {
+        expected: usize,
+        actual: usize,
+    },
 }
 
 pub fn build_config() -> CombinatorialAuctionConfig {
@@ -275,38 +323,114 @@ pub fn synthetic_public_intents(seed: u64, count: usize) -> Vec<PublicUserIntent
         .collect()
 }
 
-pub fn synthetic_solver_score_tables(seed: u64) -> Vec<SolverScoreTable> {
+fn synthetic_score_array(seed: u64, solver_id: usize, stream_tag: u64) -> [u64; NUM_PAIRS] {
+    let mut scores = [0u64; NUM_PAIRS];
+    for (pair_index, score) in scores.iter_mut().enumerate() {
+        *score = mix(seed ^ stream_tag ^ solver_id as u64, pair_index as u64) % (MAX_SCORE + 1);
+    }
+
+    scores
+}
+
+pub fn synthetic_standalone_score_tables(seed: u64) -> Vec<StandaloneScoreTable> {
     (0..NUM_SOLVERS)
         .map(|solver_id| {
-            let mut scores = [0u64; NUM_PAIRS];
-            for (pair_index, score) in scores.iter_mut().enumerate() {
-                *score = mix(seed ^ solver_id as u64, pair_index as u64) % (MAX_SCORE + 1);
-            }
+            let scores = synthetic_score_array(seed, solver_id, 0x5354_414e_4441_4c4f);
 
-            SolverScoreTable { solver_id, scores }
+            StandaloneScoreTable { solver_id, scores }
         })
         .collect()
 }
 
+pub fn synthetic_batched_score_tables(seed: u64) -> Vec<BatchedScoreTable> {
+    (0..NUM_SOLVERS)
+        .map(|solver_id| {
+            let scores = synthetic_score_array(seed, solver_id, 0x4241_5443_4845_4400);
+
+            BatchedScoreTable { solver_id, scores }
+        })
+        .collect()
+}
+
+pub fn synthetic_solver_bid_tables(
+    seed: u64,
+) -> (Vec<StandaloneScoreTable>, Vec<BatchedScoreTable>) {
+    (
+        synthetic_standalone_score_tables(seed),
+        synthetic_batched_score_tables(seed),
+    )
+}
+
+fn validate_score_table<T: ScoreTableView>(table: &T) -> Result<(), FoundationError> {
+    validate_solver_scores(table.scores())
+}
+
+fn validate_solver_bid_alignment(
+    standalone_tables: &[StandaloneScoreTable],
+    batched_tables: &[BatchedScoreTable],
+) -> Result<(), FoundationError> {
+    if standalone_tables.len() != batched_tables.len() {
+        return Err(FoundationError::WrongSolverCount {
+            expected: standalone_tables.len(),
+            actual: batched_tables.len(),
+        });
+    }
+
+    for (index, (standalone_table, batched_table)) in standalone_tables
+        .iter()
+        .zip(batched_tables.iter())
+        .enumerate()
+    {
+        if standalone_table.solver_id != batched_table.solver_id {
+            return Err(FoundationError::SolverIdMismatch {
+                index,
+                expected: standalone_table.solver_id,
+                actual: batched_table.solver_id,
+            });
+        }
+
+        validate_score_table(standalone_table)?;
+        validate_score_table(batched_table)?;
+    }
+
+    Ok(())
+}
+
+fn validate_encrypted_bid_counts(
+    standalone_scores: &[Ciphertext],
+    batched_scores: &[Ciphertext],
+) -> Result<(), FoundationError> {
+    if standalone_scores.len() != batched_scores.len() {
+        return Err(FoundationError::WrongSolverCount {
+            expected: standalone_scores.len(),
+            actual: batched_scores.len(),
+        });
+    }
+
+    Ok(())
+}
+
 pub fn round1_reference_outcome_shadow(
-    score_tables: &[SolverScoreTable],
+    standalone_tables: &[StandaloneScoreTable],
 ) -> Result<Round1ReferenceOutcome, FoundationError> {
-    if score_tables.is_empty() {
+    if standalone_tables.is_empty() {
         return Err(FoundationError::EmptySolvers);
     }
 
-    for table in score_tables {
-        validate_solver_scores(&table.scores)?;
+    for table in standalone_tables {
+        validate_score_table(table)?;
     }
 
     let mut winner_solver_indices = [0usize; NUM_PAIRS];
-    let mut comparisons = Vec::with_capacity(NUM_PAIRS * score_tables.len().saturating_sub(1));
+    let mut comparisons = Vec::with_capacity(NUM_PAIRS * standalone_tables.len().saturating_sub(1));
 
     for (pair_index, winner_solver_index) in winner_solver_indices.iter_mut().enumerate() {
         let mut incumbent_solver_index = 0usize;
-        let mut incumbent_score = score_tables[0].scores[pair_index];
+        let mut incumbent_score = standalone_tables[0].scores[pair_index];
 
-        for (challenger_solver_index, challenger_table) in score_tables.iter().enumerate().skip(1) {
+        for (challenger_solver_index, challenger_table) in
+            standalone_tables.iter().enumerate().skip(1)
+        {
             let prior_incumbent_solver_index = incumbent_solver_index;
             let challenger_score = challenger_table.scores[pair_index];
             let ordering = challenger_score.cmp(&incumbent_score);
@@ -422,17 +546,20 @@ pub fn round1_reference_outcome_fhe(
 }
 
 pub fn round2_fairness_filter_shadow(
-    score_tables: &[SolverScoreTable],
+    standalone_tables: &[StandaloneScoreTable],
+    batched_tables: &[BatchedScoreTable],
 ) -> Result<FairnessFilterResult, FoundationError> {
-    let reference_outcome = round1_reference_outcome_shadow(score_tables)?;
+    validate_solver_bid_alignment(standalone_tables, batched_tables)?;
+
+    let reference_outcome = round1_reference_outcome_shadow(standalone_tables)?;
 
     let mut survivors = Vec::new();
-    for (solver_index, solver_table) in score_tables.iter().enumerate() {
+    for (solver_index, solver_table) in batched_tables.iter().enumerate() {
         let mut survives = true;
 
         for pair_index in 0..NUM_PAIRS {
             let reference_solver_index = reference_outcome.winner_solver_indices[pair_index];
-            let reference_score = score_tables[reference_solver_index].scores[pair_index];
+            let reference_score = standalone_tables[reference_solver_index].scores[pair_index];
             if solver_table.scores[pair_index] < reference_score {
                 survives = false;
                 break;
@@ -454,13 +581,16 @@ pub fn round2_fairness_filter_shadow(
 }
 
 pub fn round2_fairness_filter_fhe(
-    encrypted_scores: &[Ciphertext],
+    encrypted_standalone_scores: &[Ciphertext],
+    encrypted_batched_scores: &[Ciphertext],
     committee_members: &[MemberKeygenOutput],
     participating_parties: &[usize],
     params: &Arc<BfvParameters>,
 ) -> Result<FairnessFilterResult, FoundationError> {
+    validate_encrypted_bid_counts(encrypted_standalone_scores, encrypted_batched_scores)?;
+
     let reference_outcome = round1_reference_outcome_fhe(
-        encrypted_scores,
+        encrypted_standalone_scores,
         committee_members,
         participating_parties,
         params,
@@ -475,13 +605,13 @@ pub fn round2_fairness_filter_fhe(
         .collect::<Vec<_>>();
 
     let mut survivors = Vec::new();
-    for solver_index in 0..encrypted_scores.len() {
+    for (solver_index, batched_ciphertext) in encrypted_batched_scores.iter().enumerate() {
         let mut survives = true;
 
         for pair_index in 0..NUM_PAIRS {
             let reference_solver_index = reference_outcome.winner_solver_indices[pair_index];
             let difference =
-                &encrypted_scores[solver_index] - &encrypted_scores[reference_solver_index];
+                batched_ciphertext - &encrypted_standalone_scores[reference_solver_index];
 
             let party_shares: Vec<(usize, Vec<_>)> = participating_parties
                 .iter()
@@ -529,21 +659,22 @@ pub fn total_score(scores: &[u64; NUM_PAIRS]) -> u64 {
 }
 
 pub fn reference_total_score_shadow(
-    score_tables: &[SolverScoreTable],
+    standalone_tables: &[StandaloneScoreTable],
     reference_outcome: &Round1ReferenceOutcome,
 ) -> u64 {
     (0..NUM_PAIRS)
         .map(|pair_index| {
             let solver_index = reference_outcome.winner_solver_indices[pair_index];
-            score_tables[solver_index].scores[pair_index]
+            standalone_tables[solver_index].scores[pair_index]
         })
         .sum()
 }
 
 pub fn settle_auction_shadow(
-    score_tables: &[SolverScoreTable],
+    standalone_tables: &[StandaloneScoreTable],
+    batched_tables: &[BatchedScoreTable],
 ) -> Result<AuctionSettlement, FoundationError> {
-    let fairness = round2_fairness_filter_shadow(score_tables)?;
+    let fairness = round2_fairness_filter_shadow(standalone_tables, batched_tables)?;
 
     if fairness.fallback_to_reference {
         return Ok(AuctionSettlement::ReferenceFallback {
@@ -557,7 +688,7 @@ pub fn settle_auction_shadow(
         .map(|&solver_index| {
             (
                 solver_index,
-                total_score(&score_tables[solver_index].scores),
+                total_score(&batched_tables[solver_index].scores),
             )
         })
         .collect();
@@ -565,7 +696,10 @@ pub fn settle_auction_shadow(
     if survivor_totals.len() == 1 {
         return Ok(AuctionSettlement::BatchedWinner {
             winner_solver_index: survivor_totals[0].0,
-            second_price: reference_total_score_shadow(score_tables, &fairness.reference_outcome),
+            second_price: reference_total_score_shadow(
+                standalone_tables,
+                &fairness.reference_outcome,
+            ),
             runner_up_solver_index: None,
             reference_outcome: fairness.reference_outcome,
         });
@@ -589,13 +723,15 @@ pub fn settle_auction_shadow(
 }
 
 pub fn settle_auction_fhe(
-    encrypted_scores: &[Ciphertext],
+    encrypted_standalone_scores: &[Ciphertext],
+    encrypted_batched_scores: &[Ciphertext],
     committee_members: &[MemberKeygenOutput],
     participating_parties: &[usize],
     params: &Arc<BfvParameters>,
 ) -> Result<AuctionSettlement, FoundationError> {
     let fairness = round2_fairness_filter_fhe(
-        encrypted_scores,
+        encrypted_standalone_scores,
+        encrypted_batched_scores,
         committee_members,
         participating_parties,
         params,
@@ -639,7 +775,7 @@ pub fn settle_auction_fhe(
         let mut reference_total = 0u64;
         for pair_index in 0..NUM_PAIRS {
             let solver_index = fairness.reference_outcome.winner_solver_indices[pair_index];
-            let slots = decrypt_slots(&encrypted_scores[solver_index])?;
+            let slots = decrypt_slots(&encrypted_standalone_scores[solver_index])?;
             reference_total += slots[pair_index];
         }
 
@@ -653,8 +789,8 @@ pub fn settle_auction_fhe(
 
     let mut winner_solver_index = fairness.survivors[0];
     for &challenger_solver_index in fairness.survivors.iter().skip(1) {
-        let difference =
-            &encrypted_scores[challenger_solver_index] - &encrypted_scores[winner_solver_index];
+        let difference = &encrypted_batched_scores[challenger_solver_index]
+            - &encrypted_batched_scores[winner_solver_index];
         let slots = decrypt_slots(&difference)?;
         let total_difference = sum_centered_difference_slots(&slots, params.plaintext());
 
@@ -677,8 +813,8 @@ pub fn settle_auction_fhe(
             continue;
         }
 
-        let difference =
-            &encrypted_scores[challenger_solver_index] - &encrypted_scores[runner_up_solver_index];
+        let difference = &encrypted_batched_scores[challenger_solver_index]
+            - &encrypted_batched_scores[runner_up_solver_index];
         let slots = decrypt_slots(&difference)?;
         let total_difference = sum_centered_difference_slots(&slots, params.plaintext());
 
@@ -687,7 +823,7 @@ pub fn settle_auction_fhe(
         }
     }
 
-    let runner_up_slots = decrypt_slots(&encrypted_scores[runner_up_solver_index])?;
+    let runner_up_slots = decrypt_slots(&encrypted_batched_scores[runner_up_solver_index])?;
     let second_price = sum_score_slots(&runner_up_slots);
 
     Ok(AuctionSettlement::BatchedWinner {
@@ -754,9 +890,9 @@ mod tests {
         scores
     }
 
-    fn sample_round1_tables() -> Vec<SolverScoreTable> {
+    fn sample_round1_standalone_tables() -> Vec<StandaloneScoreTable> {
         vec![
-            SolverScoreTable {
+            StandaloneScoreTable {
                 solver_id: 0,
                 scores: scores_with_prefix(&[
                     (0, 100),
@@ -769,7 +905,7 @@ mod tests {
                     (7, 100),
                 ]),
             },
-            SolverScoreTable {
+            StandaloneScoreTable {
                 solver_id: 1,
                 scores: scores_with_prefix(&[
                     (0, 120),
@@ -782,7 +918,7 @@ mod tests {
                     (7, 100),
                 ]),
             },
-            SolverScoreTable {
+            StandaloneScoreTable {
                 solver_id: 2,
                 scores: scores_with_prefix(&[
                     (0, 119),
@@ -798,66 +934,150 @@ mod tests {
         ]
     }
 
-    fn sample_round2_some_survive_tables() -> Vec<SolverScoreTable> {
-        vec![
-            SolverScoreTable {
-                solver_id: 0,
-                scores: [100, 200, 300, 400, 500, 600, 700, 800],
-            },
-            SolverScoreTable {
-                solver_id: 1,
-                scores: [100, 200, 300, 400, 500, 600, 700, 800],
-            },
-            SolverScoreTable {
-                solver_id: 2,
-                scores: [100, 200, 299, 400, 500, 600, 700, 800],
-            },
-        ]
+    fn sample_round2_some_survive_tables() -> (Vec<StandaloneScoreTable>, Vec<BatchedScoreTable>) {
+        (
+            vec![
+                StandaloneScoreTable {
+                    solver_id: 0,
+                    scores: [100, 200, 300, 400, 500, 600, 700, 800],
+                },
+                StandaloneScoreTable {
+                    solver_id: 1,
+                    scores: [90, 190, 280, 390, 490, 590, 690, 790],
+                },
+                StandaloneScoreTable {
+                    solver_id: 2,
+                    scores: [80, 180, 270, 380, 480, 580, 680, 780],
+                },
+            ],
+            vec![
+                BatchedScoreTable {
+                    solver_id: 0,
+                    scores: [100, 200, 300, 400, 500, 600, 700, 800],
+                },
+                BatchedScoreTable {
+                    solver_id: 1,
+                    scores: [100, 200, 300, 400, 500, 600, 700, 800],
+                },
+                BatchedScoreTable {
+                    solver_id: 2,
+                    scores: [100, 200, 299, 400, 500, 600, 700, 800],
+                },
+            ],
+        )
     }
 
-    fn sample_round2_all_survive_tables() -> Vec<SolverScoreTable> {
-        vec![
-            SolverScoreTable {
-                solver_id: 0,
-                scores: [777; NUM_PAIRS],
-            },
-            SolverScoreTable {
-                solver_id: 1,
-                scores: [777; NUM_PAIRS],
-            },
-            SolverScoreTable {
-                solver_id: 2,
-                scores: [777; NUM_PAIRS],
-            },
-        ]
+    fn sample_round2_all_survive_tables() -> (Vec<StandaloneScoreTable>, Vec<BatchedScoreTable>) {
+        (
+            vec![
+                StandaloneScoreTable {
+                    solver_id: 0,
+                    scores: [777; NUM_PAIRS],
+                },
+                StandaloneScoreTable {
+                    solver_id: 1,
+                    scores: [777; NUM_PAIRS],
+                },
+                StandaloneScoreTable {
+                    solver_id: 2,
+                    scores: [777; NUM_PAIRS],
+                },
+            ],
+            vec![
+                BatchedScoreTable {
+                    solver_id: 0,
+                    scores: [777; NUM_PAIRS],
+                },
+                BatchedScoreTable {
+                    solver_id: 1,
+                    scores: [777; NUM_PAIRS],
+                },
+                BatchedScoreTable {
+                    solver_id: 2,
+                    scores: [777; NUM_PAIRS],
+                },
+            ],
+        )
     }
 
-    fn sample_round3_single_survivor_tables() -> Vec<SolverScoreTable> {
-        vec![
-            SolverScoreTable {
-                solver_id: 0,
-                scores: [500; NUM_PAIRS],
-            },
-            SolverScoreTable {
-                solver_id: 1,
-                scores: [500, 500, 500, 500, 500, 500, 500, 499],
-            },
-            SolverScoreTable {
-                solver_id: 2,
-                scores: [400; NUM_PAIRS],
-            },
-        ]
+    fn sample_round3_single_survivor_tables() -> (Vec<StandaloneScoreTable>, Vec<BatchedScoreTable>)
+    {
+        (
+            vec![
+                StandaloneScoreTable {
+                    solver_id: 0,
+                    scores: [500; NUM_PAIRS],
+                },
+                StandaloneScoreTable {
+                    solver_id: 1,
+                    scores: [500, 500, 500, 500, 500, 500, 500, 499],
+                },
+                StandaloneScoreTable {
+                    solver_id: 2,
+                    scores: [400; NUM_PAIRS],
+                },
+            ],
+            vec![
+                BatchedScoreTable {
+                    solver_id: 0,
+                    scores: [500; NUM_PAIRS],
+                },
+                BatchedScoreTable {
+                    solver_id: 1,
+                    scores: [500, 500, 500, 500, 500, 500, 500, 499],
+                },
+                BatchedScoreTable {
+                    solver_id: 2,
+                    scores: [400; NUM_PAIRS],
+                },
+            ],
+        )
     }
 
-    fn encrypt_score_tables(
-        score_tables: &[SolverScoreTable],
+    fn sample_batched_beats_reference_tables() -> (Vec<StandaloneScoreTable>, Vec<BatchedScoreTable>)
+    {
+        (
+            vec![
+                StandaloneScoreTable {
+                    solver_id: 0,
+                    scores: [100, 180, 130, 160, 120, 170, 140, 150],
+                },
+                StandaloneScoreTable {
+                    solver_id: 1,
+                    scores: [150, 120, 180, 130, 170, 110, 190, 100],
+                },
+                StandaloneScoreTable {
+                    solver_id: 2,
+                    scores: [130, 170, 120, 190, 110, 180, 100, 200],
+                },
+            ],
+            vec![
+                BatchedScoreTable {
+                    solver_id: 0,
+                    scores: [155, 185, 182, 195, 172, 184, 193, 205],
+                },
+                BatchedScoreTable {
+                    solver_id: 1,
+                    scores: [150, 180, 180, 190, 170, 180, 190, 201],
+                },
+                BatchedScoreTable {
+                    solver_id: 2,
+                    scores: [149, 180, 180, 190, 170, 180, 190, 205],
+                },
+            ],
+        )
+    }
+
+    fn encrypt_score_tables<T: ScoreTableView>(
+        score_tables: &[T],
         params: &Arc<BfvParameters>,
         public_key: &PublicKey,
     ) -> Vec<Ciphertext> {
         score_tables
             .iter()
             .map(|table| {
-                let plaintext = encode_solver_scores(&table.scores, params).expect("encode scores");
+                let plaintext =
+                    encode_solver_scores(table.scores(), params).expect("encode scores");
                 encrypt_solver_scores(&plaintext, public_key)
             })
             .collect()
@@ -972,17 +1192,21 @@ mod tests {
 
     #[test]
     fn test_synthetic_solver_scores_stay_in_range() {
-        let tables = synthetic_solver_score_tables(7);
+        let (standalone_tables, batched_tables) = synthetic_solver_bid_tables(7);
 
-        assert_eq!(tables.len(), NUM_SOLVERS);
-        for table in tables {
+        assert_eq!(standalone_tables.len(), NUM_SOLVERS);
+        assert_eq!(batched_tables.len(), NUM_SOLVERS);
+        for table in standalone_tables {
+            assert!(validate_solver_scores(&table.scores).is_ok());
+        }
+        for table in batched_tables {
             assert!(validate_solver_scores(&table.scores).is_ok());
         }
     }
 
     #[test]
     fn test_round1_shadow_known_reference_outcome() {
-        let tables = sample_round1_tables();
+        let tables = sample_round1_standalone_tables();
         let outcome = round1_reference_outcome_shadow(&tables).expect("round1 shadow");
 
         assert_eq!(outcome.winner_solver_indices, [1, 2, 0, 1, 2, 1, 0, 0]);
@@ -992,15 +1216,15 @@ mod tests {
     #[test]
     fn test_round1_shadow_tie_breaks_to_lower_solver_index() {
         let tables = vec![
-            SolverScoreTable {
+            StandaloneScoreTable {
                 solver_id: 0,
                 scores: [500; NUM_PAIRS],
             },
-            SolverScoreTable {
+            StandaloneScoreTable {
                 solver_id: 1,
                 scores: [500; NUM_PAIRS],
             },
-            SolverScoreTable {
+            StandaloneScoreTable {
                 solver_id: 2,
                 scores: [499; NUM_PAIRS],
             },
@@ -1017,7 +1241,7 @@ mod tests {
 
     #[test]
     fn test_round1_shadow_single_solver_case() {
-        let tables = vec![SolverScoreTable {
+        let tables = vec![StandaloneScoreTable {
             solver_id: 0,
             scores: sample_scores(),
         }];
@@ -1030,7 +1254,7 @@ mod tests {
 
     #[test]
     fn test_round1_fhe_matches_plaintext_shadow() {
-        let tables = sample_round1_tables();
+        let tables = sample_round1_standalone_tables();
         let shadow = round1_reference_outcome_shadow(&tables).expect("round1 shadow");
         let (params, members, public_key) = setup_committee();
         let encrypted_tables = encrypt_score_tables(&tables, &params, &public_key);
@@ -1044,9 +1268,10 @@ mod tests {
 
     #[test]
     fn test_round2_shadow_some_survive_some_fail() {
-        let tables = sample_round2_some_survive_tables();
+        let (standalone_tables, batched_tables) = sample_round2_some_survive_tables();
 
-        let result = round2_fairness_filter_shadow(&tables).expect("round2 shadow");
+        let result = round2_fairness_filter_shadow(&standalone_tables, &batched_tables)
+            .expect("round2 shadow");
 
         assert_eq!(result.survivors, vec![0, 1]);
         assert!(!result.fallback_to_reference);
@@ -1058,9 +1283,10 @@ mod tests {
 
     #[test]
     fn test_round2_shadow_all_survive() {
-        let tables = sample_round2_all_survive_tables();
+        let (standalone_tables, batched_tables) = sample_round2_all_survive_tables();
 
-        let result = round2_fairness_filter_shadow(&tables).expect("round2 shadow");
+        let result = round2_fairness_filter_shadow(&standalone_tables, &batched_tables)
+            .expect("round2 shadow");
 
         assert_eq!(result.survivors, vec![0, 1, 2]);
         assert!(!result.fallback_to_reference);
@@ -1072,9 +1298,17 @@ mod tests {
 
     #[test]
     fn test_round2_shadow_empty_survivor_fallback() {
-        let tables = sample_round1_tables();
+        let standalone_tables = sample_round1_standalone_tables();
+        let batched_tables = standalone_tables
+            .iter()
+            .map(|table| BatchedScoreTable {
+                solver_id: table.solver_id,
+                scores: table.scores,
+            })
+            .collect::<Vec<_>>();
 
-        let result = round2_fairness_filter_shadow(&tables).expect("round2 shadow");
+        let result = round2_fairness_filter_shadow(&standalone_tables, &batched_tables)
+            .expect("round2 shadow");
 
         assert!(result.survivors.is_empty());
         assert!(result.fallback_to_reference);
@@ -1086,22 +1320,32 @@ mod tests {
 
     #[test]
     fn test_round2_fhe_matches_plaintext_shadow() {
-        let tables = sample_round2_some_survive_tables();
-        let shadow = round2_fairness_filter_shadow(&tables).expect("round2 shadow");
+        let (standalone_tables, batched_tables) = sample_round2_some_survive_tables();
+        let shadow = round2_fairness_filter_shadow(&standalone_tables, &batched_tables)
+            .expect("round2 shadow");
         let (params, members, public_key) = setup_committee();
-        let encrypted_tables = encrypt_score_tables(&tables, &params, &public_key);
+        let encrypted_standalone_tables =
+            encrypt_score_tables(&standalone_tables, &params, &public_key);
+        let encrypted_batched_tables = encrypt_score_tables(&batched_tables, &params, &public_key);
 
-        let fhe_result = round2_fairness_filter_fhe(&encrypted_tables, &members, &[0, 1], &params)
-            .expect("round2 fhe");
+        let fhe_result = round2_fairness_filter_fhe(
+            &encrypted_standalone_tables,
+            &encrypted_batched_tables,
+            &members,
+            &[0, 1],
+            &params,
+        )
+        .expect("round2 fhe");
 
         assert_eq!(fhe_result, shadow);
     }
 
     #[test]
     fn test_settle_auction_shadow_multi_survivor_known_winner_runner_up() {
-        let tables = sample_round2_all_survive_tables();
+        let (standalone_tables, batched_tables) = sample_round2_all_survive_tables();
 
-        let settlement = settle_auction_shadow(&tables).expect("settlement shadow");
+        let settlement =
+            settle_auction_shadow(&standalone_tables, &batched_tables).expect("settlement shadow");
 
         assert_eq!(
             settlement,
@@ -1109,16 +1353,18 @@ mod tests {
                 winner_solver_index: 0,
                 second_price: 6216,
                 runner_up_solver_index: Some(1),
-                reference_outcome: round1_reference_outcome_shadow(&tables).expect("reference"),
+                reference_outcome: round1_reference_outcome_shadow(&standalone_tables)
+                    .expect("reference"),
             }
         );
     }
 
     #[test]
     fn test_settle_auction_shadow_single_survivor_case() {
-        let tables = sample_round3_single_survivor_tables();
+        let (standalone_tables, batched_tables) = sample_round3_single_survivor_tables();
 
-        let settlement = settle_auction_shadow(&tables).expect("settlement shadow");
+        let settlement =
+            settle_auction_shadow(&standalone_tables, &batched_tables).expect("settlement shadow");
 
         assert_eq!(
             settlement,
@@ -1126,34 +1372,80 @@ mod tests {
                 winner_solver_index: 0,
                 second_price: 4000,
                 runner_up_solver_index: None,
-                reference_outcome: round1_reference_outcome_shadow(&tables).expect("reference"),
+                reference_outcome: round1_reference_outcome_shadow(&standalone_tables)
+                    .expect("reference"),
+            }
+        );
+    }
+
+    #[test]
+    fn test_settle_auction_shadow_batched_winner_beats_reference_baseline() {
+        let (standalone_tables, batched_tables) = sample_batched_beats_reference_tables();
+
+        let reference_outcome =
+            round1_reference_outcome_shadow(&standalone_tables).expect("reference");
+        let reference_total = reference_total_score_shadow(&standalone_tables, &reference_outcome);
+        let settlement =
+            settle_auction_shadow(&standalone_tables, &batched_tables).expect("settlement shadow");
+
+        assert_eq!(
+            reference_outcome.winner_solver_indices,
+            [1, 0, 1, 2, 1, 2, 1, 2]
+        );
+        assert_eq!(reference_total, 1440);
+        assert_eq!(total_score(&batched_tables[0].scores), 1471);
+        assert_eq!(
+            settlement,
+            AuctionSettlement::BatchedWinner {
+                winner_solver_index: 0,
+                second_price: 1441,
+                runner_up_solver_index: Some(1),
+                reference_outcome,
             }
         );
     }
 
     #[test]
     fn test_settle_auction_shadow_empty_survivor_fallback() {
-        let tables = sample_round1_tables();
+        let standalone_tables = sample_round1_standalone_tables();
+        let batched_tables = standalone_tables
+            .iter()
+            .map(|table| BatchedScoreTable {
+                solver_id: table.solver_id,
+                scores: table.scores,
+            })
+            .collect::<Vec<_>>();
 
-        let settlement = settle_auction_shadow(&tables).expect("settlement shadow");
+        let settlement =
+            settle_auction_shadow(&standalone_tables, &batched_tables).expect("settlement shadow");
 
         assert_eq!(
             settlement,
             AuctionSettlement::ReferenceFallback {
-                reference_outcome: round1_reference_outcome_shadow(&tables).expect("reference"),
+                reference_outcome: round1_reference_outcome_shadow(&standalone_tables)
+                    .expect("reference"),
             }
         );
     }
 
     #[test]
     fn test_settle_auction_fhe_matches_shadow() {
-        let tables = sample_round2_all_survive_tables();
-        let shadow = settle_auction_shadow(&tables).expect("settlement shadow");
+        let (standalone_tables, batched_tables) = sample_batched_beats_reference_tables();
+        let shadow =
+            settle_auction_shadow(&standalone_tables, &batched_tables).expect("settlement shadow");
         let (params, members, public_key) = setup_committee();
-        let encrypted_tables = encrypt_score_tables(&tables, &params, &public_key);
+        let encrypted_standalone_tables =
+            encrypt_score_tables(&standalone_tables, &params, &public_key);
+        let encrypted_batched_tables = encrypt_score_tables(&batched_tables, &params, &public_key);
 
-        let fhe_settlement = settle_auction_fhe(&encrypted_tables, &members, &[0, 1], &params)
-            .expect("settlement fhe");
+        let fhe_settlement = settle_auction_fhe(
+            &encrypted_standalone_tables,
+            &encrypted_batched_tables,
+            &members,
+            &[0, 1],
+            &params,
+        )
+        .expect("settlement fhe");
 
         assert_eq!(fhe_settlement, shadow);
     }
