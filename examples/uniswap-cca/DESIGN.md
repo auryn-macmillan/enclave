@@ -18,7 +18,7 @@ Uses SIMD bit-decomposed encoding with `N=8192` (8192 slots, two rows of 4096). 
 
 * **Price Ladder**: 512 max price levels (8192 / 16 = 512).
 * **Demand Vector**: Each bidder encrypts a step function where `slots[p] = bit_decomposed(qty)` for all `p <= max_price`.
-* **Plaintext Modulus**: `t = 2^18` (262144).
+* **Plaintext Modulus**: `t = 65537` (Fermat prime; SIMD-compatible since `2N | (t-1)`).
 * **Constraint**: `t > number_of_bidders`. Bits are independent and do not carry over between SIMD slots.
 
 ## 4. FHE Circuit Analysis
@@ -91,7 +91,7 @@ Tokens launched via Design A graduate to a Uniswap v4 pool. The `LiquidityLaunch
 | Parameter | Value |
 |-----------|-------|
 | N (degree) | 8192 |
-| t (plaintext mod) | 2^18 (262144) |
+| t (plaintext mod) | 65537 |
 | Moduli (QIs) | 3 |
 | SIMD slots | 8192 (two rows of 4096) |
 | SLOT_WIDTH | 16 |

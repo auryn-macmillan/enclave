@@ -18,7 +18,7 @@ The v4 hook acts as an intent accumulator rather than a per-trade executor. Duri
 
 Uses a two-sided SIMD bit-decomposed encoding adapted from `examples/batch-exchange/`.
 
-*   **Parameters**: N=8192 (8192 slots, two rows of 4096), SLOT_WIDTH=16, t=2^18.
+*   **Parameters**: N=8192 (8192 slots, two rows of 4096), SLOT_WIDTH=16, t=65537.
 *   **Price Ladder**: 512 max price levels (8192 / 16 = 512).
 *   **Vectors**: Separate cumulative demand vectors for buy intents (descending) and sell intents (ascending).
 *   **Intents**: Each intent `(direction, quantity, limit_price)` is encoded as a bit-decomposed demand contribution across the appropriate price levels.
@@ -100,7 +100,7 @@ Pools launched via Design A (Uniswap CCA) naturally transition to Design C. Both
 | Parameter | Value |
 |-----------|-------|
 | N (degree) | 8192 |
-| t (plaintext mod) | 2^18 (262144) |
+| t (plaintext mod) | 65537 |
 | Moduli (QIs) | 3 |
 | SIMD slots | 8192 (two rows of 4096) |
 | SLOT_WIDTH | 16 |
