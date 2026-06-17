@@ -1,271 +1,198 @@
 /-
-  InterfoldToken — Machine-Checked Proofs
+  InterfoldToken (FOLD) — Machine-Checked Proofs
 
-  This file contains the `_meets_spec` theorems that prove every EDSL function
-  satisfies its formal specification.
+  All theorems are complete — NO `sorry` admissions.
 
-  Proof strategy: the dominant pattern is `simp` with the operation definition,
-  slot constants, and spec predicate. For guard-protected operations, unfold the
-  full `Contract.run` chain and pass guard hypotheses to `simp`.
-
-  See `Verity.Specs.Common` for the available `storageMapUnchangedExcept*` and
-  `sameContext` helpers.
+  Proof objectives (see PROOF_OBJECTIVES.md):
+  - INTF-P1: doMintTokens reverts when supply cap exceeded
+  - INTF-P2: mint reverts when phase ≠ Virtual (tgeTimestamp != 0)
+  - INTF-P3: mint reverts when caller lacks DEFAULT_ADMIN_ROLE
+  - INTF-P4: mintAllocations reverts when phase ≠ Virtual
+  - INTF-P5: mintAllocations reverts when caller lacks MINTER_ROLE
+  - INTF-P6: tge() reverts when already live
+  - INTF-P7: tge() reverts when called too early
+  - INTF-P8: setTransferWhitelisted reverts without WHITELIST_ROLE
+  - INTF-P9: isTransferRestricted returns 1 for blocked pre-TGE transfers
+  - INTF-P10: isTransferRestricted returns 0 post-TGE
+  - INTF-P11: isTransferRestricted returns 0 for mint/burn
 -/
-import Verity.Core
-import Verity.Specs.Common
-import InterfoldToken.InterfoldToken
-import InterfoldToken.Spec
-import InterfoldToken.Invariants
+import Contracts.InterfoldToken.Spec
+import Verity.Proofs.Stdlib.Automation
+
+namespace Contracts.InterfoldToken.Proofs
 
 open Verity
+open Verity.EVM.Uint256
+open Contracts.InterfoldToken
+open Contracts.InterfoldToken.Spec
 
 set_option maxHeartbeats 400000
 
-/-! ## mintAllocation meets its spec -/
+/-! ## INTF-P1: doMintTokens reverts when supply cap exceeded -/
 
-/--
-  Theorem: `mintAllocation` satisfies `mintAllocation_spec` when preconditions hold.
-
-  Preconditions:
-  - Caller is the minter: `s.sender = s.storageAddr minterSlot.slot`
-  - `to` is non-zero
-  - `amount` is non-zero
-  - `totalMinted + amount ≤ MAX_SUPPLY`
--/
-theorem mintAllocation_meets_spec
-    (s : ContractState) (to : Address) (amount : Uint256)
-    (h_minter : s.sender = s.storageAddr minterSlot.slot)
-    (h_to : to ≠ 0)
+theorem doMintTokens_revert_cap
+    (s : ContractState) (recipient : Address) (amount : Uint256)
     (h_amount : amount ≠ 0)
-    (h_cap : add (s.storage totalMintedSlot.slot) amount ≤ MAX_SUPPLY) :
-    let s' := ((mintAllocation to amount).run s).snd
-    mintAllocation_spec to amount s s' := by
-  unfold mintAllocation
-  unfold mintAllocation_spec
-  simp [onlyMinter, doMint, msgSender, getMapping, setMapping,
-        getStorage, setStorage, getStorageAddr, require,
-        requireSomeUint, safeAdd, bind, pure,
-        balancesSlot, totalSupplySlot, totalMintedSlot,
-        minterSlot, ownerSlot, whitelistManagerSlot,
-        transfersRestrictedSlot, transferWhitelistedSlot,
-        h_minter, h_to, h_amount, h_cap, MAX_SUPPLY,
-        Specs.storageUnchangedExceptSlots,
-        Specs.storageMapUnchangedExceptKeyAtSlot,
-        Specs.sameStorageAddrContext,
-        Specs.sameContext,
-        Specs.sameStorageContext]
+    (h_exceeds : add (s.storage totalSupply.slot) amount > MAX_SUPPLY) :
+    ((doMintTokens recipient amount).run s).fst.isRevert := by
+  verity_unfold doMintTokens
+  simp only [getStorage, getMapping, require, requireSomeUint, safeAdd, bind,
+             totalSupply, balances, MAX_SUPPLY,
+             h_amount, h_exceeds]
+  exact ContractResult.revert_isRevert _
 
-/--
-  Theorem: `mintAllocation` reverts when preconditions are violated.
--/
-theorem mintAllocation_reverts_when_not_minter
-    (s : ContractState) (to : Address) (amount : Uint256)
-    (h_not_minter : s.sender ≠ s.storageAddr minterSlot.slot) :
-    ((mintAllocation to amount).run s).fst.isRevert := by
-  unfold mintAllocation onlyMinter
-  simp [msgSender, getStorageAddr, minterSlot, require, bind, h_not_minter]
+/-! ## doMintTokens reverts on zero amount -/
 
-/--
-  Theorem: `mintAllocation` reverts when `to` is zero address.
--/
-theorem mintAllocation_reverts_zero_address
-    (s : ContractState) (amount : Uint256)
-    (h_minter : s.sender = s.storageAddr minterSlot.slot) :
-    ((mintAllocation 0 amount).run s).fst.isRevert := by
-  unfold mintAllocation onlyMinter
-  simp [msgSender, getStorageAddr, minterSlot, require, bind, h_minter]
+theorem doMintTokens_revert_zero
+    (s : ContractState) (recipient : Address) :
+    ((doMintTokens recipient 0).run s).fst.isRevert := by
+  verity_unfold doMintTokens
+  simp only [require, bind]
+  exact ContractResult.revert_isRevert _
 
-/--
-  Theorem: `mintAllocation` reverts when `amount` is zero.
--/
-theorem mintAllocation_reverts_zero_amount
+/-! ## INTF-P3: mint reverts without DEFAULT_ADMIN_ROLE -/
+
+theorem mint_revert_no_role
+    (s : ContractState) (recipient : Address) (amount : Uint256) (label : Uint256)
+    (h_no_role : s.storageMap2 roleMembers.slot DEFAULT_ADMIN_ROLE s.sender ≠ 1) :
+    ((mint recipient amount label).run s).fst.isRevert := by
+  verity_unfold mint
+  simp only [onlyRole, msgSender, getMapping2, require, bind,
+             roleMembers, DEFAULT_ADMIN_ROLE, h_no_role]
+  exact ContractResult.revert_isRevert _
+
+/-! ## INTF-P2: mint reverts when phase ≠ Virtual (tgeTimestamp != 0 implies Live) -/
+
+theorem mint_revert_not_virtual
+    (s : ContractState) (recipient : Address) (amount : Uint256) (label : Uint256)
+    (h_role : s.storageMap2 roleMembers.slot DEFAULT_ADMIN_ROLE s.sender = 1)
+    (h_live : s.storage tgeTimestamp.slot ≠ 0) :
+    ((mint recipient amount label).run s).fst.isRevert := by
+  verity_unfold mint
+  simp only [onlyRole, msgSender, getMapping2, require, bind,
+             roleMembers, DEFAULT_ADMIN_ROLE, h_role]
+  -- After onlyRole passes, currentPhase is called
+  -- When tgeTimestamp != 0, currentPhase returns Phase_Live
+  -- require (phase == Phase_Virtual) fails because phase == Phase_Live
+  simp only [currentPhase, getStorage, getBlockTimestamp, if_pos, tgeTimestamp,
+             ccaStart, ccaEnd, Phase_Live, h_live]
+  exact ContractResult.revert_isRevert _
+
+/-! ## INTF-P5: mintAllocations reverts without MINTER_ROLE -/
+
+theorem mintAllocations_revert_no_role
+    (s : ContractState) (recipient : Address) (amount : Uint256) (policyId : Uint256)
+    (h_no_role : s.storageMap2 roleMembers.slot MINTER_ROLE s.sender ≠ 1) :
+    ((mintAllocations recipient amount policyId).run s).fst.isRevert := by
+  verity_unfold mintAllocations
+  simp only [onlyRole, msgSender, getMapping2, require, bind,
+             roleMembers, MINTER_ROLE, h_no_role]
+  exact ContractResult.revert_isRevert _
+
+/-! ## INTF-P4: mintAllocations reverts when phase ≠ Virtual -/
+
+theorem mintAllocations_revert_not_virtual
+    (s : ContractState) (recipient : Address) (amount : Uint256) (policyId : Uint256)
+    (h_role : s.storageMap2 roleMembers.slot MINTER_ROLE s.sender = 1)
+    (h_live : s.storage tgeTimestamp.slot ≠ 0) :
+    ((mintAllocations recipient amount policyId).run s).fst.isRevert := by
+  verity_unfold mintAllocations
+  simp only [onlyRole, msgSender, getMapping2, require, bind,
+             roleMembers, MINTER_ROLE, h_role]
+  simp only [currentPhase, getStorage, getBlockTimestamp, if_pos, tgeTimestamp,
+             ccaStart, ccaEnd, Phase_Live, h_live]
+  exact ContractResult.revert_isRevert _
+
+/-! ## INTF-P6: tge() reverts when already live -/
+
+theorem tge_revert_already_live
+    (s : ContractState)
+    (h_live : s.storage tgeTimestamp.slot ≠ 0) :
+    ((tge).run s).fst.isRevert := by
+  verity_unfold tge
+  simp only [getStorage, require, bind, tgeTimestamp, h_live]
+  exact ContractResult.revert_isRevert _
+
+/-! ## INTF-P7: tge() reverts when called too early -/
+
+theorem tge_revert_too_early
+    (s : ContractState)
+    (h_not_live : s.storage tgeTimestamp.slot = 0)
+    (h_early : s.blockTimestamp < add (s.storage ccaEnd.slot) TGE_COOLDOWN) :
+    ((tge).run s).fst.isRevert := by
+  verity_unfold tge
+  simp only [getStorage, require, requireSomeUint, safeAdd, bind,
+             tgeTimestamp, ccaEnd, TGE_COOLDOWN,
+             h_not_live, h_early]
+  exact ContractResult.revert_isRevert _
+
+/-! ## INTF-P8: setTransferWhitelisted reverts without WHITELIST_ROLE -/
+
+theorem setTransferWhitelisted_revert_no_role
+    (s : ContractState) (account : Address) (whitelisted : Uint256)
+    (h_no_role : s.storageMap2 roleMembers.slot WHITELIST_ROLE s.sender ≠ 1) :
+    ((setTransferWhitelisted account whitelisted).run s).fst.isRevert := by
+  verity_unfold setTransferWhitelisted
+  simp only [onlyRole, msgSender, getMapping2, require, bind,
+             roleMembers, WHITELIST_ROLE, h_no_role]
+  exact ContractResult.revert_isRevert _
+
+/-! ## setTransferWhitelisted reverts on zero address -/
+
+theorem setTransferWhitelisted_revert_zero
+    (s : ContractState) (whitelisted : Uint256)
+    (h_role : s.storageMap2 roleMembers.slot WHITELIST_ROLE s.sender = 1) :
+    ((setTransferWhitelisted 0 whitelisted).run s).fst.isRevert := by
+  verity_unfold setTransferWhitelisted
+  simp only [onlyRole, msgSender, getMapping2, require, bind,
+             roleMembers, WHITELIST_ROLE, h_role]
+  exact ContractResult.revert_isRevert _
+
+/-! ## INTF-P10: isTransferRestricted returns 0 post-TGE -/
+
+theorem isTransferRestricted_post_tge
+    (s : ContractState) (from to : Address)
+    (h_live : s.storage tgeTimestamp.slot ≠ 0) :
+    ((isTransferRestricted from to).run s).fst = ContractResult.success 0 s := by
+  verity_unfold isTransferRestricted
+  simp only [getStorage, if_pos, tgeTimestamp, h_live]
+
+/-! ## INTF-P11: isTransferRestricted returns 0 for mint (from=0) -/
+
+theorem isTransferRestricted_mint_exempt
     (s : ContractState) (to : Address)
-    (h_minter : s.sender = s.storageAddr minterSlot.slot)
-    (h_to : to ≠ 0) :
-    ((mintAllocation to 0).run s).fst.isRevert := by
-  unfold mintAllocation onlyMinter
-  simp [msgSender, getStorageAddr, minterSlot, require, bind, h_minter, h_to]
+    (h_not_live : s.storage tgeTimestamp.slot = 0) :
+    ((isTransferRestricted 0 to).run s).fst = ContractResult.success 0 s := by
+  verity_unfold isTransferRestricted
+  simp only [getStorage, if_pos, if_neg, tgeTimestamp, h_not_live]
 
-/--
-  Theorem: `mintAllocation` reverts when supply cap would be exceeded.
--/
-theorem mintAllocation_reverts_exceeds_supply
-    (s : ContractState) (to : Address) (amount : Uint256)
-    (h_minter : s.sender = s.storageAddr minterSlot.slot)
+/-! ## INTF-P11: isTransferRestricted returns 0 for burn (to=0) -/
+
+theorem isTransferRestricted_burn_exempt
+    (s : ContractState) (from : Address)
+    (h_not_live : s.storage tgeTimestamp.slot = 0) :
+    ((isTransferRestricted from 0).run s).fst = ContractResult.success 0 s := by
+  verity_unfold isTransferRestricted
+  simp only [getStorage, if_pos, if_neg, tgeTimestamp, h_not_live]
+
+/-! ## INTF-P9: isTransferRestricted returns 1 for blocked transfers -/
+
+theorem isTransferRestricted_blocks
+    (s : ContractState) (from to : Address)
+    (h_not_live : s.storage tgeTimestamp.slot = 0)
+    (h_from : from ≠ 0)
     (h_to : to ≠ 0)
-    (h_amount : amount ≠ 0)
-    (h_exceeds : add (s.storage totalMintedSlot.slot) amount > MAX_SUPPLY) :
-    ((mintAllocation to amount).run s).fst.isRevert := by
-  unfold mintAllocation onlyMinter
-  simp [msgSender, getStorageAddr, minterSlot, getStorage, totalMintedSlot,
-        requireSomeUint, safeAdd, require, bind, MAX_SUPPLY,
-        h_minter, h_to, h_amount, h_exceeds]
+    (h_not_bonding_from : from ≠ s.storageAddr bondingRegistry.slot)
+    (h_not_bonding_to : to ≠ s.storageAddr bondingRegistry.slot)
+    (h_not_cca : from ≠ s.storageAddr claimSource.slot)
+    (h_from_not_wl : s.storageMap transferWhitelisted.slot from = 0)
+    (h_to_not_wl : s.storageMap transferWhitelisted.slot to = 0) :
+    ((isTransferRestricted from to).run s).fst = ContractResult.success 1 s := by
+  verity_unfold isTransferRestricted
+  simp only [getStorage, getStorageAddr, getMapping, if_pos, if_neg,
+             tgeTimestamp, transferWhitelisted, bondingRegistry, claimSource,
+             h_not_live, h_from, h_to,
+             h_not_bonding_from, h_not_bonding_to, h_not_cca,
+             h_from_not_wl, h_to_not_wl]
 
-/-! ## disableTransferRestrictions meets its spec -/
-
-/--
-  Theorem: `disableTransferRestrictions` sets transfersRestricted to false
-  when called by owner and currently true.
--/
-theorem disableTransferRestrictions_meets_spec_when_restricted
-    (s : ContractState)
-    (h_owner : s.sender = s.storageAddr ownerSlot.slot)
-    (h_restricted : s.storage transfersRestrictedSlot.slot = true) :
-    ((disableTransferRestrictions).run s).snd.storage transfersRestrictedSlot.slot = false := by
-  unfold disableTransferRestrictions onlyOwner
-  simp [msgSender, getStorageAddr, getStorage, setStorage,
-        ownerSlot, transfersRestrictedSlot, require, bind, h_owner, h_restricted]
-
-/--
-  Theorem: `disableTransferRestrictions` is a no-op when already disabled.
--/
-theorem disableTransferRestrictions_noop_when_unrestricted
-    (s : ContractState)
-    (h_owner : s.sender = s.storageAddr ownerSlot.slot)
-    (h_unrestricted : s.storage transfersRestrictedSlot.slot = false) :
-    ((disableTransferRestrictions).run s).snd = s := by
-  unfold disableTransferRestrictions onlyOwner
-  simp [msgSender, getStorageAddr, getStorage, ownerSlot, transfersRestrictedSlot,
-        require, bind, h_owner, h_unrestricted]
-
-/--
-  Theorem: `disableTransferRestrictions` reverts when called by non-owner.
--/
-theorem disableTransferRestrictions_reverts_non_owner
-    (s : ContractState)
-    (h_not_owner : s.sender ≠ s.storageAddr ownerSlot.slot) :
-    ((disableTransferRestrictions).run s).fst.isRevert := by
-  unfold disableTransferRestrictions onlyOwner
-  simp [msgSender, getStorageAddr, ownerSlot, require, bind, h_not_owner]
-
-/-! ## toggleTransferWhitelist meets its spec -/
-
-/--
-  Theorem: `toggleTransferWhitelist` flips the whitelist status
-  when called by whitelist manager.
--/
-theorem toggleTransferWhitelist_flips_status
-    (s : ContractState) (account : Address)
-    (h_manager : s.sender = s.storageAddr whitelistManagerSlot.slot) :
-    ((toggleTransferWhitelist account).run s).snd.storageMap
-      transferWhitelistedSlot.slot account =
-    not (s.storageMap transferWhitelistedSlot.slot account) := by
-  unfold toggleTransferWhitelist onlyWhitelistManager
-  simp [msgSender, getStorageAddr, getMapping, setMapping,
-        whitelistManagerSlot, transferWhitelistedSlot, require, bind, h_manager]
-
-/--
-  Theorem: `toggleTransferWhitelist` reverts when called by non-manager.
--/
-theorem toggleTransferWhitelist_reverts_non_manager
-    (s : ContractState) (account : Address)
-    (h_not_manager : s.sender ≠ s.storageAddr whitelistManagerSlot.slot) :
-    ((toggleTransferWhitelist account).run s).fst.isRevert := by
-  unfold toggleTransferWhitelist onlyWhitelistManager
-  simp [msgSender, getStorageAddr, whitelistManagerSlot, require, bind, h_not_manager]
-
-/-! ## transfer meets its spec -/
-
-/--
-  Theorem: `transfer` satisfies `transfer_spec` when preconditions hold.
-  Preconditions: sender has sufficient balance, and either restrictions are
-  disabled or the sender or recipient is whitelisted.
--/
-theorem transfer_meets_spec
-    (s : ContractState) (to : Address) (amount : Uint256)
-    (h_balance : s.storageMap balancesSlot.slot s.sender >= amount)
-    (h_unrestricted : s.storage transfersRestrictedSlot.slot = false
-     ∨ s.storageMap transferWhitelistedSlot.slot s.sender = true
-     ∨ s.storageMap transferWhitelistedSlot.slot to = true
-     ∨ s.sender = 0 ∨ to = 0) :
-    let s' := ((transfer to amount).run s).snd
-    transfer_spec to amount s s' := by
-  unfold transfer
-  unfold transfer_spec
-  -- The `doTransfer` function handles the restriction check and transfer logic.
-  -- Unfold and use `simp` with the hypotheses.
-  unfold doTransfer
-  simp [msgSender, getStorage, getMapping, setMapping,
-        getStorageAddr, require, requireSomeUint,
-        safeAdd, safeSub, bind, pure,
-        balancesSlot, totalSupplySlot,
-        transfersRestrictedSlot, transferWhitelistedSlot,
-        Specs.storageMapUnchangedExceptKeysAtSlot,
-        Specs.sameStorageAddrContext,
-        Specs.sameContext,
-        Specs.sameStorageContext,
-        h_balance, h_unrestricted]
-
-/--
-  Theorem: `transfer` reverts when sender has insufficient balance.
--/
-theorem transfer_reverts_insufficient_balance
-    (s : ContractState) (to : Address) (amount : Uint256)
-    (h_insufficient : s.storageMap balancesSlot.slot s.sender < amount)
-    (h_unrestricted : s.storage transfersRestrictedSlot.slot = false ∨ s.sender = 0 ∨ to = 0) :
-    ((transfer to amount).run s).fst.isRevert := by
-  unfold transfer doTransfer
-  simp [msgSender, getStorage, getMapping, transfersRestrictedSlot,
-        transferWhitelistedSlot, balancesSlot, require, bind,
-        h_insufficient, h_unrestricted]
-
-/--
-  Theorem: `transfer` reverts when restrictions are active and neither party
-  is whitelisted.
--/
-theorem transfer_reverts_restricted_not_whitelisted
-    (s : ContractState) (to : Address) (amount : Uint256)
-    (h_restricted : s.storage transfersRestrictedSlot.slot = true)
-    (h_sender_not_whitelisted : s.storageMap transferWhitelistedSlot.slot s.sender = false)
-    (h_to_not_whitelisted : s.storageMap transferWhitelistedSlot.slot to = false)
-    (h_from_nonzero : s.sender ≠ 0)
-    (h_to_nonzero : to ≠ 0) :
-    ((transfer to amount).run s).fst.isRevert := by
-  unfold transfer doTransfer
-  simp [msgSender, getStorage, getMapping,
-        transfersRestrictedSlot, transferWhitelistedSlot,
-        require, bind,
-        h_restricted, h_sender_not_whitelisted, h_to_not_whitelisted,
-        h_from_nonzero, h_to_nonzero]
-
-/-! ## Supply cap invariant is preserved -/
-
-/--
-  Theorem: After `mintAllocation` succeeds, `totalMinted ≤ MAX_SUPPLY`.
-  This follows directly from the precondition check in the function body.
--/
-theorem mintAllocation_preserves_supply_cap
-    (s : ContractState) (to : Address) (amount : Uint256)
-    (h_minter : s.sender = s.storageAddr minterSlot.slot)
-    (h_to : to ≠ 0)
-    (h_amount : amount ≠ 0)
-    (h_cap : add (s.storage totalMintedSlot.slot) amount ≤ MAX_SUPPLY)
-    (h_success : ((mintAllocation to amount).run s).fst.isSuccess) :
-    ((mintAllocation to amount).run s).snd.storage totalMintedSlot.slot ≤ MAX_SUPPLY := by
-  -- From the spec theorem, we know the new totalMinted = old + amount
-  have h_spec := mintAllocation_meets_spec s to amount h_minter h_to h_amount h_cap
-  -- h_spec gives us: s'.storage totalMintedSlot.slot = add(s.storage totalMintedSlot.slot) amount
-  -- And we know add(old, amount) ≤ MAX_SUPPLY from h_cap
-  -- So s'.totalMinted ≤ MAX_SUPPLY
-  unfold mintAllocation_spec at h_spec
-  obtain ⟨_, _, h_minted, _, _, _, _⟩ := h_spec s (rfl)
-  -- h_minted: s'.storage totalMintedSlot.slot = add (s.storage totalMintedSlot.slot) amount
-  rw [h_minted]
-  exact h_cap
-
-/-! ## One-way restriction switch is preserved -/
-
-/--
-  Theorem: After any successful operation, if transfersRestricted was false,
-  it remains false. (No function can set it back to true.)
--/
-theorem restriction_never_re_enabled
-    (s : ContractState)
-    (h_unrestricted : s.storage transfersRestrictedSlot.slot = false) :
-    -- For all functions that modify storage, transfersRestricted stays false
-    True := by
-  trivial
-  -- This is a meta-theorem: it requires checking every function that writes to
-  -- transfersRestrictedSlot. Only `initToken` writes `true` and it should only
-  -- be called once. `disableTransferRestrictions` only writes `false`.
-  -- In practice, this is verified by inspection of all function bodies.
+end Contracts.InterfoldToken.Proofs

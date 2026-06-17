@@ -1,175 +1,212 @@
 /-
   InterfoldTicketToken — Formal Specifications
 
-  Spec predicates for all public functions of the InterfoldTicketToken.
-  Focus on: peg invariant, access control, transfer blocking, registry timelock.
+  Each spec is a Prop-valued predicate over pre/post ContractState.
+  Specs describe WHAT the function does, not HOW.
+
+  Proof objectives covered:
+  - ITK-P1: Registry-guarded functions revert on wrong caller
+  - ITK-P2: burnTickets accounting
+  - ITK-P3: payout bounds check
+  - ITK-P4: payout accounting
+  - ITK-P5: _update non-transferability
+  - ITK-P6: approve always revert
+  - ITK-P7: permit always revert
+  - ITK-P8: delegate only self
+  - ITK-P9: activateRegistryChange timelock
+  - ITK-P10: lockRegistry one-way
+  - ITK-P11: setRegistry locked revert
+  - ITK-P12: requestRegistryChange not-locked revert
+  - ITK-PEG: Peg invariant
 -/
-import Verity.Core
 import Verity.Specs.Common
-import InterfoldTicketToken.InterfoldTicketToken
+import Verity.Macro
+import Contracts.InterfoldTicketToken.InterfoldTicketToken
+
+namespace Contracts.InterfoldTicketToken.Spec
 
 open Verity
+open Verity.EVM.Uint256
+open Contracts.InterfoldTicketToken
 
-/-! ## depositFor spec -/
+/-! ## ITK-P1: Registry-guarded function revert specs -/
 
-/--
-  Spec for `depositFor(operator, amount)`:
-  When called by registry with valid parameters:
-  - operator's balance increased by amount
-  - totalSupply increased by amount
-  - underlyingBal increased by amount (1:1 peg)
-  - other balances unchanged
+/-- depositFor reverts when msg.sender ≠ registry. -/
+def depositFor_revert_not_registry (operator : Address) (amount : Uint256) (s : ContractState) : Prop :=
+  s.sender ≠ s.storageAddr registry.slot →
+  ((depositFor operator amount).run s).fst.isRevert
+
+/-- depositFrom reverts when msg.sender ≠ registry. -/
+def depositFrom_revert_not_registry (from to : Address) (amount : Uint256) (s : ContractState) : Prop :=
+  s.sender ≠ s.storageAddr registry.slot →
+  ((depositFrom from to amount).run s).fst.isRevert
+
+/-- withdrawTo reverts when msg.sender ≠ registry. -/
+def withdrawTo_revert_not_registry (receiver : Address) (amount : Uint256) (s : ContractState) : Prop :=
+  s.sender ≠ s.storageAddr registry.slot →
+  ((withdrawTo receiver amount).run s).fst.isRevert
+
+/-- burnTickets reverts when msg.sender ≠ registry. -/
+def burnTickets_revert_not_registry (operator : Address) (amount : Uint256) (s : ContractState) : Prop :=
+  s.sender ≠ s.storageAddr registry.slot →
+  ((burnTickets operator amount).run s).fst.isRevert
+
+/-- payout reverts when msg.sender ≠ registry. -/
+def payout_revert_not_registry (to : Address) (amount : Uint256) (s : ContractState) : Prop :=
+  s.sender ≠ s.storageAddr registry.slot →
+  ((payout to amount).run s).fst.isRevert
+
+/-! ## ITK-P2: burnTickets accounting spec -/
+
+/-- On success, burnTickets: payableBalance += amount, balances[operator] -= amount,
+    totalSupply -= amount, underlyingBal unchanged. -/
+def burnTickets_accounting (operator : Address) (amount : Uint256) (s s' : ContractState) : Prop :=
+  (s.sender = s.storageAddr registry.slot ∧ operator ≠ 0 ∧ amount ≠ 0) →
+    s'.storage payableBalance.slot =
+      add (s.storage payableBalance.slot) amount ∧
+    s'.storageMap balances.slot operator =
+      sub (s.storageMap balances.slot operator) amount ∧
+    s'.storage totalSupply.slot =
+      sub (s.storage totalSupply.slot) amount ∧
+    s'.storage underlyingBal.slot =
+      s.storage underlyingBal.slot
+
+/-! ## ITK-P3: payout reverts when underfunded -/
+
+/-- payout reverts when amount > payableBalance. -/
+def payout_revert_underfunded (to : Address) (amount : Uint256) (s : ContractState) : Prop :=
+  (s.sender = s.storageAddr registry.slot ∧
+   amount > s.storage payableBalance.slot) →
+  ((payout to amount).run s).fst.isRevert
+
+/-! ## ITK-P4: payout accounting spec -/
+
+/-- On success, payout: payableBalance -= amount, underlyingBal -= amount. -/
+def payout_accounting (to : Address) (amount : Uint256) (s s' : ContractState) : Prop :=
+  (s.sender = s.storageAddr registry.slot ∧ amount ≠ 0 ∧
+   amount ≤ s.storage payableBalance.slot) →
+    s'.storage payableBalance.slot =
+      sub (s.storage payableBalance.slot) amount ∧
+    s'.storage underlyingBal.slot =
+      sub (s.storage underlyingBal.slot) amount
+
+/-! ## ITK-P5: doUpdate non-transferability -/
+
+/-- doUpdate reverts when from ≠ 0 and to ≠ 0 (non-transferable). -/
+def doUpdate_revert_transfer (from to : Address) (value : Uint256) (s : ContractState) : Prop :=
+  (from ≠ 0 ∧ to ≠ 0) →
+  ((doUpdate from to value).run s).fst.isRevert
+
+/-- Mint (from=0) does NOT revert due to transfer restriction. -/
+def doUpdate_mint_exempt (to : Address) (value : Uint256) (s : ContractState) : Prop :=
+  ((doUpdate 0 to value).run s).fst.isRevert →
+  ((doUpdate 0 to value).run s).fst = ContractResult.revert "transfer not allowed" s → False
+
+/-- Burn (to=0) does NOT revert due to transfer restriction. -/
+def doUpdate_burn_exempt (from : Address) (value : Uint256) (s : ContractState) : Prop :=
+  ((doUpdate from 0 value).run s).fst.isRevert →
+  ((doUpdate from 0 value).run s).fst = ContractResult.revert "transfer not allowed" s → False
+
+/-! ## ITK-P6: approve always revert -/
+
+/-- approve always reverts (allowances are disabled on this token). -/
+def approve_always_revert (spender : Address) (amount : Uint256) (s : ContractState) : Prop :=
+  ((approve spender amount).run s).fst.isRevert
+
+/-! ## ITK-P7: permit always revert -/
+
+/-- permit always reverts (ERC-2612 is disabled). -/
+def permit_always_revert (owner spender : Address) (value deadline v r s' : Uint256) (st : ContractState) : Prop :=
+  ((permit owner spender value deadline v r s').run st).fst.isRevert
+
+/-! ## ITK-P8: delegate only self -/
+
+/-- delegate reverts when delegatee ≠ msg.sender. -/
+def delegate_revert_not_self (delegatee : Address) (s : ContractState) : Prop :=
+  delegatee ≠ s.sender →
+  ((delegate delegatee).run s).fst.isRevert
+
+/-! ## ITK-P9: activateRegistryChange timelock revert -/
+
+/-- activateRegistryChange reverts when block.timestamp < pendingRegistryActivationTime. -/
+def activateRegistryChange_revert_before_timelock (s : ContractState) : Prop :=
+  (s.sender = s.storageAddr owner.slot ∧
+   s.storageAddr pendingRegistry.slot ≠ 0 ∧
+   s.blockTimestamp < s.storage pendingRegistryActivationTime.slot) →
+  ((activateRegistryChange).run s).fst.isRevert
+
+/-! ## ITK-P10: lockRegistry one-way switch -/
+
+/-- lockRegistry sets registryLocked from 0 to 1 when unlocked. -/
+def lockRegistry_sets_locked (s s' : ContractState) : Prop :=
+  (s.sender = s.storageAddr owner.slot ∧ s.storage registryLocked.slot = 0) →
+    s'.storage registryLocked.slot = 1
+
+/-- lockRegistry reverts when already locked. -/
+def lockRegistry_revert_already_locked (s : ContractState) : Prop :=
+  (s.storage registryLocked.slot = 1) →
+  ((lockRegistry).run s).fst.isRevert
+
+/-! ## ITK-P11: setRegistry revert when locked -/
+
+/-- setRegistry reverts when registryLocked == 1. -/
+def setRegistry_revert_when_locked (newRegistry : Address) (s : ContractState) : Prop :=
+  (s.sender = s.storageAddr owner.slot ∧ s.storage registryLocked.slot = 1) →
+  ((setRegistry newRegistry).run s).fst.isRevert
+
+/-! ## ITK-P12: requestRegistryChange revert when not locked -/
+
+/-- requestRegistryChange reverts when registryLocked == 0. -/
+def requestRegistryChange_revert_when_not_locked (newRegistry : Address) (s : ContractState) : Prop :=
+  (s.sender = s.storageAddr owner.slot ∧ s.storage registryLocked.slot = 0) →
+  ((requestRegistryChange newRegistry).run s).fst.isRevert
+
+/-! ## ITK-PEG: Peg invariant
+
+The 1:1 peg is a conservation-of-value invariant. The underlying token balance
+held by the contract must equal the sum of all outstanding ITK tokens (totalSupply)
+plus slashed funds earmarked for payout (payableBalance). In accounting terms:
+Assets (underlyingBal) = Equity (totalSupply) + Liabilities (payableBalance).
+
+NOTE: The PROOF_OBJECTIVES.md states "totalSupply == underlyingBal + payableBalance",
+which is a reversed equation that does NOT hold for burnTickets or payout.
+The correct and verifiable equation is "underlyingBal == totalSupply + payableBalance",
+equivalently totalSupply + payableBalance == underlyingBal.
+
+Verified preservation:
+  - depositFor/From: totalSupply += amt, underlyingBal += amt → ✓
+  - withdrawTo:       totalSupply -= amt, underlyingBal -= amt → ✓
+  - burnTickets:      totalSupply -= amt, payableBal += amt, underlyingBal unchanged → ✓
+  - payout:           payableBal -= amt, underlyingBal -= amt, totalSupply unchanged → ✓
 -/
-def depositFor_spec (operator : Address) (amount : Uint256) (s s' : ContractState) : Prop :=
-  s'.storageMap balancesSlot.slot operator =
-    add (s.storageMap balancesSlot.slot operator) amount ∧
-  s'.storage totalSupplySlot.slot =
-    add (s.storage totalSupplySlot.slot) amount ∧
-  s'.storage underlyingBalSlot.slot =
-    add (s.storage underlyingBalSlot.slot) amount ∧
-  storageMapUnchangedExceptKeyAtSlot balancesSlot.slot operator s s' ∧
-  sameStorageAddrContext s s' ∧
-  sameContext s s'
 
-/-! ## withdrawTo spec -/
-
-/--
-  Spec for `withdrawTo(receiver, amount)`:
-  When called by registry with valid parameters:
-  - registry's balance decreased by amount
-  - totalSupply decreased by amount
-  - underlyingBal decreased by amount
--/
-def withdrawTo_spec (receiver : Address) (amount : Uint256) (s s' : ContractState) : Prop :=
-  s'.storageMap balancesSlot.slot s.sender =
-    sub (s.storageMap balancesSlot.slot s.sender) amount ∧
-  s'.storage totalSupplySlot.slot =
-    sub (s.storage totalSupplySlot.slot) amount ∧
-  s'.storage underlyingBalSlot.slot =
-    sub (s.storage underlyingBalSlot.slot) amount ∧
-  storageMapUnchangedExceptKeyAtSlot balancesSlot.slot s.sender s s' ∧
-  sameStorageAddrContext s s' ∧
-  sameContext s s'
-
-/-! ## burnTickets spec -/
-
-/--
-  Spec for `burnTickets(operator, amount)`:
-  When called by registry with valid parameters:
-  - operator's balance decreased by amount
-  - totalSupply decreased by amount
-  - underlyingBal unchanged (tickets burned, underlying stays)
-  - payableBalance increased by amount
--/
-def burnTickets_spec (operator : Address) (amount : Uint256) (s s' : ContractState) : Prop :=
-  s'.storageMap balancesSlot.slot operator =
-    sub (s.storageMap balancesSlot.slot operator) amount ∧
-  s'.storage totalSupplySlot.slot =
-    sub (s.storage totalSupplySlot.slot) amount ∧
-  s'.storage underlyingBalSlot.slot = s.storage underlyingBalSlot.slot ∧
-  s'.storage payableBalanceSlot.slot =
-    add (s.storage payableBalanceSlot.slot) amount ∧
-  storageMapUnchangedExceptKeyAtSlot balancesSlot.slot operator s s' ∧
-  sameStorageAddrContext s s' ∧
-  sameContext s s'
-
-/-! ## payout spec -/
-
-/--
-  Spec for `payout(to, amount)`:
-  When called by registry with valid parameters and amount ≤ payableBalance:
-  - payableBalance decreased by amount
-  - underlyingBal decreased by amount
-  - totalSupply unchanged (tickets already burned)
--/
-def payout_spec (to : Address) (amount : Uint256) (s s' : ContractState) : Prop :=
-  s'.storage payableBalanceSlot.slot =
-    sub (s.storage payableBalanceSlot.slot) amount ∧
-  s'.storage underlyingBalSlot.slot =
-    sub (s.storage underlyingBalSlot.slot) amount ∧
-  s'.storage totalSupplySlot.slot = s.storage totalSupplySlot.slot ∧
-  sameStorageContext s s' ∧
-  sameStorageAddrContext s s'
-
-/-! ## Registry management specs -/
-
-/--
-  Spec for `setRegistry(newRegistry)`: registry updated, lock remains false.
--/
-def setRegistry_spec (newRegistry : Address) (s s' : ContractState) : Prop :=
-  (s.sender = s.storageAddr ownerSlot.slot ∧ s.storage registryLockedSlot.slot = false ∧ newRegistry ≠ 0) →
-    s'.storageAddr registrySlot.slot = newRegistry ∧
-    s'.storage registryLockedSlot.slot = false ∧
-    sameStorageExceptSlots [] s s'
-
-/--
-  Spec for `lockRegistry()`: registryLocked becomes true, never reverts to false.
--/
-def lockRegistry_spec (s s' : ContractState) : Prop :=
-  (s.sender = s.storageAddr ownerSlot.slot ∧ s.storage registryLockedSlot.slot = false) →
-    s'.storage registryLockedSlot.slot = true ∧
-    sameStorageExceptSlots [registryLockedSlot.slot] s s'
-
-/--
-  Spec for `requestRegistryChange(newRegistry)`:
-  pendingRegistry set, pendingRegistryTime = now + REGISTRY_CHANGE_DELAY.
--/
-def requestRegistryChange_spec (newRegistry : Address) (s s' : ContractState) : Prop :=
-  (s.sender = s.storageAddr ownerSlot.slot ∧ s.storage registryLockedSlot.slot = true ∧ newRegistry ≠ 0) →
-    s'.storageAddr pendingRegistrySlot.slot = newRegistry ∧
-    s'.storage pendingRegistryTimeSlot.slot =
-      add (s.blockTimestamp) REGISTRY_CHANGE_DELAY ∧
-    sameStorageExceptSlots [pendingRegistrySlot.slot, pendingRegistryTimeSlot.slot] s s'
-
-/--
-  Spec for `activateRegistryChange()`: registry updated from pending, pending cleared.
--/
-def activateRegistryChange_spec (s s' : ContractState) : Prop :=
-  (s.sender = s.storageAddr ownerSlot.slot ∧
-   s.storageAddr pendingRegistrySlot.slot ≠ 0 ∧
-   s.blockTimestamp >= s.storage pendingRegistryTimeSlot.slot) →
-    s'.storageAddr registrySlot.slot = s.storageAddr pendingRegistrySlot.slot ∧
-    s'.storageAddr pendingRegistrySlot.slot = 0 ∧
-    s'.storage pendingRegistryTimeSlot.slot = 0
-
-/-! ## Peg invariant -/
-
-/--
-  **The 1:1 peg invariant**: total ITK supply == underlying balance held by contract + payableBalance.
-
-  This states that every ITK token in circulation is either backed by underlying
-  held by the contract, or by underlying that has been set aside in payableBalance
-  (from burned tickets awaiting payout).
-
-  This invariant holds at all times and is preserved by:
-  - depositFor/depositFrom: both totalSupply and underlyingBal increase equally
-  - withdrawTo: both decrease equally
-  - burnTickets: totalSupply decreases, payableBalance increases (underlyingBal unchanged)
-  - payout: payableBalance decreases, underlyingBal decreases (totalSupply unchanged)
--/
+/-- The peg: underlyingBal == totalSupply + payableBalance. -/
 def peg_invariant (s : ContractState) : Prop :=
-  s.storage totalSupplySlot.slot =
-    add (s.storage underlyingBalSlot.slot) (s.storage payableBalanceSlot.slot)
+  s.storage underlyingBal.slot = add (s.storage totalSupply.slot) (s.storage payableBalance.slot)
 
-/-! ## Access control specs -/
+/-- Peg invariant preserved by depositFor. -/
+def peg_preserved_by_depositFor (operator : Address) (amount : Uint256) (s : ContractState) : Prop :=
+  (peg_invariant s) →
+  peg_invariant ((depositFor operator amount).run s).snd
 
-/--
-  `onlyRegistry` reverts when caller is not the registry.
--/
-def onlyRegistry_revert_spec (s : ContractState) : Prop :=
-  s.sender ≠ s.storageAddr registrySlot.slot →
-  ∃ msg, ((onlyRegistry).run s).fst = .revert msg s
+/-- Peg invariant preserved by depositFrom. -/
+def peg_preserved_by_depositFrom (from to : Address) (amount : Uint256) (s : ContractState) : Prop :=
+  (peg_invariant s) →
+  peg_invariant ((depositFrom from to amount).run s).snd
 
-/--
-  `onlyOwner` reverts when caller is not the owner.
--/
-def onlyOwner_revert_spec (s : ContractState) : Prop :=
-  s.sender ≠ s.storageAddr ownerSlot.slot →
-  ∃ msg, ((onlyOwner).run s).fst = .revert msg s
+/-- Peg invariant preserved by withdrawTo. -/
+def peg_preserved_by_withdrawTo (receiver : Address) (amount : Uint256) (s : ContractState) : Prop :=
+  (peg_invariant s) →
+  peg_invariant ((withdrawTo receiver amount).run s).snd
 
-/--
-  Transfer is always blocked between non-zero addresses.
--/
-def transfer_blocked_spec (from to : Address) (s : ContractState) : Prop :=
-  from ≠ 0 ∧ to ≠ 0 →
-  ∃ msg, ((doTransfer from to 1).run s).fst = .revert msg s
+/-- Peg invariant preserved by burnTickets. -/
+def peg_preserved_by_burnTickets (operator : Address) (amount : Uint256) (s : ContractState) : Prop :=
+  (peg_invariant s) →
+  peg_invariant ((burnTickets operator amount).run s).snd
+
+/-- Peg invariant preserved by payout. -/
+def peg_preserved_by_payout (to : Address) (amount : Uint256) (s : ContractState) : Prop :=
+  (peg_invariant s) →
+  peg_invariant ((payout to amount).run s).snd
+
+end Contracts.InterfoldTicketToken.Spec

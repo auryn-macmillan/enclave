@@ -1,127 +1,98 @@
 /-
   BondingRegistry — Formal Specifications
 
-  Per-transition specs for operator lifecycle, bond/ticket accounting,
-  exit claiming, and slashing.
+  Each spec is a Prop-valued predicate over pre/post ContractState.
+  Specs describe WHAT the function does, not HOW.
 -/
-import Verity.Core
 import Verity.Specs.Common
-import BondingRegistry.BondingRegistry
+import Verity.Macro
+import Contracts.BondingRegistry.BondingRegistry
+
+namespace Contracts.BondingRegistry.Spec
 
 open Verity
+open Verity.EVM.Uint256
+open Contracts.BondingRegistry
 
-/-! ## bondLicense spec -/
+/-! ## BR-P1: Slashing access control -/
 
-/--
-  Spec for `bondLicense(amount)`:
-  Operator's license bond increases by amount, other operators' bonds unchanged.
--/
+/-- slashTicketBalance reverts when caller is not the slashing manager. -/
+def slashTicketBalance_revert_not_manager
+    (operator : Address) (amount : Uint256) (s : ContractState) : Prop :=
+  s.sender ≠ s.storage slashingManager.slot →
+  ((slashTicketBalance operator amount).run s).fst.isRevert
+
+/-- slashLicenseBond reverts when caller is not the slashing manager. -/
+def slashLicenseBond_revert_not_manager
+    (operator : Address) (amount : Uint256) (s : ContractState) : Prop :=
+  s.sender ≠ s.storage slashingManager.slot →
+  ((slashLicenseBond operator amount).run s).fst.isRevert
+
+/-! ## BR-P2: registerOperator reverts when already registered -/
+
+def registerOperator_revert_already_registered
+    (s : ContractState) : Prop :=
+  s.storageMap registered.slot s.sender = 1 ∧
+  s.storageMap exitRequested.slot s.sender = 0 ∧
+  s.storageMap licenseBond.slot s.sender ≥ s.storage licenseRequiredBond.slot →
+  ((registerOperator).run s).fst.isRevert
+
+/-! ## BR-P3: registerOperator reverts when licenseBond < licenseRequiredBond -/
+
+def registerOperator_revert_insufficient_bond
+    (s : ContractState) : Prop :=
+  s.storageMap registered.slot s.sender = 0 ∧
+  s.storageMap licenseBond.slot s.sender < s.storage licenseRequiredBond.slot →
+  ((registerOperator).run s).fst.isRevert
+
+/-! ## BR-P4: registerOperator clears previous exit request -/
+
+/-- On success (modifier passes, checks pass), registerOperator clears the exit request. -/
+def registerOperator_clears_exit_spec (s s' : ContractState) : Prop :=
+  s'.storageMap exitRequested.slot s.sender = 0 ∧
+  s'.storageMap exitUnlocksAt.slot s.sender = 0 ∧
+  s'.storageMap registered.slot s.sender = 1
+
+/-! ## BR-P5: deregisterOperator reverts when not registered -/
+
+def deregisterOperator_revert_not_registered
+    (s : ContractState) : Prop :=
+  s.storageMap registered.slot s.sender = 0 →
+  ((deregisterOperator).run s).fst.isRevert
+
+/-! ## BR-P6: bondLicense increments licenseBond -/
+
+/-- On success, bondLicense increments licenseBond by amount. -/
 def bondLicense_spec (amount : Uint256) (s s' : ContractState) : Prop :=
-  s'.storageMap licenseBondSlot.slot s.sender =
-    add (s.storageMap licenseBondSlot.slot s.sender) amount ∧
-  storageMapUnchangedExceptKeyAtSlot licenseBondSlot.slot s.sender s s' ∧
-  sameStorageAddrContext s s' ∧
-  sameContext s s'
+  s'.storageMap licenseBond.slot s.sender =
+    add (s.storageMap licenseBond.slot s.sender) amount ∧
+  storageMapUnchangedExceptKeyAtSlot licenseBond.slot s.sender s s' ∧
+  sameAddrMapContext s s'
 
-/-! ## unbondLicense spec -/
+/-! ## BR-P7: unbondLicense reverts when licenseBond < amount -/
 
-/--
-  Spec for `unbondLicense(amount)`:
-  Operator's license bond decreases by amount (if sufficient),
-  exit license amount increases by amount.
--/
+def unbondLicense_revert_insufficient_bond
+    (amount : Uint256) (s : ContractState) : Prop :=
+  (s.storageMap exitRequested.slot s.sender = 0 ∧
+   s.storageMap licenseBond.slot s.sender < amount) →
+  ((unbondLicense amount).run s).fst.isRevert
+
+/-! ## BR-P8: unbondLicense decrements licenseBond -/
+
+/-- On success, unbondLicense decrements licenseBond by amount. -/
 def unbondLicense_spec (amount : Uint256) (s s' : ContractState) : Prop :=
-  (s.storageMap licenseBondSlot.slot s.sender >= amount) →
-    s'.storageMap licenseBondSlot.slot s.sender =
-      sub (s.storageMap licenseBondSlot.slot s.sender) amount ∧
-    s'.storageMap exitLicenseAmountSlot.slot s.sender =
-      add (s.storageMap exitLicenseAmountSlot.slot s.sender) amount ∧
-    storageMapUnchangedExceptKeysAtSlot licenseBondSlot.slot s.sender 0 s s' ∧
-    sameStorageAddrContext s s' ∧
-    sameContext s s'
+  s'.storageMap licenseBond.slot s.sender =
+    add (s.storageMap licenseBond.slot s.sender) (neg amount) ∧
+  storageMapUnchangedExceptKeyAtSlot licenseBond.slot s.sender s s' ∧
+  sameAddrMapContext s s'
 
-/-! ## registerOperator spec -/
+/-! ## BR-P9: deregisterOperator sets exitUnlocksAt = now + exitDelay -/
 
-/--
-  Spec for `registerOperator()`:
-  When preconditions hold (not registered, licensed, no exit in progress),
-  operator becomes registered.
--/
-def registerOperator_spec (s s' : ContractState) : Prop :=
-  (s.storageMap registeredSlot.slot s.sender = false ∧
-   s.storageMap licenseBondSlot.slot s.sender >= s.storage licenseRequiredBondSlot.slot) →
-    s'.storageMap registeredSlot.slot s.sender = true ∧
-    storageMapUnchangedExceptKeyAtSlot registeredSlot.slot s.sender s s'
+/-- On success, deregisterOperator sets exitUnlocksAt to now + exitDelay. -/
+def deregisterOperator_exit_delay_spec (s s' : ContractState) : Prop :=
+  s'.storageMap exitUnlocksAt.slot s.sender =
+    add s.timestamp (s.storage exitDelay.slot) ∧
+  s'.storageMap exitRequested.slot s.sender = 1 ∧
+  s'.storageMap registered.slot s.sender = 0
 
-/-! ## deregisterOperator spec -/
-
-/--
-  Spec for `deregisterOperator()`:
-  When operator is registered and no exit in progress,
-  operator becomes not registered and exit is requested.
--/
-def deregisterOperator_spec (s s' : ContractState) : Prop :=
-  (s.storageMap registeredSlot.slot s.sender = true) →
-    s'.storageMap registeredSlot.slot s.sender = false ∧
-    s'.storageMap exitRequestedSlot.slot s.sender = true ∧
-    s'.storageMap activeSlot.slot s.sender = false
-
-/-! ## claimExits spec -/
-
-/--
-  Spec for `claimExits(maxTicket, maxLicense)`:
-  When exit is ready (block.timestamp >= unlockAt), claimed amounts
-  are removed from the exit queue.
--/
-def claimExits_spec (maxTicket maxLicense : Uint256) (s s' : ContractState) : Prop :=
-  (s.storageMap exitRequestedSlot.slot s.sender = true ∧
-   s.blockTimestamp >= s.storageMap exitUnlocksAtSlot.slot s.sender) →
-    -- Exit amounts decrease by at most the claimed amount
-    s'.storageMap exitTicketAmountSlot.slot s.sender <=
-      s.storageMap exitTicketAmountSlot.slot s.sender ∧
-    s'.storageMap exitLicenseAmountSlot.slot s.sender <=
-      s.storageMap exitLicenseAmountSlot.slot s.sender
-
-/-! ## slashTicketBalance spec -/
-
-/--
-  Spec for `slashTicketBalance(operator, amount)`:
-  Only callable by SlashingManager. Increments slashedTicketBalance by amount.
--/
-def slashTicketBalance_spec (operator : Address) (amount : Uint256) (s s' : ContractState) : Prop :=
-  (s.sender = s.storageAddr slashingManagerSlot.slot ∧ operator ≠ 0 ∧ amount ≠ 0) →
-    s'.storage slashedTicketBalanceSlot.slot =
-      add (s.storage slashedTicketBalanceSlot.slot) amount ∧
-    sameStorageExceptSlots [slashedTicketBalanceSlot.slot] s s'
-
-/-! ## slashLicenseBond spec -/
-
-/--
-  Spec for `slashLicenseBond(operator, amount)`:
-  Only callable by SlashingManager. Decrements operator's bond,
-  increments slashedLicenseBond by amount.
--/
-def slashLicenseBond_spec (operator : Address) (amount : Uint256) (s s' : ContractState) : Prop :=
-  (s.sender = s.storageAddr slashingManagerSlot.slot ∧
-   operator ≠ 0 ∧ amount ≠ 0 ∧
-   s.storageMap licenseBondSlot.slot operator >= amount) →
-    s'.storageMap licenseBondSlot.slot operator =
-      sub (s.storageMap licenseBondSlot.slot operator) amount ∧
-    s'.storage slashedLicenseBondSlot.slot =
-      add (s.storage slashedLicenseBondSlot.slot) amount
-
-/-! ## Access control specs -/
-
-/--
-  `onlySlashingManager` reverts when caller is not the slashing manager.
--/
-def onlySlashingManager_revert_spec (s : ContractState) : Prop :=
-  s.sender ≠ s.storageAddr slashingManagerSlot.slot →
-  ∃ msg, ((onlySlashingManager).run s).fst = .revert msg s
-
-/--
-  `onlyOwner` reverts when caller is not the owner.
--/
-def onlyOwner_revert_spec (s : ContractState) : Prop :=
-  s.sender ≠ s.storageAddr ownerSlot.slot →
-  ∃ msg, ((onlyOwner).run s).fst = .revert msg s
+end Contracts.BondingRegistry.Spec

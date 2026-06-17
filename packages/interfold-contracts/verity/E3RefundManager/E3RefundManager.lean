@@ -1,111 +1,165 @@
 /-
-  E3RefundManager — Formally Verified Implementation
+  E3RefundManager — Verity Formal Verification
 
-  Translation of `packages/interfold-contracts/contracts/E3RefundManager.sol`.
-  Models the refund distribution with work-value BPS allocation, claim replay
-  protection, and slashed fund escrow.
+  Faithful translation of `contracts/E3RefundManager.sol` using `verity_contract`.
 
-  Focus: work allocation BPS bounds, claim idempotency, access control.
+  Modeling decisions:
+  - `onlyInterfold` guard: checks msg.sender == interfold address slot
+  - `onlyOwner` guard: checks msg.sender == owner address slot
+  - Per-E3 distribution state modeled via `storageMapUint` keyed by e3Id
+  - `claimed` nested mapping modeled as `storageMap2` (Uint256 → Address → Uint256)
+  - BPS math (work allocations, honest node counts, per-node amounts) — trust boundary,
+    modeled as oracle (simplified amounts stored directly)
+  - ERC20 transfers — not modeled (trust boundary)
+  - `interfold.getRequester(e3Id)` external call — trust boundary
+  - `interfold.getFailureReason(e3Id)` external call — trust boundary
+  - Honest node array iteration — trust boundary
+  - Treasury pull-payment ledgers — trust boundary
+  - Rounding dust and split logic — trust boundary
+
+  Proof objectives (see PROOF_OBJECTIVES.md):
+  - E3RM-P1: calculateRefund reverts when already calculated (idempotency)
+  - E3RM-P2: claimRequesterRefund reverts when already claimed (replay protection)
+  - E3RM-P3: escrowSlashedFunds reverts without onlyInterfold
+  - E3RM-P4: calculateRefund reverts without onlyInterfold
+  - E3RM-P5: On success, claimRequesterRefund sets claimed[e3Id][sender] = true
 -/
-import Verity.Core
-import Verity.Specs.Common
+import Contracts.Common
 
-open Verity
+namespace Contracts.E3RefundManager
 
-/-! ## Storage slot definitions -/
+open Verity hiding pure bind
+open Verity.EVM.Uint256
 
-def interfoldSlot : StorageSlot Address := ⟨0⟩
-def treasurySlot : StorageSlot Address := ⟨1⟩
-def ownerSlot : StorageSlot Address := ⟨2⟩
--- Work allocation BPS (basis points, 10000 = 100%)
-def committeeFormationBpsSlot : StorageSlot Uint256 := ⟨3⟩
-def dkgBpsSlot : StorageSlot Uint256 := ⟨4⟩
-def decryptionBpsSlot : StorageSlot Uint256 := ⟨5⟩
-def protocolBpsSlot : StorageSlot Uint256 := ⟨6⟩
-def successSlashedNodeBpsSlot : StorageSlot Uint256 := ⟨7⟩
+verity_contract E3RefundManager where
+  storage
+    -- Address slots
+    interfold : Address := slot 0
+    owner : Address := slot 1
 
--- Per-E3 state
-def distributionsCalculatedSlot : StorageSlot (Uint256 → Bool) := ⟨8⟩  -- e3Id → calculated
-def requesterAmountSlot : StorageSlot (Uint256 → Uint256) := ⟨9⟩
-def honestNodeAmountSlot : StorageSlot (Uint256 → Uint256) := ⟨10⟩
-def protocolAmountSlot : StorageSlot (Uint256 → Uint256) := ⟨11⟩
-def totalSlashedSlot : StorageSlot (Uint256 → Uint256) := ⟨12⟩
-def claimedSlot : StorageSlot (Uint256 → Address → Bool) := ⟨13⟩
-def pendingSlashedFundsSlot : StorageSlot (Uint256 → Uint256) := ⟨14⟩
-def honestNodeCountSlot : StorageSlot (Uint256 → Uint256) := ⟨15⟩
+    -- Per-E3 distribution state (storageMapUint: Uint256 → Uint256)
+    calculated : Uint256 → Uint256 := slot 2
+    requesterAmount : Uint256 → Uint256 := slot 3
+    honestNodeAmount : Uint256 → Uint256 := slot 4
+    perNodeAmount : Uint256 → Uint256 := slot 5
+    originalPayment : Uint256 → Uint256 := slot 6
+    honestNodeCount : Uint256 → Uint256 := slot 7
 
-/-! ## Helpers -/
+    -- Claim tracking: nested mapping e3Id → address → claimed (0/1)
+    claimed : Uint256 → Address → Uint256 := slot 8
 
-def onlyOwner : Contract Unit := do
-  let sender ← msgSender
-  let owner ← getStorageAddr ownerSlot
-  require (sender == owner) "not owner"
+    -- Per-E3 claim count
+    claimCount : Uint256 → Uint256 := slot 9
 
-def onlyInterfold : Contract Unit := do
-  let sender ← msgSender
-  let ifold ← getStorageAddr interfoldSlot
-  require (sender == ifold) "not interfold"
+    -- Pending slashed funds per E3
+    pendingSlashedFunds : Uint256 → Uint256 := slot 10
 
-/-! ## Core operations -/
+  -- Guard: restrict function to Interfold contract only
+  function onlyInterfold : Unit := do
+    let sender ← msgSender
+    let ifold ← getStorage interfold
+    require (sender == ifold) "caller is not Interfold"
 
-/--
-  `setWorkAllocation(cf, dkg, dec, prot, ssb)` — sets the work value BPS.
-  Only callable by owner. Validates BPS sum.
--/
-def setWorkAllocation
-    (cfBps dkgBps decBps protBps ssbBps : Uint256) : Contract Unit := do
-  onlyOwner
-  let total := add (add (add (add cfBps dkgBps) decBps) protBps) ssbBps
-  -- In real contract, this would check <= 10000 (100%)
-  -- We skip the sum check here for simplicity (would require looping)
-  setStorage committeeFormationBpsSlot cfBps
-  setStorage dkgBpsSlot dkgBps
-  setStorage decryptionBpsSlot decBps
-  setStorage protocolBpsSlot protBps
-  setStorage successSlashedNodeBpsSlot ssbBps
-  emitEvent "WorkAllocationUpdated" [cfBps, dkgBps, decBps, protBps, ssbBps] []
+  -- Guard: restrict function to contract owner only
+  function onlyOwner : Unit := do
+    let sender ← msgSender
+    let own ← getStorage owner
+    require (sender == own) "caller is not owner"
 
-/--
-  `calculateRefund(e3Id, originalPayment)` — computes refund distribution.
-  Only callable by Interfold. Idempotent (checked via calculated flag).
-  Modeled as storing the distribution directly (real contract uses BPS math).
--/
-def calculateRefund (e3Id : Uint256) (originalPayment : Uint256) : Contract Unit := do
-  onlyInterfold
-  require (e3Id != 0) "invalid e3"
-  let already ← getMapping distributionsCalculatedSlot e3Id
-  require (!already) "already calculated"
-  -- In real contract: BPS math splitting payment among phases
-  -- Simplified model: store the payment data for verification
-  setMapping distributionsCalculatedSlot e3Id true
-  setMapping requesterAmountSlot e3Id originalPayment
-  emitEvent "RefundDistributionCalculated" [e3Id, originalPayment] []
+  -- calculateRefund(e3Id, originalPayment)
+  -- Only Interfold. Reverts if already calculated.
+  -- Stores distribution amounts (BPS math is trust boundary — simplified).
+  function calculateRefund (e3Id : Uint256) (originalPayment : Uint256) : Unit := do
+    onlyInterfold
+    let calc ← getMapping calculated e3Id
+    require (calc == 0) "Already calculated"
+    require (originalPayment > 0) "No payment"
+    -- Store distribution amounts (simplified — trust BPS math oracle)
+    setMapping calculated e3Id 1
+    setMapping originalPayment e3Id originalPayment
+    setMapping requesterAmount e3Id originalPayment
+    setMapping perNodeAmount e3Id 1
+    emitEvent "RefundDistributionCalculated" [e3Id] []
 
-/--
-  `claimRequesterRefund(e3Id)` — requester claims their refund.
-  Replay-protected: reverts if already claimed.
--/
-def claimRequesterRefund (e3Id : Uint256) : Contract Uint256 := do
-  let sender ← msgSender
-  let calculated ← getMapping distributionsCalculatedSlot e3Id
-  require calculated "refund not calculated"
-  let already ← getMapping2 claimedSlot e3Id sender
-  require (!already) "already claimed"
-  let amount ← getMapping requesterAmountSlot e3Id
-  require (amount != 0) "no refund available"
-  setMapping2 claimedSlot e3Id sender true
-  setMapping requesterAmountSlot e3Id 0
-  emitEvent "RefundClaimed" [e3Id, amount] [addressToWord sender]
-  pure amount
+  -- claimRequesterRefund(e3Id)
+  -- Only callable by the E3 requester. Reverts if not calculated or already claimed.
+  -- On success, sets claimed[e3Id][sender] = 1.
+  function claimRequesterRefund (e3Id : Uint256) : Unit := do
+    let calc ← getMapping calculated e3Id
+    require (calc == 1) "Refund not calculated"
+    let sender ← msgSender
+    let alreadyClaimed ← getMapping2 claimed e3Id sender
+    require (alreadyClaimed == 0) "Already claimed"
+    -- Increment claim count
+    let cnt ← getMapping claimCount e3Id
+    let newCnt ← requireSomeUint (safeAdd cnt 1) "count overflow"
+    setMapping claimCount e3Id newCnt
+    -- Mark as claimed
+    setMapping2 claimed e3Id sender 1
+    -- ERC20 transfer: trust boundary (not modeled)
+    let amt ← getMapping requesterAmount e3Id
+    require (amt > 0) "No refund available"
+    emitEvent "RefundClaimed" [e3Id, amt] [addressToWord sender]
 
-/--
-  `escrowSlashedFunds(e3Id, amount)` — escrows slashed funds for an E3.
-  Only callable by Interfold.
--/
-def escrowSlashedFunds (e3Id : Uint256) (amount : Uint256) : Contract Unit := do
-  onlyInterfold
-  require (amount != 0) "zero amount"
-  let current ← getMapping pendingSlashedFundsSlot e3Id
-  let newEscrow ← requireSomeUint (safeAdd current amount) "escrow overflow"
-  setMapping pendingSlashedFundsSlot e3Id newEscrow
-  emitEvent "SlashedFundsEscrowed" [e3Id, amount] []
+  -- claimHonestNodeReward(e3Id)
+  -- Only callable by honest nodes. Reverts if not calculated or already claimed.
+  -- On success, sets claimed[e3Id][sender] = 1.
+  -- Honest node membership check is a trust boundary (requires array iteration).
+  function claimHonestNodeReward (e3Id : Uint256) : Unit := do
+    let calc ← getMapping calculated e3Id
+    require (calc == 1) "Refund not calculated"
+    let sender ← msgSender
+    let alreadyClaimed ← getMapping2 claimed e3Id sender
+    require (alreadyClaimed == 0) "Already claimed"
+    -- Increment claim count
+    let cnt ← getMapping claimCount e3Id
+    let newCnt ← requireSomeUint (safeAdd cnt 1) "count overflow"
+    setMapping claimCount e3Id newCnt
+    -- Mark as claimed
+    setMapping2 claimed e3Id sender 1
+    -- ERC20 transfer: trust boundary (not modeled)
+    let amt ← getMapping perNodeAmount e3Id
+    require (amt > 0) "No refund available"
+    emitEvent "RefundClaimed" [e3Id, amt] [addressToWord sender]
+
+  -- escrowSlashedFunds(e3Id, amount)
+  -- Only Interfold. Increments pending slashed funds.
+  -- Post-calculation routing to honest nodes / requester is a trust boundary.
+  function escrowSlashedFunds (e3Id : Uint256) (amount : Uint256) : Unit := do
+    onlyInterfold
+    require (amount > 0) "Zero amount"
+    let pending ← getMapping pendingSlashedFunds e3Id
+    let newPending ← requireSomeUint (safeAdd pending amount) "overflow"
+    setMapping pendingSlashedFunds e3Id newPending
+    emitEvent "SlashedFundsEscrowed" [e3Id, amount] []
+
+  -- distributeSlashedFundsOnSuccess(e3Id)
+  -- Only Interfold. Distributes pending slashed funds (BPS math and node splits
+  -- are trust boundaries).
+  function distributeSlashedFundsOnSuccess (e3Id : Uint256) : Unit := do
+    onlyInterfold
+    let escrowed ← getMapping pendingSlashedFunds e3Id
+    if escrowed == 0 then
+      pure ()
+    else
+      setMapping pendingSlashedFunds e3Id 0
+      emitEvent "SlashedFundsDistributedOnSuccess" [e3Id, escrowed] []
+
+  -- setWorkAllocation
+  -- Only owner. Sets BPS allocation values (trust boundary).
+  function setWorkAllocation : Unit := do
+    onlyOwner
+    -- BPS allocation values are an oracle — we only model the access control
+    emitEvent "WorkAllocationUpdated" [] []
+
+  -- withdrawOrphanedSlashedFunds(e3Id)
+  -- Only owner. Drains pending slashed funds for an E3 in terminal state.
+  -- E3 terminal state check is an oracle (external call).
+  function withdrawOrphanedSlashedFunds (e3Id : Uint256) : Unit := do
+    onlyOwner
+    let pending ← getMapping pendingSlashedFunds e3Id
+    require (pending > 0) "No orphaned funds"
+    setMapping pendingSlashedFunds e3Id 0
+    emitEvent "OrphanedSlashedFundsWithdrawn" [e3Id, pending] []
+
+end Contracts.E3RefundManager

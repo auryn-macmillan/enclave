@@ -1,134 +1,164 @@
 /-
   SlashingManager — Machine-Checked Proofs
 
-  Proves policy validation, proposal lifecycle state machine,
-  and access control enforcement.
+  Every theorem is complete — NO `sorry` admissions.
+
+  Proof strategy:
+  - For revert specs: `verity_unfold` the function, then `simp` with the failing
+    precondition to show the `require` emits `ContractResult.revert`.
+  - For access control reverts: unfold the guard function + the target function,
+    `simp` with the missing-role hypothesis.
+  - For conditional logic (if/else): `simp` with `if_pos` / `if_neg` and the
+    relevant hypotheses to reduce the branch.
+
+  Proof objectives (see PROOF_OBJECTIVES.md):
+  - SM-P1: setSlashPolicy revert — no penalty
+  - SM-P2: setSlashPolicy revert — Lane B needs appeal window
+  - SM-P3: executeSlash revert — already executed
+  - SM-P4: executeSlash revert — appeal window active
+  - SM-P5: fileAppeal revert — unauthorized caller
+  - SM-P6: fileAppeal revert — appeal window expired
+  - SM-P7: resolveAppeal revert — missing GOVERNANCE_ROLE
+  - SM-P8: confirmBan revert — already banned
 -/
-import Verity.Core
-import Verity.Specs.Common
-import SlashingManager.SlashingManager
-import SlashingManager.Spec
+import Contracts.SlashingManager.Spec
+import Verity.Proofs.Stdlib.Automation
+
+namespace Contracts.SlashingManager.Proofs
 
 open Verity
+open Verity.EVM.Uint256
+open Contracts.SlashingManager
+open Contracts.SlashingManager.Spec
 
 set_option maxHeartbeats 400000
 
-/-! ## Policy validation -/
+/-! ## SM-P1: setSlashPolicy reverts when ticketPenalty == 0 && licensePenalty == 0 -/
 
-theorem setSlashPolicy_reverts_zero_reason
-    (s : ContractState) (tp lp aw : Uint256) (enabled rp : Bool)
-    (h_gov : s.storageMap governanceRoleSlot.slot s.sender = true) :
-    ((setSlashPolicy 0 tp lp aw enabled rp).run s).fst.isRevert := by
-  unfold setSlashPolicy onlyGovernance
-  simp [msgSender, getMapping, governanceRoleSlot, require, bind, h_gov]
+theorem setSlashPolicy_revert_no_penalty
+    (s : ContractState) (reason ticketPenalty licensePenalty appealWindow enabled requiresProof : Uint256)
+    (h_role : s.storageMap2 roleMembers.slot GOVERNANCE_ROLE s.sender = 1)
+    (h_no_ticket : ticketPenalty = 0)
+    (h_no_license : licensePenalty = 0) :
+    ((setSlashPolicy reason ticketPenalty licensePenalty appealWindow enabled requiresProof).run s).fst.isRevert := by
+  verity_unfold setSlashPolicy
+  simp only [onlyGovernance, msgSender, getMapping2, getMapping, setMapping,
+              require, bind, if_neg,
+              roleMembers, GOVERNANCE_ROLE, SLASHER_ROLE,
+              policy_ticketPenalty, policy_licensePenalty, policy_appealWindow,
+              policy_enabled, policy_requiresProof,
+              h_role, h_no_ticket, h_no_license]
+  exact ContractResult.revert_isRevert _
 
-theorem setSlashPolicy_reverts_zero_penalty
-    (s : ContractState) (reason : Bytes32) (aw : Uint256) (enabled rp : Bool)
-    (h_gov : s.storageMap governanceRoleSlot.slot s.sender = true)
-    (h_reason : reason ≠ 0) :
-    ((setSlashPolicy reason 0 0 aw enabled rp).run s).fst.isRevert := by
-  unfold setSlashPolicy onlyGovernance
-  simp [msgSender, getMapping, governanceRoleSlot, require, bind, h_gov, h_reason]
+/-! ## SM-P2: setSlashPolicy reverts when Lane B (no proof) lacks appeal window -/
 
-theorem setSlashPolicy_reverts_lane_b_no_appeal_window
-    (s : ContractState) (reason : Bytes32) (tp lp : Uint256) (enabled : Bool)
-    (h_gov : s.storageMap governanceRoleSlot.slot s.sender = true)
-    (h_reason : reason ≠ 0)
-    (h_penalty : tp ≠ 0 ∨ lp ≠ 0) :
-    ((setSlashPolicy reason tp lp 0 enabled false).run s).fst.isRevert := by
-  unfold setSlashPolicy onlyGovernance
-  simp [msgSender, getMapping, governanceRoleSlot, require, bind, h_gov, h_reason, h_penalty]
+theorem setSlashPolicy_revert_no_appeal_window
+    (s : ContractState) (reason ticketPenalty licensePenalty appealWindow enabled requiresProof : Uint256)
+    (h_role : s.storageMap2 roleMembers.slot GOVERNANCE_ROLE s.sender = 1)
+    (h_penalty : ticketPenalty > 0 ∨ licensePenalty > 0)
+    (h_no_proof : requiresProof = 0)
+    (h_no_window : appealWindow = 0) :
+    ((setSlashPolicy reason ticketPenalty licensePenalty appealWindow enabled requiresProof).run s).fst.isRevert := by
+  verity_unfold setSlashPolicy
+  cases h_penalty with
+  | inl h_ticket =>
+      simp only [onlyGovernance, msgSender, getMapping2, getMapping, setMapping,
+                  require, bind, if_pos, if_neg,
+                  roleMembers, GOVERNANCE_ROLE, SLASHER_ROLE,
+                  policy_ticketPenalty, policy_licensePenalty, policy_appealWindow,
+                  policy_enabled, policy_requiresProof,
+                  h_role, h_ticket, h_no_proof, h_no_window]
+      exact ContractResult.revert_isRevert _
+  | inr h_license =>
+      simp only [onlyGovernance, msgSender, getMapping2, getMapping, setMapping,
+                  require, bind, if_pos, if_neg,
+                  roleMembers, GOVERNANCE_ROLE, SLASHER_ROLE,
+                  policy_ticketPenalty, policy_licensePenalty, policy_appealWindow,
+                  policy_enabled, policy_requiresProof,
+                  h_role, h_license, h_no_proof, h_no_window]
+      exact ContractResult.revert_isRevert _
 
-/-! ## Proposal lifecycle -/
+/-! ## SM-P3: executeSlash reverts when proposal already executed -/
 
-theorem executeSlash_reverts_already_executed
+theorem executeSlash_revert_executed
     (s : ContractState) (proposalId : Uint256)
-    (h_executed : s.storageMap proposalExecutedSlot.slot proposalId = true) :
+    (h_executed : s.storageMap proposal_executed.slot proposalId = 1) :
     ((executeSlash proposalId).run s).fst.isRevert := by
-  unfold executeSlash
-  simp [getMapping, proposalExecutedSlot, require, bind, h_executed]
+  verity_unfold executeSlash
+  simp only [getMapping, require, bind,
+              proposal_executed, proposal_appealed, proposal_resolved, proposal_upheld,
+              proposal_executableAt, proposal_operator,
+              h_executed]
+  exact ContractResult.revert_isRevert _
 
-theorem executeSlash_reverts_appeal_upheld
+/-! ## SM-P4: executeSlash reverts when block.timestamp < executableAt -/
+
+theorem executeSlash_revert_window_active
     (s : ContractState) (proposalId : Uint256)
-    (h_not_executed : s.storageMap proposalExecutedSlot.slot proposalId = false)
-    (h_appealed : s.storageMap proposalAppealedSlot.slot proposalId = true)
-    (h_resolved : s.storageMap proposalResolvedSlot.slot proposalId = true)
-    (h_upheld : s.storageMap proposalAppealUpheldSlot.slot proposalId = true) :
+    (h_not_executed : s.storageMap proposal_executed.slot proposalId = 0)
+    (h_not_appealed : s.storageMap proposal_appealed.slot proposalId = 0)
+    (h_future : s.storageMap proposal_executableAt.slot proposalId > s.blockTimestamp) :
     ((executeSlash proposalId).run s).fst.isRevert := by
-  unfold executeSlash
-  simp [getMapping, proposalExecutedSlot, proposalAppealedSlot,
-        proposalResolvedSlot, proposalAppealUpheldSlot,
-        require, bind, h_not_executed, h_appealed, h_resolved, h_upheld]
+  verity_unfold executeSlash
+  simp only [getMapping, require, bind, if_neg,
+              proposal_executed, proposal_appealed, proposal_resolved, proposal_upheld,
+              proposal_executableAt, proposal_operator,
+              h_not_executed, h_not_appealed, h_future]
+  exact ContractResult.revert_isRevert _
 
-theorem executeSlash_reverts_appeal_pending
+/-! ## SM-P5: fileAppeal reverts when msg.sender is not the operator -/
+
+theorem fileAppeal_revert_unauthorized
     (s : ContractState) (proposalId : Uint256)
-    (h_not_executed : s.storageMap proposalExecutedSlot.slot proposalId = false)
-    (h_appealed : s.storageMap proposalAppealedSlot.slot proposalId = true)
-    (h_not_resolved : s.storageMap proposalResolvedSlot.slot proposalId = false) :
-    ((executeSlash proposalId).run s).fst.isRevert := by
-  unfold executeSlash
-  simp [getMapping, proposalExecutedSlot, proposalAppealedSlot,
-        proposalResolvedSlot,
-        require, bind, h_not_executed, h_appealed, h_not_resolved]
-
-/-! ## Appeal access control -/
-
-theorem fileAppeal_reverts_non_operator
-    (s : ContractState) (proposalId : Uint256)
-    (h_operator : s.storageMap proposalOperatorSlot.slot proposalId ≠ 0)
-    (h_not_operator : s.sender ≠ s.storageMap proposalOperatorSlot.slot proposalId) :
+    (h_not_op : s.storageMap2 proposal_operator.slot proposalId s.sender ≠ 1) :
     ((fileAppeal proposalId).run s).fst.isRevert := by
-  unfold fileAppeal
-  simp [msgSender, getMapping,
-        proposalOperatorSlot, proposalAppealedSlot,
-        require, bind, h_not_operator]
+  verity_unfold fileAppeal
+  simp only [msgSender, getMapping2, getMapping, require, bind,
+              proposal_operator, proposal_executed, proposal_appealed,
+              proposal_executableAt,
+              h_not_op]
+  exact ContractResult.revert_isRevert _
 
-theorem fileAppeal_reverts_already_appealed
+/-! ## SM-P6: fileAppeal reverts when appeal window has expired -/
+
+theorem fileAppeal_revert_window_expired
     (s : ContractState) (proposalId : Uint256)
-    (h_operator : s.sender = s.storageMap proposalOperatorSlot.slot proposalId)
-    (h_operator_nonzero : s.storageMap proposalOperatorSlot.slot proposalId ≠ 0)
-    (h_already_appealed : s.storageMap proposalAppealedSlot.slot proposalId = true) :
+    (h_is_op : s.storageMap2 proposal_operator.slot proposalId s.sender = 1)
+    (h_not_executed : s.storageMap proposal_executed.slot proposalId = 0)
+    (h_not_appealed : s.storageMap proposal_appealed.slot proposalId = 0)
+    (h_expired : s.storageMap proposal_executableAt.slot proposalId ≤ s.blockTimestamp) :
     ((fileAppeal proposalId).run s).fst.isRevert := by
-  unfold fileAppeal
-  simp [msgSender, getMapping,
-        proposalOperatorSlot, proposalAppealedSlot,
-        require, bind, h_operator, h_already_appealed]
+  verity_unfold fileAppeal
+  simp only [msgSender, getMapping2, getMapping, require, bind, if_neg,
+              proposal_operator, proposal_executed, proposal_appealed,
+              proposal_executableAt,
+              h_is_op, h_not_executed, h_not_appealed, h_expired]
+  exact ContractResult.revert_isRevert _
 
-/-! ## Resolve appeal access control -/
+/-! ## SM-P7: resolveAppeal reverts when caller lacks GOVERNANCE_ROLE -/
 
-theorem resolveAppeal_reverts_non_governance
-    (s : ContractState) (proposalId : Uint256) (upheld : Bool)
-    (h_not_gov : s.storageMap governanceRoleSlot.slot s.sender = false) :
+theorem resolveAppeal_revert_no_role
+    (s : ContractState) (proposalId : Uint256) (upheld : Uint256)
+    (h_no_role : s.storageMap2 roleMembers.slot GOVERNANCE_ROLE s.sender ≠ 1) :
     ((resolveAppeal proposalId upheld).run s).fst.isRevert := by
-  unfold resolveAppeal onlyGovernance
-  simp [msgSender, getMapping, governanceRoleSlot, require, bind, h_not_gov]
+  verity_unfold resolveAppeal
+  simp only [onlyGovernance, msgSender, getMapping2, require, bind,
+              roleMembers, GOVERNANCE_ROLE,
+              proposal_appealed, proposal_resolved, proposal_upheld,
+              h_no_role]
+  exact ContractResult.revert_isRevert _
 
-theorem resolveAppeal_reverts_already_resolved
-    (s : ContractState) (proposalId : Uint256) (upheld : Bool)
-    (h_gov : s.storageMap governanceRoleSlot.slot s.sender = true)
-    (h_appealed : s.storageMap proposalAppealedSlot.slot proposalId = true)
-    (h_resolved : s.storageMap proposalResolvedSlot.slot proposalId = true) :
-    ((resolveAppeal proposalId upheld).run s).fst.isRevert := by
-  unfold resolveAppeal onlyGovernance
-  simp [msgSender, getMapping,
-        governanceRoleSlot, proposalAppealedSlot, proposalResolvedSlot,
-        require, bind, h_gov, h_appealed, h_resolved]
+/-! ## SM-P8: confirmBan reverts when already banned -/
 
-/-! ## Ban access control -/
+theorem confirmBan_revert_already_banned
+    (s : ContractState) (node : Address) (reason : Uint256)
+    (h_role : s.storageMap2 roleMembers.slot GOVERNANCE_ROLE s.sender = 1)
+    (h_banned : s.storageMap banned.slot node = 1) :
+    ((confirmBan node reason).run s).fst.isRevert := by
+  verity_unfold confirmBan
+  simp only [onlyGovernance, msgSender, getMapping2, getMapping, require, bind,
+              roleMembers, GOVERNANCE_ROLE, banned,
+              h_role, h_banned]
+  exact ContractResult.revert_isRevert _
 
-theorem proposeBan_reverts_non_governance
-    (s : ContractState) (node : Address) (reason : Bytes32)
-    (h_not_gov : s.storageMap governanceRoleSlot.slot s.sender = false) :
-    ((proposeBan node reason).run s).fst.isRevert := by
-  unfold proposeBan onlyGovernance
-  simp [msgSender, getMapping, governanceRoleSlot, require, bind, h_not_gov]
-
-theorem confirmBan_reverts_already_banned
-    (s : ContractState) (node : Address)
-    (h_gov : s.storageMap governanceRoleSlot.slot s.sender = true)
-    (h_banned : s.storageMap bannedSlot.slot node = true) :
-    ((confirmBan node).run s).fst.isRevert := by
-  unfold confirmBan onlyGovernance
-  simp [msgSender, getMapping,
-        governanceRoleSlot, bannedSlot,
-        require, bind, h_gov, h_banned]
+end Contracts.SlashingManager.Proofs

@@ -4,36 +4,55 @@ Formal verification of critical Interfold smart contracts using
 [Verity](https://veritylang.com/), a Lean 4 embedded DSL for writing formally
 verified smart contracts.
 
-## Prerequisites
+## Approach
 
-1. Install Lean 4 via [elan](https://github.com/leanprover/elan)
-2. Clone Verity: `git clone https://github.com/lfglabs-dev/verity.git`
-3. Build Verity: `cd verity && lake build`
-4. Set `VERITY_ROOT` to point to the Verity repository
+Each contract is translated from Solidity into a `verity_contract` block —
+Verity's canonical authoring surface that provides:
+
+- Typed storage slots matching Solidity's layout
+- EDSL functions with `require` guards, `safeAdd`/`safeSub` for checked
+  arithmetic
+- Compilation to EVM Yul bytecode
+- Machine-checked proofs via Lean 4
+
+**Proof objectives are defined BEFORE implementation** — see
+`PROOF_OBJECTIVES.md`.
+
+## What's Verified
+
+| Contract             | Proof Objectives  | Key Properties                                                                                   |
+| -------------------- | ----------------- | ------------------------------------------------------------------------------------------------ |
+| InterfoldToken       | INTF-P1..P9       | Supply cap, mint accounting, one-way restriction switch, transfer whitelist, AccessControl roles |
+| InterfoldTicketToken | ITK-P1..P12 + PEG | 1:1 peg invariant, non-transferability, onlyRegistry access, registry timelock                   |
+| BondingRegistry      | BR-P1..P9         | Slashing access control, registration guards, bond accounting, exit delay                        |
+| E3RefundManager      | E3RM-P1..P5       | Claim replay protection, onlyInterfold access, distribution idempotency                          |
+| SlashingManager      | SM-P1..P8         | Policy validation, proposal lifecycle, appeal window, governance access                          |
+
+## Trust Boundaries
+
+See `PROOF_OBJECTIVES.md` § Trust Boundaries Summary. Key boundaries:
+
+- `SafeERC20` transfers (OpenZeppelin v5)
+- `keccak256` and `ECDSA.recover` (cryptographic primitives)
+- Cross-contract calls (each contract verified independently)
+- `ExitQueueLib` internal mechanics (simplified per-operator state)
+- `ERC20Votes` checkpoint logic (not modeled)
 
 ## Building
 
 ```bash
-lake build                          # Verify all proofs
-lake build Contracts.InterfoldToken # Build specific contract
+# Prerequisites: elan (Lean 4), Foundry, solc 0.8.33+
+git clone https://github.com/lfglabs-dev/verity.git
+cd verity && lake build
+
+# Build Interfold verification
+lake build Contracts.InterfoldToken.Proofs.Basic
 ```
 
-## Compiling to EVM Yul
+## Verification Checklist
 
 ```bash
-lake exe verity-compiler --contract InterfoldToken -o artifacts/yul
+# All proofs must compile with zero `sorry` admissions
+lake build
+grep -r "sorry" . --include="*.lean"  # must return nothing
 ```
-
-## Contracts
-
-| Contract             | Status   | Description                                                    |
-| -------------------- | -------- | -------------------------------------------------------------- |
-| InterfoldToken       | Phase 1a | ERC20 governance token with mint cap and transfer restrictions |
-| InterfoldTicketToken | Phase 1b | Non-transferable ERC20Votes wrapper for operator staking       |
-| BondingRegistry      | Phase 2a | Operator fund custody, exit queue, slashing interface          |
-| E3RefundManager      | Phase 2b | Refund distribution for failed E3 computations                 |
-| SlashingManager      | Phase 2c | Fault attribution with two-lane slashing                       |
-
-## Trust Boundaries
-
-See `TrustBoundaries/Assumptions.lean` for documented trust assumptions.

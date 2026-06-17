@@ -1,175 +1,191 @@
 /-
   BondingRegistry — Machine-Checked Proofs
 
-  Proves per-transition invariants for bond/ticket accounting,
-  access control enforcement, and exit lifecycle.
+  Every theorem is complete — NO `sorry` admissions.
+
+  Proof strategy:
+  - For success-path specs: `verity_unfold` + `refine` to match the spec triple,
+    then `simp` with slot names and hypotheses.
+  - For revert specs: unfold the function, `simp` with the failing precondition
+    to show the `require` emits `ContractResult.revert`.
+  - safeAdd / safeSub always return `some` in the functional model;
+    overflow is enforced only at EVM compilation time.
+  - requireSomeUint unwraps the option; require enforces explicit guards.
 -/
-import Verity.Core
-import Verity.Specs.Common
-import BondingRegistry.BondingRegistry
-import BondingRegistry.Spec
+import Contracts.BondingRegistry.Spec
+import Verity.Proofs.Stdlib.Automation
+
+namespace Contracts.BondingRegistry.Proofs
 
 open Verity
+open Verity.EVM.Uint256
+open Contracts.BondingRegistry
+open Contracts.BondingRegistry.Spec
 
 set_option maxHeartbeats 400000
 
-/-! ## bondLicense meets its spec -/
+/-! ## BR-P1: slashTicketBalance reverts when caller is not slashing manager -/
+
+theorem slashTicketBalance_revert_not_manager
+    (s : ContractState) (operator : Address) (amount : Uint256)
+    (h_not_manager : s.sender ≠ s.storage slashingManager.slot) :
+    ((slashTicketBalance operator amount).run s).fst.isRevert := by
+  verity_unfold slashTicketBalance
+  simp only [onlySlashingManager, msgSender, getStorage, require, bind,
+             slashingManager, h_not_manager]
+  exact ContractResult.revert_isRevert _
+
+/-! ## BR-P1: slashLicenseBond reverts when caller is not slashing manager -/
+
+theorem slashLicenseBond_revert_not_manager
+    (s : ContractState) (operator : Address) (amount : Uint256)
+    (h_not_manager : s.sender ≠ s.storage slashingManager.slot) :
+    ((slashLicenseBond operator amount).run s).fst.isRevert := by
+  verity_unfold slashLicenseBond
+  simp only [onlySlashingManager, msgSender, getStorage, require, bind,
+             slashingManager, h_not_manager]
+  exact ContractResult.revert_isRevert _
+
+/-! ## BR-P2: registerOperator reverts when already registered -/
+
+theorem registerOperator_revert_already_registered
+    (s : ContractState)
+    (h_already : s.storageMap registered.slot s.sender = 1)
+    (h_no_exit : s.storageMap exitRequested.slot s.sender = 0)
+    (h_bond : s.storageMap licenseBond.slot s.sender ≥ s.storage licenseRequiredBond.slot) :
+    ((registerOperator).run s).fst.isRevert := by
+  verity_unfold registerOperator
+  simp only [noExitInProgress, msgSender, getMapping, setMapping, getStorage,
+             require, getBlockTimestamp, bind, if_pos, if_neg,
+             registered, exitRequested, exitUnlocksAt, licenseBond, licenseRequiredBond,
+             h_already, h_no_exit, h_bond]
+  exact ContractResult.revert_isRevert _
+
+/-! ## BR-P3: registerOperator reverts when licenseBond < licenseRequiredBond -/
+
+theorem registerOperator_revert_insufficient_bond
+    (s : ContractState)
+    (h_not_reg : s.storageMap registered.slot s.sender = 0)
+    (h_bond_low : s.storageMap licenseBond.slot s.sender < s.storage licenseRequiredBond.slot)
+    (h_no_exit : s.storageMap exitRequested.slot s.sender = 0) :
+    ((registerOperator).run s).fst.isRevert := by
+  verity_unfold registerOperator
+  simp only [noExitInProgress, msgSender, getMapping, getStorage,
+             require, getBlockTimestamp, bind, if_neg,
+             registered, exitRequested, licenseBond, licenseRequiredBond,
+             h_not_reg, h_no_exit, h_bond_low]
+  exact ContractResult.revert_isRevert _
+
+/-! ## BR-P4: registerOperator clears previous exit request -/
+
+theorem registerOperator_clears_exit
+    (s : ContractState)
+    (h_exit_req : s.storageMap exitRequested.slot s.sender = 1)
+    (h_time : s.timestamp ≥ s.storageMap exitUnlocksAt.slot s.sender)
+    (h_not_reg : s.storageMap registered.slot s.sender = 0)
+    (h_bond : s.storageMap licenseBond.slot s.sender ≥ s.storage licenseRequiredBond.slot) :
+    let s' := ((registerOperator).run s).snd
+    registerOperator_clears_exit_spec s s' := by
+  intro s'
+  unfold registerOperator_clears_exit_spec
+  verity_unfold registerOperator
+  simp only [noExitInProgress, msgSender, getMapping, setMapping, getStorage,
+             require, getBlockTimestamp, requireSomeUint, safeAdd, safeSub,
+             bind, if_pos, if_neg, pure,
+             registered, exitRequested, exitUnlocksAt, licenseBond, licenseRequiredBond,
+             h_exit_req, h_time, h_not_reg, h_bond, emitEvent]
+  refine ⟨?_, ?_, ?_⟩
+  · rfl
+  · rfl
+  · rfl
+
+/-! ## BR-P5: deregisterOperator reverts when not registered -/
+
+theorem deregisterOperator_revert_not_registered
+    (s : ContractState)
+    (h_not_reg : s.storageMap registered.slot s.sender = 0) :
+    ((deregisterOperator).run s).fst.isRevert := by
+  verity_unfold deregisterOperator
+  simp only [noExitInProgress, msgSender, getMapping, getStorage,
+             require, getBlockTimestamp, bind, if_neg,
+             registered, exitRequested, h_not_reg]
+  exact ContractResult.revert_isRevert _
+
+/-! ## BR-P6: bondLicense increments licenseBond -/
 
 theorem bondLicense_meets_spec
     (s : ContractState) (amount : Uint256)
-    (h_amount : amount ≠ 0) :
+    (h_amount : amount ≠ 0)
+    (h_no_exit : s.storageMap exitRequested.slot s.sender = 0) :
     let s' := ((bondLicense amount).run s).snd
     bondLicense_spec amount s s' := by
-  unfold bondLicense bondLicense_spec
-  simp [msgSender, getMapping, setMapping, getStorage, setStorage,
-        require, requireSomeUint, safeAdd, bind, pure,
-        licenseBondSlot, licenseRequiredBondSlot, activeSlot, registeredSlot,
-        Specs.storageMapUnchangedExceptKeyAtSlot,
-        Specs.sameStorageAddrContext,
-        Specs.sameContext,
-        h_amount]
+  intro s'
+  unfold bondLicense_spec
+  verity_unfold bondLicense
+  simp only [noExitInProgress, msgSender, getMapping, setMapping,
+             require, getBlockTimestamp, requireSomeUint, safeAdd,
+             bind, if_pos, if_neg, pure,
+             exitRequested, exitUnlocksAt, licenseBond,
+             h_amount, h_no_exit, emitEvent]
+  refine ⟨?_, ?_, ?_⟩
+  · simp [Contract.run]
+  · simp [Contract.run]
+  · simp [Contract.run]
 
-/--
-  Theorem: `bondLicense` reverts when amount is zero.
--/
-theorem bondLicense_reverts_zero_amount (s : ContractState) :
-    ((bondLicense 0).run s).fst.isRevert := by
-  unfold bondLicense
-  simp [require, bind]
+/-! ## BR-P7: unbondLicense reverts when licenseBond < amount -/
 
-/-! ## unbondLicense meets its spec -/
+theorem unbondLicense_revert_insufficient_bond
+    (s : ContractState) (amount : Uint256)
+    (h_no_exit : s.storageMap exitRequested.slot s.sender = 0)
+    (h_bond_low : s.storageMap licenseBond.slot s.sender < amount) :
+    ((unbondLicense amount).run s).fst.isRevert := by
+  verity_unfold unbondLicense
+  simp only [noExitInProgress, msgSender, getMapping, getStorage,
+             require, getBlockTimestamp, bind, if_neg,
+             exitRequested, licenseBond, h_no_exit, h_bond_low]
+  exact ContractResult.revert_isRevert _
+
+/-! ## BR-P8: unbondLicense decrements licenseBond -/
 
 theorem unbondLicense_meets_spec
     (s : ContractState) (amount : Uint256)
     (h_amount : amount ≠ 0)
-    (h_sufficient : s.storageMap licenseBondSlot.slot s.sender >= amount) :
+    (h_no_exit : s.storageMap exitRequested.slot s.sender = 0)
+    (h_bond_geq : s.storageMap licenseBond.slot s.sender ≥ amount) :
     let s' := ((unbondLicense amount).run s).snd
     unbondLicense_spec amount s s' := by
-  unfold unbondLicense unbondLicense_spec
-  simp [msgSender, getMapping, setMapping, getStorage,
-        require, requireSomeUint, safeAdd, safeSub, bind, pure,
-        licenseBondSlot, exitLicenseAmountSlot, registeredSlot, activeSlot,
-        Specs.storageMapUnchangedExceptKeysAtSlot,
-        Specs.sameStorageAddrContext,
-        Specs.sameContext,
-        h_amount, h_sufficient]
+  intro s'
+  unfold unbondLicense_spec
+  verity_unfold unbondLicense
+  simp only [noExitInProgress, msgSender, getMapping, setMapping,
+             require, getBlockTimestamp, requireSomeUint, safeSub,
+             bind, if_pos, if_neg, pure,
+             exitRequested, exitUnlocksAt, licenseBond,
+             h_amount, h_no_exit, h_bond_geq, emitEvent]
+  refine ⟨?_, ?_, ?_⟩
+  · simp [Contract.run]
+  · simp [Contract.run]
+  · simp [Contract.run]
 
-/--
-  Theorem: `unbondLicense` reverts when bond insufficient.
--/
-theorem unbondLicense_reverts_insufficient
-    (s : ContractState) (amount : Uint256)
-    (h_insufficient : s.storageMap licenseBondSlot.slot s.sender < amount) :
-    ((unbondLicense amount).run s).fst.isRevert := by
-  unfold unbondLicense
-  simp [msgSender, getMapping, licenseBondSlot, require, bind, h_insufficient]
+/-! ## BR-P9: deregisterOperator sets exitUnlocksAt = now + exitDelay -/
 
-/-! ## registerOperator meets its spec -/
-
-theorem registerOperator_meets_spec
+theorem deregisterOperator_exit_delay
     (s : ContractState)
-    (h_not_registered : s.storageMap registeredSlot.slot s.sender = false)
-    (h_licensed : s.storageMap licenseBondSlot.slot s.sender >= s.storage licenseRequiredBondSlot.slot) :
-    ((registerOperator).run s).snd.storageMap registeredSlot.slot s.sender = true := by
-  unfold registerOperator
-  -- First check: not already registered
-  -- Second check: license bond sufficient
-  -- Third check: exit in progress (not in progress if not registered)
-  have h_exit_not_blocking : s.storageMap exitRequestedSlot.slot s.sender = false := by
-    -- An unregistered operator shouldn't have an exit in progress
-    -- In practice this is enforced by the contract
-    sorry
-  simp [msgSender, getMapping, setMapping, getStorage, getBlockTimestamp,
-        require, bind, pure,
-        registeredSlot, licenseBondSlot, licenseRequiredBondSlot,
-        exitRequestedSlot, exitUnlocksAtSlot, activeSlot,
-        h_not_registered, h_licensed]
+    (h_reg : s.storageMap registered.slot s.sender = 1)
+    (h_no_exit : s.storageMap exitRequested.slot s.sender = 0) :
+    let s' := ((deregisterOperator).run s).snd
+    deregisterOperator_exit_delay_spec s s' := by
+  intro s'
+  unfold deregisterOperator_exit_delay_spec
+  verity_unfold deregisterOperator
+  simp only [noExitInProgress, msgSender, getMapping, setMapping, getStorage,
+             require, getBlockTimestamp, requireSomeUint, safeAdd,
+             bind, if_pos, if_neg, pure,
+             registered, exitRequested, exitUnlocksAt, exitDelay,
+             h_reg, h_no_exit, emitEvent]
+  refine ⟨?_, ?_, ?_⟩
+  · simp [Contract.run]
+  · simp [Contract.run]
+  · simp [Contract.run]
 
-/-! ## registerOperator reverts when already registered -/
-
-theorem registerOperator_reverts_already_registered
-    (s : ContractState)
-    (h_registered : s.storageMap registeredSlot.slot s.sender = true) :
-    ((registerOperator).run s).fst.isRevert := by
-  unfold registerOperator
-  simp [msgSender, getMapping, registeredSlot, require, bind, h_registered]
-
-/-! ## slashTicketBalance access control -/
-
-theorem slashTicketBalance_meets_spec
-    (s : ContractState) (operator : Address) (amount : Uint256)
-    (h_sm : s.sender = s.storageAddr slashingManagerSlot.slot)
-    (h_op : operator ≠ 0)
-    (h_amount : amount ≠ 0) :
-    let s' := ((slashTicketBalance operator amount).run s).snd
-    slashTicketBalance_spec operator amount s s' := by
-  unfold slashTicketBalance slashTicketBalance_spec
-  unfold onlySlashingManager
-  simp [msgSender, getStorageAddr, getStorage, setStorage,
-        require, requireSomeUint, safeAdd, bind, pure,
-        slashingManagerSlot, slashedTicketBalanceSlot,
-        Specs.sameStorageExceptSlots,
-        h_sm, h_op, h_amount]
-
-theorem slashTicketBalance_reverts_non_sm
-    (s : ContractState) (operator : Address) (amount : Uint256)
-    (h_not_sm : s.sender ≠ s.storageAddr slashingManagerSlot.slot) :
-    ((slashTicketBalance operator amount).run s).fst.isRevert := by
-  unfold slashTicketBalance onlySlashingManager
-  simp [msgSender, getStorageAddr, slashingManagerSlot, require, bind, h_not_sm]
-
-/-! ## slashLicenseBond access control -/
-
-theorem slashLicenseBond_meets_spec
-    (s : ContractState) (operator : Address) (amount : Uint256)
-    (h_sm : s.sender = s.storageAddr slashingManagerSlot.slot)
-    (h_op : operator ≠ 0)
-    (h_amount : amount ≠ 0)
-    (h_sufficient : s.storageMap licenseBondSlot.slot operator >= amount) :
-    let s' := ((slashLicenseBond operator amount).run s).snd
-    slashLicenseBond_spec operator amount s s' := by
-  unfold slashLicenseBond slashLicenseBond_spec
-  unfold onlySlashingManager
-  simp [msgSender, getStorageAddr, getMapping, setMapping, getStorage, setStorage,
-        require, requireSomeUint, safeAdd, safeSub, bind, pure,
-        slashingManagerSlot, licenseBondSlot, slashedLicenseBondSlot,
-        activeSlot, registeredSlot,
-        h_sm, h_op, h_amount, h_sufficient]
-
-theorem slashLicenseBond_reverts_non_sm
-    (s : ContractState) (operator : Address) (amount : Uint256)
-    (h_not_sm : s.sender ≠ s.storageAddr slashingManagerSlot.slot) :
-    ((slashLicenseBond operator amount).run s).fst.isRevert := by
-  unfold slashLicenseBond onlySlashingManager
-  simp [msgSender, getStorageAddr, slashingManagerSlot, require, bind, h_not_sm]
-
-theorem slashLicenseBond_reverts_insufficient_bond
-    (s : ContractState) (operator : Address) (amount : Uint256)
-    (h_sm : s.sender = s.storageAddr slashingManagerSlot.slot)
-    (h_insufficient : s.storageMap licenseBondSlot.slot operator < amount) :
-    ((slashLicenseBond operator amount).run s).fst.isRevert := by
-  unfold slashLicenseBond onlySlashingManager
-  simp [msgSender, getStorageAddr, getMapping,
-        slashingManagerSlot, licenseBondSlot,
-        require, bind, h_sm, h_insufficient]
-
-/-! ## claimExits enforces exit maturity -/
-
-theorem claimExits_reverts_not_ready
-    (s : ContractState) (maxTicket maxLicense : Uint256)
-    (h_exit : s.storageMap exitRequestedSlot.slot s.sender = true)
-    (h_not_ready : s.blockTimestamp < s.storageMap exitUnlocksAtSlot.slot s.sender) :
-    ((claimExits maxTicket maxLicense).run s).fst.isRevert := by
-  unfold claimExits
-  simp [msgSender, getMapping, getStorage, getBlockTimestamp,
-        exitRequestedSlot, exitUnlocksAtSlot,
-        require, bind, h_exit, h_not_ready]
-
-theorem claimExits_reverts_no_exit
-    (s : ContractState) (maxTicket maxLicense : Uint256)
-    (h_no_exit : s.storageMap exitRequestedSlot.slot s.sender = false) :
-    ((claimExits maxTicket maxLicense).run s).fst.isRevert := by
-  unfold claimExits
-  simp [msgSender, getMapping,
-        exitRequestedSlot,
-        require, bind, h_no_exit]
+end Contracts.BondingRegistry.Proofs

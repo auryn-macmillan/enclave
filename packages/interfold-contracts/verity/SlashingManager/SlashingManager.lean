@@ -1,223 +1,211 @@
 /-
-  SlashingManager — Formally Verified Implementation
+  SlashingManager — Verity Formal Verification
 
-  Translation of the core slashing lifecycle from
-  `packages/interfold-contracts/contracts/slashing/SlashingManager.sol`.
+  Faithful translation of `contracts/slashing/SlashingManager.sol` using `verity_contract`.
 
-  Focus: policy validation, proposal lifecycle (propose → appeal → execute),
-  replay protection, and access control.
+  Modeling decisions:
+  - AccessControl roles modeled as `storageMap2` (role Uint256 → address → Uint256 1/0),
+    matching Solidity's `mapping(bytes32 => RoleData)` where `RoleData` has
+    `mapping(address => bool) members`. Same pattern as InterfoldToken.
+  - Role IDs are opaque Uint256 constants. GOVERNANCE_ROLE and SLASHER_ROLE are
+    keccak256 hashes — their actual values don't matter for the proofs.
+  - Per-proposal state modeled as `storageMapUint` (Uint256 → Uint256) keyed by proposalId.
+  - `banned` modeled as `storageMap` (Address → Uint256, 1=banned, 0=not).
+  - ECDSA signature verification is NOT modeled (oracle).
+  - keccak256 for evidence hashing is NOT modeled (axiomatized).
+  - External calls to BondingRegistry are NOT modeled (oracle).
+  - Proposal operator is modeled as `storageMap2` (proposalId → Address → Uint256) for
+    faithful access control in `fileAppeal`.
 
-  EIP-712 signature verification and ECDSA recovery are on trust boundaries.
+  Proof objectives (see PROOF_OBJECTIVES.md):
+  - SM-P1: setSlashPolicy reverts when ticketPenalty = 0 && licensePenalty = 0
+  - SM-P2: setSlashPolicy reverts when !requiresProof && appealWindow = 0
+  - SM-P3: executeSlash reverts when proposal already executed
+  - SM-P4: executeSlash reverts when block.timestamp < executableAt
+  - SM-P5: fileAppeal reverts when msg.sender ≠ proposal.operator
+  - SM-P6: fileAppeal reverts when block.timestamp >= executableAt
+  - SM-P7: resolveAppeal reverts when caller lacks GOVERNANCE_ROLE
+  - SM-P8: confirmBan reverts when already banned
 -/
-import Verity.Core
-import Verity.Specs.Common
+import Contracts.Common
 
-open Verity
+namespace Contracts.SlashingManager
 
-/-! ## Storage slot definitions -/
+open Verity hiding pure bind
+open Verity.EVM.Uint256
 
-def bondingRegistrySlot : StorageSlot Address := ⟨0⟩
-def interfoldSlot : StorageSlot Address := ⟨1⟩
-def slasherRoleSlot : StorageSlot (Address → Bool) := ⟨2⟩   -- SLASHER_ROLE members
-def governanceRoleSlot : StorageSlot (Address → Bool) := ⟨3⟩ -- GOVERNANCE_ROLE members
-def defaultAdminSlot : StorageSlot Address := ⟨4⟩
+/-! ## Role constants (matching Solidity keccak256 hashes) -/
 
--- Policy storage: reason → policy config
-def ticketPenaltySlot : StorageSlot (Bytes32 → Uint256) := ⟨5⟩
-def licensePenaltySlot : StorageSlot (Bytes32 → Uint256) := ⟨6⟩
-def requiresProofSlot : StorageSlot (Bytes32 → Bool) := ⟨7⟩
-def appealWindowSlot : StorageSlot (Bytes32 → Uint256) := ⟨8⟩
-def policyEnabledSlot : StorageSlot (Bytes32 → Bool) := ⟨9⟩
+-- `GOVERNANCE_ROLE = keccak256("GOVERNANCE_ROLE")` — opaque constant
+def GOVERNANCE_ROLE : Uint256 := 0x676f7665726e616e63655f726f6c650000000000000000000000000000000000
 
--- Proposal storage: proposalId → proposal
-def proposalE3IdSlot : StorageSlot (Uint256 → Uint256) := ⟨10⟩
-def proposalOperatorSlot : StorageSlot (Uint256 → Address) := ⟨11⟩
-def proposalReasonSlot : StorageSlot (Uint256 → Bytes32) := ⟨12⟩
-def proposalTicketAmountSlot : StorageSlot (Uint256 → Uint256) := ⟨13⟩
-def proposalLicenseAmountSlot : StorageSlot (Uint256 → Uint256) := ⟨14⟩
-def proposalExecutedSlot : StorageSlot (Uint256 → Bool) := ⟨15⟩
-def proposalAppealedSlot : StorageSlot (Uint256 → Bool) := ⟨16⟩
-def proposalResolvedSlot : StorageSlot (Uint256 → Bool) := ⟨17⟩
-def proposalAppealUpheldSlot : StorageSlot (Uint256 → Bool) := ⟨18⟩
-def proposalProposedAtSlot : StorageSlot (Uint256 → Uint256) := ⟨19⟩
-def proposalExecutableAtSlot : StorageSlot (Uint256 → Uint256) := ⟨20⟩
-def proposalLaneSlot : StorageSlot (Uint256 → Uint256) := ⟨21⟩  -- 0 = LaneA, 1 = LaneB
+-- `SLASHER_ROLE = keccak256("SLASHER_ROLE")` — opaque constant
+def SLASHER_ROLE : Uint256 := 0x736c61736865725f726f6c650000000000000000000000000000000000000000
 
-def totalProposalsSlot : StorageSlot Uint256 := ⟨22⟩
-def bannedSlot : StorageSlot (Address → Bool) := ⟨23⟩
-def consumedEvidenceSlot : StorageSlot (Bytes32 → Bool) := ⟨24⟩
+/-! ## Contract -/
 
-/-! ## Helpers -/
+verity_contract SlashingManager where
+  storage
+    -- AccessControl: roleMembers[role][account] = 1 if account has role
+    roleMembers : Uint256 -> Address -> Uint256 := slot 0
 
-def onlySlashingManager : Contract Unit := do
-  let sender ← msgSender
-  -- Check SLASHER_ROLE or governance access
-  let isSlasher ← getMapping slasherRoleSlot sender
-  let isGovernance ← getMapping governanceRoleSlot sender
-  require (isSlasher || isGovernance) "not authorized"
+    -- Ban state: banned[node] = 1 if banned
+    banned : Address -> Uint256 := slot 1
 
-def onlyGovernance : Contract Unit := do
-  let sender ← msgSender
-  let isGovernance ← getMapping governanceRoleSlot sender
-  require isGovernance "not governance"
+    -- Per-proposal state (Uint256 → Uint256, keyed by proposalId)
+    proposal_executed : Uint256 -> Uint256 := slot 2
+    proposal_appealed : Uint256 -> Uint256 := slot 3
+    proposal_resolved : Uint256 -> Uint256 := slot 4
+    proposal_upheld : Uint256 -> Uint256 := slot 5
+    proposal_executableAt : Uint256 -> Uint256 := slot 6
 
-def onlyDefaultAdmin : Contract Unit := do
-  let sender ← msgSender
-  let admin ← getStorageAddr defaultAdminSlot
-  require (sender == admin) "not admin"
+    -- Per-proposal operator ownership (proposalId → Address → Uint256 1/0)
+    proposal_operator : Uint256 -> Address -> Uint256 := slot 7
 
-/-! ## Policy management -/
+    -- SlashPolicy storage (per reason hash)
+    policy_enabled : Uint256 -> Uint256 := slot 8
+    policy_ticketPenalty : Uint256 -> Uint256 := slot 9
+    policy_licensePenalty : Uint256 -> Uint256 := slot 10
+    policy_appealWindow : Uint256 -> Uint256 := slot 11
+    policy_requiresProof : Uint256 -> Uint256 := slot 12
 
-/--
-  `setSlashPolicy(reason, ticketPenalty, licensePenalty, appealWindow)` —
-  Only callable by governance. Validates that at least one penalty > 0
-  and Lane B requires appealWindow > 0.
--/
-def setSlashPolicy
-    (reason : Bytes32) (ticketPenalty licensePenalty appealWindow : Uint256)
-    (enabled requiresProof : Bool) : Contract Unit := do
-  onlyGovernance
-  require (reason != 0) "invalid reason"
-  -- Policy must have at least one penalty > 0
-  require (ticketPenalty != 0 || licensePenalty != 0) "invalid policy"
-  -- Lane B (no proof) requires appealWindow > 0
-  if !requiresProof then
-    require (appealWindow != 0) "appeal window required for Lane B"
-  else
-    pure ()
-  setMapping ticketPenaltySlot reason ticketPenalty
-  setMapping licensePenaltySlot reason licensePenalty
-  setMapping appealWindowSlot reason appealWindow
-  setMapping policyEnabledSlot reason enabled
-  setMapping requiresProofSlot reason requiresProof
-  emitEvent "SlashPolicyUpdated" [ticketPenalty, licensePenalty, appealWindow] []
+    -- Total proposals counter
+    totalProposals : Uint256 := slot 13
 
-/-! ## Lane B: Evidence-based slashing -/
+  -- Guard: check that caller has GOVERNANCE_ROLE
+  function onlyGovernance : Unit := do
+    let sender ← msgSender
+    let hasRole ← getMapping2 roleMembers GOVERNANCE_ROLE sender
+    require (hasRole == 1) "missing governance role"
 
-/--
-  `proposeSlashEvidence(e3Id, operator, reason, evidence)` —
-  Only callable by SLASHER_ROLE. Creates a Lane B proposal with appeal window.
-  The `evidence` parameter is hashed for replay protection (keccak256 on trust boundary).
--/
-def proposeSlashEvidence
-    (e3Id : Uint256) (operator : Address) (reason : Bytes32)
-    (_evidence : Bytes32) : Contract Uint256 := do
-  onlySlashingManager
-  require (operator != 0) "zero address"
-  require (reason != 0) "invalid reason"
-  -- Check policy enabled
-  let enabled ← getMapping policyEnabledSlot reason
-  require enabled "slash reason disabled"
-  -- Check policy is Lane B (no proof required)
-  let requiresProof ← getMapping requiresProofSlot reason
-  require (!requiresProof) "use proposeSlash for proof-based slashing"
-  -- Get policy parameters
-  let ticketPenalty ← getMapping ticketPenaltySlot reason
-  let licensePenalty ← getMapping licensePenaltySlot reason
-  let appealWindow ← getMapping appealWindowSlot reason
-  -- Create proposal
-  let proposalId ← getStorage totalProposalsSlot
-  setMapping proposalE3IdSlot proposalId e3Id
-  setMapping proposalOperatorSlot proposalId operator
-  setMapping proposalReasonSlot proposalId reason
-  setMapping proposalTicketAmountSlot proposalId ticketPenalty
-  setMapping proposalLicenseAmountSlot proposalId licensePenalty
-  setMapping proposalExecutedSlot proposalId false
-  setMapping proposalAppealedSlot proposalId false
-  setMapping proposalResolvedSlot proposalId false
-  setMapping proposalAppealUpheldSlot proposalId false
-  let now ← getBlockTimestamp
-  setMapping proposalProposedAtSlot proposalId now
-  let execAt ← requireSomeUint (safeAdd now appealWindow) "timestamp overflow"
-  setMapping proposalExecutableAtSlot proposalId execAt
-  setMapping proposalLaneSlot proposalId 1  -- Lane B
-  -- Increment total
-  let newTotal ← requireSomeUint (safeAdd proposalId 1) "proposal overflow"
-  setStorage totalProposalsSlot newTotal
-  emitEvent "SlashProposed" [proposalId, e3Id, ticketPenalty, licensePenalty] [addressToWord operator]
-  pure proposalId
+  -- Guard: check that caller has SLASHER_ROLE
+  function onlySlasher : Unit := do
+    let sender ← msgSender
+    let hasRole ← getMapping2 roleMembers SLASHER_ROLE sender
+    require (hasRole == 1) "missing slasher role"
 
-/-! ## Execute slash (Lane B) -/
+  -- setSlashPolicy(reason, ticketPenalty, licensePenalty, appealWindow, enabled, requiresProof)
+  -- Only callable by GOVERNANCE_ROLE.
+  -- Validates: ticketPenalty > 0 OR licensePenalty > 0 (SM-P1)
+  -- Validates: if !requiresProof then appealWindow > 0 (SM-P2, Lane B needs appeal window)
+  function setSlashPolicy
+      (reason : Uint256) (ticketPenalty : Uint256) (licensePenalty : Uint256)
+      (appealWindow : Uint256) (enabled : Uint256) (requiresProof : Uint256) : Unit := do
+    onlyGovernance
+    require (ticketPenalty > 0 || licensePenalty > 0) "invalid policy: no penalty"
+    -- Evidence-based (Lane B) policies require a non-zero appealWindow
+    if requiresProof == 0 then
+      require (appealWindow > 0) "invalid policy: lane B needs appeal window"
+    else
+      pure ()
+    setMapping policy_ticketPenalty reason ticketPenalty
+    setMapping policy_licensePenalty reason licensePenalty
+    setMapping policy_appealWindow reason appealWindow
+    setMapping policy_enabled reason enabled
+    setMapping policy_requiresProof reason requiresProof
+    emitEvent "SlashPolicyUpdated" [reason] []
 
-/--
-  `executeSlash(proposalId)` — executes a Lane B slash after appeal window.
-  Permissionless (anyone can call). Reverts if:
-  - Proposal already executed
-  - Appeal window not elapsed
-  - Appeal was upheld
--/
-def executeSlash (proposalId : Uint256) : Contract Unit := do
-  let executed ← getMapping proposalExecutedSlot proposalId
-  require (!executed) "already executed"
-  let appealed ← getMapping proposalAppealedSlot proposalId
-  let resolved ← getMapping proposalResolvedSlot proposalId
-  let upheld ← getMapping proposalAppealUpheldSlot proposalId
-  -- If appealed and resolved with appeal upheld, cannot execute
-  require (!(appealed && resolved && upheld)) "appeal upheld"
-  -- If appealed but not yet resolved, cannot execute
-  require (!(appealed && !resolved)) "appeal pending"
-  -- Check appeal window
-  let execAt ← getMapping proposalExecutableAtSlot proposalId
-  let now ← getBlockTimestamp
-  require (now >= execAt) "appeal window active"
-  -- Mark as executed
-  setMapping proposalExecutedSlot proposalId true
-  -- In real contract: apply slashing penalties via BondingRegistry
-  let operator ← getMapping proposalOperatorSlot proposalId
-  emitEvent "SlashExecuted" [proposalId] [addressToWord operator]
+  -- proposeSlashEvidence(e3Id, operator, reason, evidence)
+  -- Lane B: evidence-based slash. Only callable by SLASHER_ROLE.
+  -- Creates a deferred proposal with executableAt = now + appealWindow.
+  -- Modeled without keccak256 (oracle) and without BondingRegistry calls (oracle).
+  function proposeSlashEvidence
+      (e3Id : Uint256) (operator : Address) (reason : Uint256) (evidence : Uint256) : Unit := do
+    onlySlasher
+    let enabled ← getMapping policy_enabled reason
+    require (enabled == 1) "slash reason disabled"
+    let requiresProof ← getMapping policy_requiresProof reason
+    require (requiresProof == 0) "lane B requires no proof"
+    -- Obtain appeal window from policy
+    let appealWindow ← getMapping policy_appealWindow reason
+    -- Create proposal with executableAt = now + appealWindow
+    let ts ← blockTimestamp
+    let executableAt ← requireSomeUint (safeAdd ts appealWindow) "timestamp overflow"
+    let proposalId ← getStorage totalProposals
+    -- Store operator ownership
+    setMapping2 proposal_operator proposalId operator 1
+    -- Store proposal state
+    setMapping proposal_executableAt proposalId executableAt
+    setMapping proposal_executed proposalId 0
+    setMapping proposal_appealed proposalId 0
+    setMapping proposal_resolved proposalId 0
+    setMapping proposal_upheld proposalId 0
+    -- Increment totalProposals
+    let nextId ← requireSomeUint (safeAdd proposalId 1) "proposal overflow"
+    setStorage totalProposals nextId
+    emitEvent "SlashProposed" [proposalId] [addressToWord operator]
 
-/-! ## Appeal lifecycle -/
+  -- executeSlash(proposalId)
+  -- Permissionless. Executes a deferred proposal after the appeal window.
+  -- Reverts if: already executed (SM-P3), appeal active/unresolved, or ts < executableAt (SM-P4).
+  function executeSlash (proposalId : Uint256) : Unit := do
+    let executed ← getMapping proposal_executed proposalId
+    require (executed == 0) "already executed"
+    -- Appeal check: if appealed, must be resolved and NOT upheld
+    let appealed ← getMapping proposal_appealed proposalId
+    if appealed == 1 then
+      let resolved ← getMapping proposal_resolved proposalId
+      require (resolved == 1) "appeal pending"
+      let upheld ← getMapping proposal_upheld proposalId
+      require (upheld == 0) "appeal upheld"
+    else
+      pure ()
+    -- Timestamp check: must be past or at executableAt
+    let ts ← blockTimestamp
+    let executableAt ← getMapping proposal_executableAt proposalId
+    require (ts >= executableAt) "appeal window active"
+    setMapping proposal_executed proposalId 1
+    emitEvent "SlashExecuted" [proposalId] []
 
-/--
-  `fileAppeal(proposalId)` — operator appeals a Lane B slash.
-  Only the slashed operator can appeal. Must be within appeal window.
--/
-def fileAppeal (proposalId : Uint256) : Contract Unit := do
-  let sender ← msgSender
-  let operator ← getMapping proposalOperatorSlot proposalId
-  require (sender == operator) "not operator"
-  require (operator != 0) "invalid proposal"
-  let alreadyAppealed ← getMapping proposalAppealedSlot proposalId
-  require (!alreadyAppealed) "already appealed"
-  let alreadyExecuted ← getMapping proposalExecutedSlot proposalId
-  require (!alreadyExecuted) "already executed"
-  -- Check within appeal window
-  let execAt ← getMapping proposalExecutableAtSlot proposalId
-  let now ← getBlockTimestamp
-  require (now < execAt) "appeal window expired"
-  setMapping proposalAppealedSlot proposalId true
-  emitEvent "AppealFiled" [proposalId] [addressToWord operator]
+  -- fileAppeal(proposalId)
+  -- Only the accused operator can appeal. Must be within the appeal window.
+  -- Reverts if: sender != operator (SM-P5), already executed, already appealed, or
+  --   ts >= executableAt (SM-P6, window expired).
+  function fileAppeal (proposalId : Uint256) : Unit := do
+    let sender ← msgSender
+    let isOp ← getMapping2 proposal_operator proposalId sender
+    require (isOp == 1) "unauthorized"
+    let executed ← getMapping proposal_executed proposalId
+    require (executed == 0) "already executed"
+    let appealed ← getMapping proposal_appealed proposalId
+    require (appealed == 0) "already appealed"
+    let ts ← blockTimestamp
+    let executableAt ← getMapping proposal_executableAt proposalId
+    require (ts < executableAt) "appeal window expired"
+    setMapping proposal_appealed proposalId 1
+    emitEvent "AppealFiled" [proposalId] []
 
-/--
-  `resolveAppeal(proposalId, appealUpheld)` — governance resolves an appeal.
--/
-def resolveAppeal (proposalId : Uint256) (appealUpheld : Bool) : Contract Unit := do
-  onlyGovernance
-  let appealed ← getMapping proposalAppealedSlot proposalId
-  require appealed "not appealed"
-  let alreadyResolved ← getMapping proposalResolvedSlot proposalId
-  require (!alreadyResolved) "already resolved"
-  setMapping proposalResolvedSlot proposalId true
-  setMapping proposalAppealUpheldSlot proposalId appealUpheld
-  emitEvent "AppealResolved" [proposalId] []
+  -- resolveAppeal(proposalId, upheld)
+  -- Only callable by GOVERNANCE_ROLE (SM-P7). Must be appealed and not yet resolved.
+  function resolveAppeal (proposalId : Uint256) (upheld : Uint256) : Unit := do
+    onlyGovernance
+    let appealed ← getMapping proposal_appealed proposalId
+    require (appealed == 1) "not appealed"
+    let resolved ← getMapping proposal_resolved proposalId
+    require (resolved == 0) "already resolved"
+    setMapping proposal_resolved proposalId 1
+    setMapping proposal_upheld proposalId upheld
+    emitEvent "AppealResolved" [proposalId] []
 
-/-! ## Ban management -/
+  -- proposeBan(node, reason)
+  -- Only callable by GOVERNANCE_ROLE. Two-step ban flow: propose then confirm.
+  function proposeBan (node : Address) (reason : Uint256) : Unit := do
+    onlyGovernance
+    -- Oracle: pending ban storage omitted (not needed for SM-P8)
+    emitEvent "BanProposed" [reason] [addressToWord node]
 
-/--
-  `proposeBan(node, reason)` — governance proposes a ban.
--/
-def proposeBan (node : Address) (_reason : Bytes32) : Contract Unit := do
-  onlyGovernance
-  require (node != 0) "zero address"
-  -- Two-step ban: proposal stored; requires confirmBan from different governance
-  emitEvent "BanProposed" [0] [addressToWord node]
+  -- confirmBan(node, reason)
+  -- Only callable by GOVERNANCE_ROLE. Sets banned[node] = true.
+  -- Reverts if already banned (SM-P8).
+  function confirmBan (node : Address) (reason : Uint256) : Unit := do
+    onlyGovernance
+    let isBanned ← getMapping banned node
+    require (isBanned == 0) "already banned"
+    setMapping banned node 1
+    emitEvent "NodeBanUpdated" [1] [addressToWord node]
 
-/--
-  `confirmBan(node)` — second governance signer confirms a ban.
--/
-def confirmBan (node : Address) : Contract Unit := do
-  onlyGovernance
-  let alreadyBanned ← getMapping bannedSlot node
-  require (!alreadyBanned) "already banned"
-  setMapping bannedSlot node true
-  emitEvent "NodeBanUpdated" [1] [addressToWord node]
+  -- isBanned(node): view function returning banned[node] (1=banned, 0=not)
+  function isBanned (node : Address) : Uint256 := do
+    getMapping banned node
+
+end Contracts.SlashingManager

@@ -1,258 +1,288 @@
 /-
-  InterfoldTicketToken — Formally Verified Implementation
+  InterfoldTicketToken — Verity Formal Verification
 
-  Translation of `packages/interfold-contracts/contracts/token/InterfoldTicketToken.sol`
-  into the Verity EDSL. Models the core peg-invariant, access control (onlyRegistry),
-  transfer blocking, and registry timelock change flow.
+  Faithful translation of `contracts/token/InterfoldTicketToken.sol` using `verity_contract`.
 
-  This is a non-transferable, non-delegatable ERC20Votes wrapper.
+  Modeling decisions:
+  - `onlyRegistry` guard: checks msg.sender == registry (address storage slot)
+  - `onlyOwner` guard: checks msg.sender == owner (address storage slot)
+  - Registry lifecycle (setRegistry, lockRegistry, requestRegistryChange,
+    activateRegistryChange, cancelRegistryChange) modeled faithfully with timelock
+  - `_update` blocks all transfers between non-zero addresses
+  - `approve`/`permit` always revert
+  - `delegate` only allows self-delegation (reverts otherwise)
+  - Fee-on-transfer delta measurement is a trust boundary — modeled as exact amount
+  - ERC20Votes delegation checkpoint logic is NOT modeled (trust boundary)
+  - ERC20Permit beyond the `permit` revert is NOT modeled (trust boundary)
+  - ReentrancyGuard not modeled (single-contract scope)
+  - Uint256 used for boolean storage (1 = true, 0 = false)
 
-  Trust boundaries:
-  - Underlying ERC20 transfers (SafeERC20) are modeled as direct balance deltas
-  - EIP-6372 clock (timestamp) is trusted from EVM context
-  - Voting/delegation mechanics are not modeled (separate trust surface)
+  Proof objectives (see PROOF_OBJECTIVES.md):
+  - ITK-P1: Registry-guarded functions revert when msg.sender ≠ registry
+  - ITK-P2: burnTickets accounting (payableBalance increase, operator balance decrease,
+            totalSupply decrease)
+  - ITK-P3: payout reverts when amount > payableBalance
+  - ITK-P4: payout accounting (payableBalance and underlyingBal decrease)
+  - ITK-P5: _update reverts when from ≠ 0 and to ≠ 0 (non-transferable)
+  - ITK-P6: approve always reverts
+  - ITK-P7: permit always reverts
+  - ITK-P8: delegate reverts when delegatee ≠ msg.sender
+  - ITK-P9: activateRegistryChange reverts before timelock
+  - ITK-P10: lockRegistry sets registryLocked from false → true; reverts when already true
+  - ITK-P11: setRegistry reverts when registryLocked == true
+  - ITK-P12: requestRegistryChange reverts when registryLocked == false
+  - ITK-PEG: Peg invariant (totalSupply == underlyingBal + payableBalance) preserved
+    by each operation
 -/
-import Verity.Core
-import Verity.Specs.Common
+import Contracts.Common
 
-open Verity
+namespace Contracts.InterfoldTicketToken
 
-/-! ## Storage slot definitions -/
+open Verity hiding pure bind
+open Verity.EVM.Uint256
 
-def underlyingBalSlot : StorageSlot Uint256 := ⟨0⟩       -- balance of underlying held by contract
-def totalSupplySlot : StorageSlot Uint256 := ⟨1⟩          -- total ITK supply
-def balancesSlot : StorageSlot (Address → Uint256) := ⟨2⟩ -- ITK balances
-def registrySlot : StorageSlot Address := ⟨3⟩             -- authorized registry address
-def registryLockedSlot : StorageSlot Bool := ⟨4⟩          -- whether registry is locked
-def pendingRegistrySlot : StorageSlot Address := ⟨5⟩     -- pending registry change
-def pendingRegistryTimeSlot : StorageSlot Uint256 := ⟨6⟩ -- activation timestamp
-def payableBalanceSlot : StorageSlot Uint256 := ⟨7⟩       -- accumulated underlying from burns
-def ownerSlot : StorageSlot Address := ⟨8⟩               -- contract owner
+/-! ## Registry change delay constant -/
 
-/-! ## Constants -/
+def REGISTRY_CHANGE_DELAY : Uint256 := 86400  -- 1 day
 
-def REGISTRY_CHANGE_DELAY : Uint256 := 86400  -- 1 day in seconds
+/-! ## Contract -/
 
-/-! ## Helpers -/
+verity_contract InterfoldTicketToken where
+  storage
+    -- ERC20 state
+    balances : Address -> Uint256 := slot 0
+    totalSupply : Uint256 := slot 1
+    -- Underlying token balance (modeled directly; Solidity uses ERC20 external calls)
+    underlyingBal : Uint256 := slot 2
+    -- Registry guard
+    registry : Address := slot 3
+    -- Ownable pattern
+    owner : Address := slot 4
+    -- Registry lock: 1 = true, 0 = false (Uint256 storage, matching InterfoldToken pattern)
+    registryLocked : Uint256 := slot 5
+    -- Payable balance (slashed funds available for payout)
+    payableBalance : Uint256 := slot 6
+    -- Pending registry change
+    pendingRegistry : Address := slot 7
+    pendingRegistryActivationTime : Uint256 := slot 8
 
-/-- Guard: caller must be the owner. -/
-def onlyOwner : Contract Unit := do
-  let sender ← msgSender
-  let owner ← getStorageAddr ownerSlot
-  require (sender == owner) "not owner"
+  -- Guard: onlyRegistry — reverts if msg.sender ≠ registry
+  function onlyRegistry : Unit := do
+    let sender ← msgSender
+    let reg ← getStorageAddr registry
+    require (sender == reg) "not registry"
 
-/-- Guard: caller must be the registry. -/
-def onlyRegistry : Contract Unit := do
-  let sender ← msgSender
-  let reg ← getStorageAddr registrySlot
-  require (sender == reg) "not registry"
+  -- Guard: onlyOwner — reverts if msg.sender ≠ owner
+  function onlyOwner : Unit := do
+    let sender ← msgSender
+    let own ← getStorageAddr owner
+    require (sender == own) "not owner"
 
-/-! ## Core token functions -/
+  -- depositFor(operator, amount) — Mint ITK to operator from underlying deposit.
+  -- Only callable by the registry. Fee-on-transfer delta is a trust boundary;
+  -- modeled as exact amount.
+  function depositFor (operator : Address) (amount : Uint256) : Unit := do
+    onlyRegistry
+    require (operator != 0) "zero address"
+    require (amount != 0) "zero amount"
+    let currentBal ← getMapping balances operator
+    let newBal ← requireSomeUint (safeAdd currentBal amount) "balance overflow"
+    let currentSupply ← getStorage totalSupply
+    let newSupply ← requireSomeUint (safeAdd currentSupply amount) "supply overflow"
+    let currentUnder ← getStorage underlyingBal
+    let newUnder ← requireSomeUint (safeAdd currentUnder amount) "underlying overflow"
+    setMapping balances operator newBal
+    setStorage totalSupply newSupply
+    setStorage underlyingBal newUnder
+    emitEvent "Deposit" [amount] [addressToWord operator]
 
-/--
-  Internal mint: increase `to`'s ITK balance and totalSupply.
-  Also increases the underlying balance to maintain the 1:1 peg.
--/
-def doMint (to : Address) (amount : Uint256) : Contract Unit := do
-  let currentBal ← getMapping balancesSlot to
-  let newBal ← requireSomeUint (safeAdd currentBal amount) "balance overflow"
-  let currentSupply ← getStorage totalSupplySlot
-  let newSupply ← requireSomeUint (safeAdd currentSupply amount) "supply overflow"
-  let currentUnderlying ← getStorage underlyingBalSlot
-  let newUnderlying ← requireSomeUint (safeAdd currentUnderlying amount) "underlying overflow"
-  setMapping balancesSlot to newBal
-  setStorage totalSupplySlot newSupply
-  setStorage underlyingBalSlot newUnderlying
+  -- depositFrom(from, to, amount) — Transfer underlying from 'from' and mint ITK to 'to'.
+  -- Only callable by the registry. Same trust boundary as depositFor.
+  function depositFrom (from : Address) (to : Address) (amount : Uint256) : Unit := do
+    onlyRegistry
+    require (from != 0) "zero from"
+    require (to != 0) "zero to"
+    require (amount != 0) "zero amount"
+    let currentBal ← getMapping balances to
+    let newBal ← requireSomeUint (safeAdd currentBal amount) "balance overflow"
+    let currentSupply ← getStorage totalSupply
+    let newSupply ← requireSomeUint (safeAdd currentSupply amount) "supply overflow"
+    let currentUnder ← getStorage underlyingBal
+    let newUnder ← requireSomeUint (safeAdd currentUnder amount) "underlying overflow"
+    setMapping balances to newBal
+    setStorage totalSupply newSupply
+    setStorage underlyingBal newUnder
+    emitEvent "DepositFrom" [amount] [addressToWord from, addressToWord to]
 
-/--
-  Internal burn: decrease `from`'s ITK balance and totalSupply.
-  Does NOT decrease underlying (burning tickets leaves underlying in the contract).
--/
-def doBurn (from : Address) (amount : Uint256) : Contract Unit := do
-  let currentBal ← getMapping balancesSlot from
-  require (currentBal >= amount) "insufficient balance"
-  let newBal ← requireSomeUint (safeSub currentBal amount) "balance underflow"
-  let currentSupply ← getStorage totalSupplySlot
-  let newSupply ← requireSomeUint (safeSub currentSupply amount) "supply underflow"
-  setMapping balancesSlot from newBal
-  setStorage totalSupplySlot newSupply
+  -- withdrawTo(receiver, amount) — Burn ITK from caller (the registry) and transfer
+  -- underlying tokens. Only callable by the registry.
+  function withdrawTo (receiver : Address) (amount : Uint256) : Unit := do
+    onlyRegistry
+    let sender ← msgSender
+    require (amount != 0) "zero amount"
+    let currentBal ← getMapping balances sender
+    require (currentBal >= amount) "insufficient balance"
+    let newBal ← requireSomeUint (safeSub currentBal amount) "balance underflow"
+    let currentSupply ← getStorage totalSupply
+    let newSupply ← requireSomeUint (safeSub currentSupply amount) "supply underflow"
+    let currentUnder ← getStorage underlyingBal
+    let newUnder ← requireSomeUint (safeSub currentUnder amount) "underlying underflow"
+    setMapping balances sender newBal
+    setStorage totalSupply newSupply
+    setStorage underlyingBal newUnder
+    emitEvent "Withdrawal" [amount] [addressToWord receiver]
 
-/--
-  Internal withdraw: burn ITK and decrease underlying balance.
-  Maintains the 1:1 peg on the withdrawal side.
--/
-def doWithdraw (from : Address) (amount : Uint256) : Contract Unit := do
-  let currentBal ← getMapping balancesSlot from
-  require (currentBal >= amount) "insufficient balance"
-  let newBal ← requireSomeUint (safeSub currentBal amount) "balance underflow"
-  let currentSupply ← getStorage totalSupplySlot
-  let newSupply ← requireSomeUint (safeSub currentSupply amount) "supply underflow"
-  let currentUnderlying ← getStorage underlyingBalSlot
-  let newUnderlying ← requireSomeUint (safeSub currentUnderlying amount) "underlying underflow"
-  setMapping balancesSlot from newBal
-  setStorage totalSupplySlot newSupply
-  setStorage underlyingBalSlot newUnderlying
+  -- burnTickets(operator, amount) — Burn ITK without transferring underlying (slash).
+  -- Increases payableBalance. Only callable by the registry.
+  -- Key: underlyingBal UNCHANGED, totalSupply decreases, payableBalance increases.
+  function burnTickets (operator : Address) (amount : Uint256) : Unit := do
+    onlyRegistry
+    require (amount != 0) "zero amount"
+    let currentPay ← getStorage payableBalance
+    let newPay ← requireSomeUint (safeAdd currentPay amount) "payable overflow"
+    let currentBal ← getMapping balances operator
+    require (currentBal >= amount) "insufficient balance"
+    let newBal ← requireSomeUint (safeSub currentBal amount) "balance underflow"
+    let currentSupply ← getStorage totalSupply
+    let newSupply ← requireSomeUint (safeSub currentSupply amount) "supply underflow"
+    setStorage payableBalance newPay
+    setMapping balances operator newBal
+    setStorage totalSupply newSupply
+    emitEvent "TicketsBurned" [amount] [addressToWord operator]
 
-/-! ## Public entrypoints -/
+  -- payout(to, amount) — Transfer underlying without burning ITK.
+  -- Requires amount ≤ payableBalance. Only callable by the registry.
+  function payout (to : Address) (amount : Uint256) : Unit := do
+    onlyRegistry
+    require (amount != 0) "zero amount"
+    let currentPay ← getStorage payableBalance
+    require (amount <= currentPay) "exceeds payable balance"
+    let newPay ← requireSomeUint (safeSub currentPay amount) "payable underflow"
+    let currentUnder ← getStorage underlyingBal
+    let newUnder ← requireSomeUint (safeSub currentUnder amount) "underlying underflow"
+    setStorage payableBalance newPay
+    setStorage underlyingBal newUnder
+    emitEvent "Payout" [amount] [addressToWord to]
 
-/--
-  `depositFor(operator, amount)` — mints ITK to operator.
-  Only callable by the registry. Auto-self-delegates (not modeled).
-  Fee-on-transfer safe: mints based on actual received (modeled as direct amount for simplicity;
-  in production the delta between before/after underlying balance is used).
--/
-def depositFor (operator : Address) (amount : Uint256) : Contract Unit := do
-  onlyRegistry
-  require (operator != 0) "zero address"
-  require (amount != 0) "zero amount"
-  doMint operator amount
-  emitEvent "Deposit" [amount] [addressToWord operator]
+  -- doUpdate(from, to, value) — Internal transfer hook.
+  -- Blocks ALL transfers between non-zero addresses (non-transferable).
+  -- Mints (from=0) and burns (to=0) are allowed.
+  function doUpdate (from : Address) (to : Address) (value : Uint256) : Unit := do
+    -- Transfer restriction: block all non-zero ↔ non-zero transfers
+    if from != 0 && to != 0 then
+      require (false) "transfer not allowed"
+    else
+      pure ()
+    -- Balance updates
+    if from == 0 then
+      pure ()
+    else
+      let fromBal ← getMapping balances from
+      require (fromBal >= value) "insufficient balance"
+      let newFrom ← requireSomeUint (safeSub fromBal value) "balance underflow"
+      setMapping balances from newFrom
+    if to == 0 then
+      pure ()
+    else
+      let toBal ← getMapping balances to
+      let newTo ← requireSomeUint (safeAdd toBal value) "balance overflow"
+      setMapping balances to newTo
+    -- totalSupply updates
+    if from == 0 then
+      -- Mint: increase totalSupply
+      let currentSupply ← getStorage totalSupply
+      let newSupply ← requireSomeUint (safeAdd currentSupply value) "supply overflow"
+      setStorage totalSupply newSupply
+    else if to == 0 then
+      -- Burn: decrease totalSupply
+      let currentSupply ← getStorage totalSupply
+      let newSupply ← requireSomeUint (safeSub currentSupply value) "supply underflow"
+      setStorage totalSupply newSupply
+    else
+      pure ()
 
-/--
-  `withdrawTo(receiver, amount)` — burns ITK from registry and returns underlying.
-  Only callable by the registry.
--/
-def withdrawTo (receiver : Address) (amount : Uint256) : Contract Unit := do
-  onlyRegistry
-  require (receiver != 0) "zero address"
-  require (amount != 0) "zero amount"
-  let sender ← msgSender
-  doWithdraw sender amount
-  emitEvent "Withdrawal" [amount] [addressToWord receiver]
+  -- transfer(to, amount) — Public transfer. Delegates to doUpdate with msg.sender as from.
+  -- Will revert via doUpdate if from ≠ 0 and to ≠ 0 (i.e., all non-mint/non-burn transfers).
+  function transfer (to : Address) (amount : Uint256) : Unit := do
+    let sender ← msgSender
+    doUpdate sender to amount
+    emitEvent "Transfer" [amount] [addressToWord sender, addressToWord to]
 
-/--
-  `burnTickets(operator, amount)` — burns ITK from operator without returning underlying.
-  Only callable by the registry. Increments payableBalance.
--/
-def burnTickets (operator : Address) (amount : Uint256) : Contract Unit := do
-  onlyRegistry
-  require (operator != 0) "zero address"
-  require (amount != 0) "zero amount"
-  let currentPayable ← getStorage payableBalanceSlot
-  let newPayable ← requireSomeUint (safeAdd currentPayable amount) "payable overflow"
-  setStorage payableBalanceSlot newPayable
-  doBurn operator amount
-  emitEvent "TicketsBurned" [amount] [addressToWord operator]
-
-/--
-  `payout(to, amount)` — transfers underlying from payableBalance.
-  Only callable by the registry. Reverts if amount exceeds payableBalance.
--/
-def payoutOp (to : Address) (amount : Uint256) : Contract Unit := do
-  onlyRegistry
-  require (to != 0) "zero address"
-  let currentPayable ← getStorage payableBalanceSlot
-  require (amount <= currentPayable) "exceeds payable balance"
-  let newPayable ← requireSomeUint (safeSub currentPayable amount) "payable underflow"
-  let currentUnderlying ← getStorage underlyingBalSlot
-  let newUnderlying ← requireSomeUint (safeSub currentUnderlying amount) "underlying underflow"
-  setStorage payableBalanceSlot newPayable
-  setStorage underlyingBalSlot newUnderlying
-  emitEvent "Payout" [amount] [addressToWord to]
-
-/--
-  Transfer hook: reverts if both from and to are non-zero (blocks all transfers).
-  Minting (from == 0) and burning (to == 0) are allowed.
--/
-def doTransfer (from : Address) (to : Address) (amount : Uint256) : Contract Unit := do
-  if from != 0 && to != 0 then
+  -- approve: always revert (allowances and transfers are disabled on this token)
+  function approve (spender : Address) (amount : Uint256) : Unit := do
     require (false) "transfer not allowed"
-  else do
-    -- This is a mint (from=0) or burn (to=0), handled by doMint/doBurn directly
-    pure ()
 
-/-! ## Registry management -/
+  -- permit: always revert (ERC-2612 is disabled)
+  function permit (_owner : Address) (_spender : Address) (_value : Uint256)
+    (_deadline : Uint256) (_v : Uint256) (_r : Uint256) (_s : Uint256) : Unit := do
+    require (false) "permit disabled"
 
-/--
-  `setRegistry(newRegistry)` — instant registry update (only before lock).
--/
-def setRegistry (newRegistry : Address) : Contract Unit := do
-  onlyOwner
-  let locked ← getStorage registryLockedSlot
-  require (!locked) "registry already locked"
-  require (newRegistry != 0) "zero address"
-  setStorageAddr registrySlot newRegistry
-  emitEvent "RegistryChanged" [0] [addressToWord newRegistry]
+  -- delegate(delegatee): only self-delegation is allowed.
+  -- Reverts if delegatee ≠ msg.sender.
+  function delegate (delegatee : Address) : Unit := do
+    let sender ← msgSender
+    require (delegatee == sender) "delegation locked"
 
-/--
-  `lockRegistry()` — one-way switch forcing future changes through delayed flow.
--/
-def lockRegistry : Contract Unit := do
-  onlyOwner
-  let locked ← getStorage registryLockedSlot
-  require (!locked) "registry lock already set"
-  setStorage registryLockedSlot true
-  emitEvent "RegistryLocked" [] []
+  -- delegateBySig: always revert (delegation-by-signature is disabled)
+  function delegateBySig (_delegatee : Address) (_nonce : Uint256)
+    (_expiry : Uint256) (_v : Uint256) (_r : Uint256) (_s : Uint256) : Unit := do
+    require (false) "delegation locked"
 
-/--
-  `requestRegistryChange(newRegistry)` — stage a timelocked registry swap.
--/
-def requestRegistryChange (newRegistry : Address) : Contract Unit := do
-  onlyOwner
-  let locked ← getStorage registryLockedSlot
-  require locked "registry not locked"
-  require (newRegistry != 0) "zero address"
-  let timestamp ← getBlockTimestamp
-  let activatesAt ← requireSomeUint (safeAdd timestamp REGISTRY_CHANGE_DELAY) "timestamp overflow"
-  setStorageAddr pendingRegistrySlot newRegistry
-  setStorage pendingRegistryTimeSlot activatesAt
-  emitEvent "RegistryChangeRequested" [activatesAt] [addressToWord newRegistry]
+  -- setRegistry(newRegistry): onlyOwner, revert if registryLocked.
+  -- Allows instant registry update before the lock is set.
+  function setRegistry (newRegistry : Address) : Unit := do
+    onlyOwner
+    let locked ← getStorage registryLocked
+    require (locked == 0) "registry already locked"
+    require (newRegistry != 0) "zero address"
+    let old ← getStorageAddr registry
+    setStorageAddr registry newRegistry
+    emitEvent "RegistryChanged" [] [addressToWord old, addressToWord newRegistry]
 
-/--
-  `activateRegistryChange()` — apply pending registry swap after timelock.
--/
-def activateRegistryChange : Contract Unit := do
-  onlyOwner
-  let pending ← getStorageAddr pendingRegistrySlot
-  require (pending != 0) "no pending registry"
-  let activatesAt ← getStorage pendingRegistryTimeSlot
-  let now ← getBlockTimestamp
-  require (now >= activatesAt) "registry change not ready"
-  setStorageAddr registrySlot pending
-  setStorageAddr pendingRegistrySlot 0
-  setStorage pendingRegistryTimeSlot 0
-  emitEvent "RegistryChanged" [0] [addressToWord pending]
+  -- lockRegistry(): onlyOwner, one-way switch false → true. Reverts if already true.
+  function lockRegistry : Unit := do
+    onlyOwner
+    let locked ← getStorage registryLocked
+    require (locked == 0) "registry lock already set"
+    setStorage registryLocked 1
+    emitEvent "RegistryLocked" [] []
 
-/--
-  `cancelRegistryChange()` — discard pending registry change.
--/
-def cancelRegistryChange : Contract Unit := do
-  onlyOwner
-  let pending ← getStorageAddr pendingRegistrySlot
-  require (pending != 0) "no pending registry"
-  setStorageAddr pendingRegistrySlot 0
-  setStorage pendingRegistryTimeSlot 0
-  emitEvent "RegistryChangeCancelled" [] [addressToWord pending]
+  -- requestRegistryChange(newRegistry): onlyOwner, revert if not locked.
+  -- Stages a pending registry change with a timelock.
+  function requestRegistryChange (newRegistry : Address) : Unit := do
+    onlyOwner
+    let locked ← getStorage registryLocked
+    require (locked == 1) "registry not locked"
+    require (newRegistry != 0) "zero address"
+    let now ← getBlockTimestamp
+    let activatesAt ← requireSomeUint (safeAdd now REGISTRY_CHANGE_DELAY) "time overflow"
+    setStorageAddr pendingRegistry newRegistry
+    setStorage pendingRegistryActivationTime activatesAt
+    emitEvent "RegistryChangeRequested" [activatesAt] [addressToWord newRegistry]
 
-/-! ## Approve / permit / delegate are disabled -/
+  -- activateRegistryChange(): onlyOwner, reverts if no pending or timelock not expired.
+  -- Applies the pending registry change.
+  function activateRegistryChange : Unit := do
+    onlyOwner
+    let pending ← getStorageAddr pendingRegistry
+    require (pending != 0) "no pending registry"
+    let activatesAt ← getStorage pendingRegistryActivationTime
+    let now ← getBlockTimestamp
+    require (now >= activatesAt) "registry change not ready"
+    let old ← getStorageAddr registry
+    setStorageAddr registry pending
+    setStorageAddr pendingRegistry 0
+    setStorage pendingRegistryActivationTime 0
+    emitEvent "RegistryChanged" [] [addressToWord old, addressToWord pending]
 
-/--
-  `approve` always reverts — ticket tokens are non-transferable.
--/
-def approve : Contract Unit := do
-  require (false) "transfer not allowed"
+  -- cancelRegistryChange(): onlyOwner, reverts if no pending.
+  -- Discards the pending registry change.
+  function cancelRegistryChange : Unit := do
+    onlyOwner
+    let pending ← getStorageAddr pendingRegistry
+    require (pending != 0) "no pending registry"
+    setStorageAddr pendingRegistry 0
+    setStorage pendingRegistryActivationTime 0
+    emitEvent "RegistryChangeCancelled" [] [addressToWord pending]
 
-/--
-  `permit` always reverts — allowances are disabled.
--/
-def permit : Contract Unit := do
-  require (false) "permit disabled"
-
-/--
-  `delegateOp(delegatee)` — only self-delegation allowed.
--/
-def delegateOp (delegatee : Address) : Contract Unit := do
-  let sender ← msgSender
-  require (delegatee == sender) "delegation locked"
-
-/-! ## Initialization -/
-
-/--
-  Initialize the ticket token with an underlying, registry, and owner.
--/
-def initTicketToken (registry_ : Address) (initialOwner : Address) : Contract Unit := do
-  require (registry_ != 0) "zero address registry"
-  require (initialOwner != 0) "zero address owner"
-  setStorageAddr ownerSlot initialOwner
-  setStorageAddr registrySlot registry_
-  emitEvent "RegistryChanged" [0] [addressToWord registry_]
+end Contracts.InterfoldTicketToken

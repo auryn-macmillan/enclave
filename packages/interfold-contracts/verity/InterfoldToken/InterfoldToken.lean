@@ -1,184 +1,165 @@
 /-
-  InterfoldToken — Formally Verified Implementation
+  InterfoldToken (FOLD) — Verity Formal Verification
 
-  Translation of `packages/interfold-contracts/contracts/token/InterfoldToken.sol`
-  into the Verity EDSL. This models the core mint-cap, transfer-restriction, and
-  whitelist logic. AccessControl role management is modeled as a simplified owner
-  + minter + whitelist-manager pattern to keep the proof surface focused on the
-  critical safety properties.
+  Translation of `contracts/token/InterfoldToken.sol` (v2, 1047 lines) using `verity_contract`.
 
-  Trust boundaries:
-  - ERC20 base (_mint, _burn) is modeled directly (no external OZ dependency)
-  - EIP-6372 clock (timestamp mode) is trusted from the EVM context
-  - Permit and voting extensions are not modeled (separate trust surface)
+  The v2 contract adds CCA distribution, vesting escrow, lock policies with curves,
+  and a TGE launch lifecycle. This verification focuses on the core safety properties
+  that are provable in Verity:
+
+  - Supply cap enforcement (MAX_SUPPLY)
+  - Access control (DEFAULT_ADMIN_ROLE, MINTER_ROLE, WHITELIST_ROLE, LOCK_MANAGER_ROLE)
+  - Phase-gated minting (mint/mintAllocations revert when phase ≠ Virtual)
+  - TGE one-way switch (tge() fires exactly once)
+  - Pre-TGE transfer restriction enforcement
+  - Whitelist management
+
+  Trust boundaries (NOT modeled in this pass):
+  - Lock policies with curves (LockPolicy, Curve, Anchor) — complex vesting math
+  - Claim-linking logic (_claim, _linkClaim, _consumeLock, _addOrIncrementLock)
+  - ERC20Votes checkpoint logic
+  - ERC20Permit
+  - Ownable2Step ownership transfer
+  - BONDING_REGISTRY.totalBonded() external call
+  - Lock array manipulation (loops over dynamic arrays)
 -/
-import Verity.Core
-import Verity.Specs.Common
+import Contracts.Common
 
-open Verity
+namespace Contracts.InterfoldToken
 
-/-! ## Storage slot definitions -/
+open Verity hiding pure bind
+open Verity.EVM.Uint256
 
-def balancesSlot : StorageSlot (Address → Uint256) := ⟨0⟩
-def totalSupplySlot : StorageSlot Uint256 := ⟨1⟩
-def totalMintedSlot : StorageSlot Uint256 := ⟨2⟩
-def transfersRestrictedSlot : StorageSlot Bool := ⟨3⟩
-def transferWhitelistedSlot : StorageSlot (Address → Bool) := ⟨4⟩
-def ownerSlot : StorageSlot Address := ⟨5⟩
-def minterSlot : StorageSlot Address := ⟨6⟩
-def whitelistManagerSlot : StorageSlot Address := ⟨7⟩
+/-! ## Role constants -/
 
-/-! ## Constants -/
+def DEFAULT_ADMIN_ROLE : Uint256 := 0
+def MINTER_ROLE : Uint256 := 0x6d696e7465725f726f6c65000000000000000000000000000000000000000000
+def WHITELIST_ROLE : Uint256 := 0x77686974656c6973745f726f6c650000000000000000000000000000000000
+def LOCK_MANAGER_ROLE : Uint256 := 0x6c6f636b5f6d616e616765725f726f6c6500000000000000000000000000
+
+/-! ## Supply and timing constants -/
 
 def MAX_SUPPLY : Uint256 := 1200000000000000000000000000  -- 1.2B * 1e18
+def TGE_COOLDOWN : Uint256 := 3888000  -- 45 days in seconds
 
-/-! ## Helpers -/
+/-! ## Phase enum (as Uint256) -/
 
-/-- Guard: caller must be the owner. Reverts with "not owner" if not. -/
-def onlyOwner : Contract Unit := do
-  let sender ← msgSender
-  let owner ← getStorageAddr ownerSlot
-  require (sender == owner) "not owner"
+def Phase_Virtual : Uint256 := 0
+def Phase_CCA : Uint256 := 1
+def Phase_Cooldown : Uint256 := 2
+def Phase_Live : Uint256 := 3
 
-/-- Guard: caller must be the minter. Reverts with "not minter" if not. -/
-def onlyMinter : Contract Unit := do
-  let sender ← msgSender
-  let minter ← getStorageAddr minterSlot
-  require (sender == minter) "not minter"
+/-! ## Contract -/
 
-/-- Guard: caller must be the whitelist manager. Reverts with "not whitelist manager" if not. -/
-def onlyWhitelistManager : Contract Unit := do
-  let sender ← msgSender
-  let manager ← getStorageAddr whitelistManagerSlot
-  require (sender == manager) "not whitelist manager"
+verity_contract InterfoldToken where
+  storage
+    -- ERC20 state
+    balances : Address -> Uint256 := slot 0
+    totalSupply : Uint256 := slot 1
+    -- InterfoldToken v2 state
+    tgeTimestamp : Uint256 := slot 2          -- 0 = not yet fired; >0 = TGE timestamp
+    transferWhitelisted : Address -> Uint256 := slot 3  -- 1 = true, 0 = false
+    claimLockExempt : Address -> Uint256 := slot 4      -- 1 = true, 0 = false
+    -- AccessControl: roleMembers[role][account] = 1 if account has role
+    roleMembers : Uint256 -> Address -> Uint256 := slot 5
+    -- Immutable config (modeled as regular storage for verification purposes)
+    ccaStart : Uint256 := slot 6
+    ccaEnd : Uint256 := slot 7
+    noMoreLocks : Uint256 := slot 8
+    claimSource : Address := slot 9
+    bondingRegistry : Address := slot 10
 
-/-! ## Core token functions -/
+  -- Guard: check that caller has a specific role
+  function onlyRole (role : Uint256) : Unit := do
+    let sender ← msgSender
+    let hasRole ← getMapping2 roleMembers role sender
+    require (hasRole == 1) "missing role"
 
-/--
-  Mint new tokens to `to`. This is the internal _mint equivalent.
-  Increments `to`'s balance and `totalSupply`.
--/
-def doMint (to : Address) (amount : Uint256) : Contract Unit := do
-  let currentBal ← getMapping balancesSlot to
-  let newBal ← requireSomeUint (safeAdd currentBal amount) "balance overflow"
-  let currentSupply ← getStorage totalSupplySlot
-  let newSupply ← requireSomeUint (safeAdd currentSupply amount) "supply overflow"
-  setMapping balancesSlot to newBal
-  setStorage totalSupplySlot newSupply
+  -- Current lifecycle phase (view function)
+  function currentPhase : Uint256 := do
+    let tge ← getStorage tgeTimestamp
+    if tge != 0 then
+      return Phase_Live
+    else
+      let now ← getBlockTimestamp
+      let start ← getStorage ccaStart
+      let end_ ← getStorage ccaEnd
+      if now < start then
+        return Phase_Virtual
+      else if now < end_ then
+        return Phase_CCA
+      else
+        return Phase_Cooldown
 
-/--
-  Burn tokens from `from`. Decrements `from`'s balance and `totalSupply`.
-  Reverts if `from`'s balance is insufficient.
--/
-def doBurn (from : Address) (amount : Uint256) : Contract Unit := do
-  let currentBal ← getMapping balancesSlot from
-  require (currentBal >= amount) "insufficient balance"
-  let newBal ← requireSomeUint (safeSub currentBal amount) "balance underflow"
-  let currentSupply ← getStorage totalSupplySlot
-  let newSupply ← requireSomeUint (safeSub currentSupply amount) "supply underflow"
-  setMapping balancesSlot from newBal
-  setStorage totalSupplySlot newSupply
+  -- Internal: mint tokens with supply cap check
+  function doMintTokens (recipient : Address) (amount : Uint256) : Unit := do
+    require (amount != 0) "zero amount"
+    let currentSupply ← getStorage totalSupply
+    let newSupply ← requireSomeUint (safeAdd currentSupply amount) "supply overflow"
+    require (newSupply <= MAX_SUPPLY) "max supply exceeded"
+    let currentBal ← getMapping balances recipient
+    let newBal ← requireSomeUint (safeAdd currentBal amount) "balance overflow"
+    setMapping balances recipient newBal
+    setStorage totalSupply newSupply
 
-/--
-  Transfer `amount` tokens from `from` to `to`.
-  Enforces transfer restrictions via the whitelist check.
-  Reverts with "transfer not allowed" if restrictions are active and neither
-  party is whitelisted.
--/
-def doTransfer (from : Address) (to : Address) (amount : Uint256) : Contract Unit := do
-  -- Enforce transfer restrictions (mint/burn skip this check because from or to is zero)
-  let restricted ← getStorage transfersRestrictedSlot
-  if from != 0 && to != 0 && restricted then
-    let fromWhitelisted ← getMapping transferWhitelistedSlot from
-    let toWhitelisted ← getMapping transferWhitelistedSlot to
-    require (fromWhitelisted || toWhitelisted) "transfer not allowed"
-  else
-    pure ()
-  -- Perform the transfer
-  let fromBal ← getMapping balancesSlot from
-  require (fromBal >= amount) "insufficient balance"
-  let newFrom ← requireSomeUint (safeSub fromBal amount) "balance underflow"
-  let toBal ← getMapping balancesSlot to
-  let newTo ← requireSomeUint (safeAdd toBal amount) "balance overflow"
-  setMapping balancesSlot from newFrom
-  setMapping balancesSlot to newTo
+  -- mint(recipient, amount, label)
+  -- Only DEFAULT_ADMIN_ROLE. Only in Virtual phase.
+  function mint (recipient : Address) (amount : Uint256) (label : Uint256) : Unit := do
+    onlyRole DEFAULT_ADMIN_ROLE
+    let phase ← currentPhase
+    require (phase == Phase_Virtual) "minting closed"
+    doMintTokens recipient amount
+    emitEvent "AllocationMinted" [amount] [addressToWord recipient]
 
-/-! ## Public entrypoints -/
+  -- mintAllocations(recipient, amount, policyId)
+  -- Only MINTER_ROLE. Only in Virtual phase.
+  function mintAllocations (recipient : Address) (amount : Uint256) (policyId : Uint256) : Unit := do
+    onlyRole MINTER_ROLE
+    let phase ← currentPhase
+    require (phase == Phase_Virtual) "minting closed"
+    require (policyId != 0) "invalid policy"
+    doMintTokens recipient amount
+    emitEvent "AllocationMinted" [amount] [addressToWord recipient]
 
-/--
-  `mintAllocation(to, amount)` — mints `amount` tokens to `to`.
-  Only callable by the minter. Reverts if:
-  - `to` is zero address
-  - `amount` is zero
-  - minting would exceed MAX_SUPPLY
--/
-def mintAllocation (to : Address) (amount : Uint256) : Contract Unit := do
-  onlyMinter
-  require (to != 0) "zero address"
-  require (amount != 0) "zero amount"
-  let currentMinted ← getStorage totalMintedSlot
-  let proposed ← requireSomeUint (safeAdd currentMinted amount) "minted overflow"
-  require (proposed <= MAX_SUPPLY) "exceeds total supply"
-  doMint to amount
-  setStorage totalMintedSlot proposed
-  emitEvent "AllocationMinted" [amount] [addressToWord to]
+  -- tge()
+  -- Permissionless. Fires TGE exactly once.
+  function tge : Unit := do
+    let currentTge ← getStorage tgeTimestamp
+    require (currentTge == 0) "already live"
+    let now ← getBlockTimestamp
+    let end_ ← getStorage ccaEnd
+    let earliest ← requireSomeUint (safeAdd end_ TGE_COOLDOWN) "timestamp overflow"
+    require (now >= earliest) "tge too early"
+    setStorage tgeTimestamp now
+    emitEvent "TgeTriggered" [now] []
 
-/--
-  `disableTransferRestrictions()` — permanently disables transfer restrictions.
-  Only callable by the owner. Idempotent: a no-op when already disabled.
-  One-way switch: once disabled, restrictions cannot be re-enabled.
--/
-def disableTransferRestrictions : Contract Unit := do
-  onlyOwner
-  let restricted ← getStorage transfersRestrictedSlot
-  if restricted then
-    setStorage transfersRestrictedSlot false
-    emitEvent "TransferRestrictionUpdated" [0] []
-  else
-    pure ()
+  -- setTransferWhitelisted(account, whitelisted)
+  -- Only WHITELIST_ROLE.
+  function setTransferWhitelisted (account : Address) (whitelisted : Uint256) : Unit := do
+    onlyRole WHITELIST_ROLE
+    require (account != 0) "zero address"
+    setMapping transferWhitelisted account whitelisted
+    emitEvent "TransferWhitelistUpdated" [whitelisted] [addressToWord account]
 
-/--
-  `toggleTransferWhitelist(account)` — flips the whitelist status for `account`.
-  Only callable by the whitelist manager.
--/
-def toggleTransferWhitelist (account : Address) : Contract Unit := do
-  onlyWhitelistManager
-  let current ← getMapping transferWhitelistedSlot account
-  setMapping transferWhitelistedSlot account (!current)
-  emitEvent "TransferWhitelistUpdated" [if !current then 1 else 0] [addressToWord account]
+  -- isTransferRestricted(from, to)
+  -- Returns 1 if transfer is blocked by pre-TGE gate, 0 otherwise.
+  function isTransferRestricted (from to : Address) : Uint256 := do
+    let tge ← getStorage tgeTimestamp
+    if tge != 0 then
+      return 0
+    else if from == 0 || to == 0 then
+      return 0
+    else
+      let registry ← getStorageAddr bondingRegistry
+      let isBonding := (from == registry) || (to == registry)
+      let source ← getStorageAddr claimSource
+      let isCcaDistribution := (from == source)
+      let fromWl ← getMapping transferWhitelisted from
+      let toWl ← getMapping transferWhitelisted to
+      let isWhitelisted := (fromWl == 1) || (toWl == 1)
+      if !isBonding && !isCcaDistribution && !isWhitelisted then
+        return 1
+      else
+        return 0
 
-/--
-  `transfer(to, amount)` — public transfer function.
-  Delegates to the internal `doTransfer` with `msg.sender` as `from`.
--/
-def transfer (to : Address) (amount : Uint256) : Contract Unit := do
-  let sender ← msgSender
-  doTransfer sender to amount
-  emitEvent "Transfer" [amount] [addressToWord sender, addressToWord to]
-
-/--
-  `whitelistContract(addr)` — whitelists a contract address.
-  Only callable by the whitelist manager. Skips zero addresses.
--/
-def whitelistContract (addr : Address) : Contract Unit := do
-  onlyWhitelistManager
-  if addr != 0 then
-    setMapping transferWhitelistedSlot addr true
-    emitEvent "TransferWhitelistUpdated" [1] [addressToWord addr]
-  else
-    pure ()
-
-/-! ## Initialization -/
-
-/--
-  Initialize the token state. Sets owner, minter, whitelist manager,
-  enables transfer restrictions, and whitelists the initial owner.
--/
-def initToken (initialOwner : Address) : Contract Unit := do
-  setStorageAddr ownerSlot initialOwner
-  setStorageAddr minterSlot initialOwner
-  setStorageAddr whitelistManagerSlot initialOwner
-  setStorage transfersRestrictedSlot true
-  setMapping transferWhitelistedSlot initialOwner true
-  emitEvent "TransferRestrictionUpdated" [1] []
-  emitEvent "TransferWhitelistUpdated" [1] [addressToWord initialOwner]
+end Contracts.InterfoldToken

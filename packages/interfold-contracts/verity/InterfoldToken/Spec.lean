@@ -1,166 +1,108 @@
 /-
-  InterfoldToken — Formal Specifications
+  InterfoldToken (FOLD) — Formal Specifications
 
-  Each public/external function has a `<function>_spec` predicate that describes
-  the relationship between pre-state `s` and post-state `s'` when the function
-  succeeds. Revert cases are described separately via `<function>_revert_spec`.
+  Specs for the v2 contract: supply cap, access control, phase-gated minting,
+  TGE one-way switch, and transfer restriction logic.
 -/
-import Verity.Core
 import Verity.Specs.Common
-import InterfoldToken.InterfoldToken
+import Verity.Macro
+import Contracts.InterfoldToken.InterfoldToken
+
+namespace Contracts.InterfoldToken.Spec
 
 open Verity
+open Verity.EVM.Uint256
+open Contracts.InterfoldToken
 
-/-! ## Helper specs -/
+/-- doMintTokens reverts when totalSupply + amount > MAX_SUPPLY. -/
+def doMintTokens_revert_cap (recipient : Address) (amount : Uint256) (s : ContractState) : Prop :=
+  (amount ≠ 0 ∧ add (s.storage totalSupply.slot) amount > MAX_SUPPLY) →
+  ((doMintTokens recipient amount).run s).fst.isRevert
 
-/--
-  Spec for the `onlyOwner` guard: if sender equals owner, success with unchanged
-  state; otherwise revert "not owner".
--/
-def onlyOwner_spec (s s' : ContractState) : Prop :=
-  (s.sender = s.storageAddr ownerSlot.slot → s' = s) ∧
-  (s.sender ≠ s.storageAddr ownerSlot.slot →
-    ∃ msg, ((onlyOwner).run s).fst = .revert msg s)
+/-- doMintTokens reverts when amount == 0. -/
+def doMintTokens_revert_zero (recipient : Address) (s : ContractState) : Prop :=
+  ((doMintTokens recipient 0).run s).fst.isRevert
 
-/--
-  Spec for `doMint`: recipient balance increased by `amount`,
-  totalSupply increased by `amount`, other balances unchanged.
--/
-def doMint_spec (to : Address) (amount : Uint256) (s s' : ContractState) : Prop :=
-  -- no overflow preconditions implicit (safeAdd reverts on overflow)
-  s'.storageMap balancesSlot.slot to =
-    add (s.storageMap balancesSlot.slot to) amount ∧
-  s'.storage totalSupplySlot.slot =
-    add (s.storage totalSupplySlot.slot) amount ∧
-  storageMapUnchangedExceptKeyAtSlot balancesSlot.slot to s s' ∧
-  sameStorageAddrContext s s' ∧
-  sameStorageContext s s'
+/-- mint reverts when caller lacks DEFAULT_ADMIN_ROLE. -/
+def mint_revert_no_role (recipient : Address) (amount : Uint256) (label : Uint256) (s : ContractState) : Prop :=
+  (s.storageMap2 roleMembers.slot DEFAULT_ADMIN_ROLE s.sender ≠ 1) →
+  ((mint recipient amount label).run s).fst.isRevert
 
-/--
-  Spec for `doTransfer(to, amount)`: sender decreased, recipient increased,
-  totalSupply unchanged, other balances unchanged.
--/
-def doTransfer_spec (from to : Address) (amount : Uint256) (s s' : ContractState) : Prop :=
-  s'.storageMap balancesSlot.slot from =
-    sub (s.storageMap balancesSlot.slot from) amount ∧
-  s'.storageMap balancesSlot.slot to =
-    add (s.storageMap balancesSlot.slot to) amount ∧
-  s'.storage totalSupplySlot.slot = s.storage totalSupplySlot.slot ∧
-  storageMapUnchangedExceptKeysAtSlot balancesSlot.slot from to s s' ∧
-  sameStorageAddrContext s s' ∧
-  sameStorageContext s s'
+/-- mint reverts when phase ≠ Virtual. -/
+def mint_revert_not_virtual (recipient : Address) (amount : Uint256) (label : Uint256) (s : ContractState) : Prop :=
+  (s.storageMap2 roleMembers.slot DEFAULT_ADMIN_ROLE s.sender = 1 ∧
+   s.storage tgeTimestamp.slot ≠ 0) →
+  ((mint recipient amount label).run s).fst.isRevert
 
-/-! ## mintAllocation spec -/
+/-- mintAllocations reverts when caller lacks MINTER_ROLE. -/
+def mintAllocations_revert_no_role (recipient : Address) (amount : Uint256) (policyId : Uint256) (s : ContractState) : Prop :=
+  (s.storageMap2 roleMembers.slot MINTER_ROLE s.sender ≠ 1) →
+  ((mintAllocations recipient amount policyId).run s).fst.isRevert
 
-/--
-  Spec for `mintAllocation(to, amount)`:
-  When preconditions hold (caller is minter, to ≠ 0, amount ≠ 0, totalMinted + amount ≤ MAX_SUPPLY),
-  the post-state satisfies:
-  - `to` balance increased by `amount`
-  - `totalSupply` increased by `amount`
-  - `totalMinted` increased by `amount`
-  - other balances unchanged
-  - storage (except balances, totalSupply, totalMinted) unchanged
--/
-def mintAllocation_spec (to : Address) (amount : Uint256) (s s' : ContractState) : Prop :=
-  -- balance changes
-  s'.storageMap balancesSlot.slot to =
-    add (s.storageMap balancesSlot.slot to) amount ∧
-  s'.storage totalSupplySlot.slot =
-    add (s.storage totalSupplySlot.slot) amount ∧
-  s'.storage totalMintedSlot.slot =
-    add (s.storage totalMintedSlot.slot) amount ∧
-  -- only that balance changed
-  storageMapUnchangedExceptKeyAtSlot balancesSlot.slot to s s' ∧
-  -- other storage unchanged (except the three slots above)
-  storageUnchangedExceptSlots [totalSupplySlot.slot, totalMintedSlot.slot] s s' ∧
-  sameStorageAddrContext s s' ∧
-  sameContext s s'
+/-- mintAllocations reverts when phase ≠ Virtual. -/
+def mintAllocations_revert_not_virtual (recipient : Address) (amount : Uint256) (policyId : Uint256) (s : ContractState) : Prop :=
+  (s.storageMap2 roleMembers.slot MINTER_ROLE s.sender = 1 ∧
+   s.storage tgeTimestamp.slot ≠ 0) →
+  ((mintAllocations recipient amount policyId).run s).fst.isRevert
 
-/--
-  Revert spec for `mintAllocation`:
-  When preconditions fail (caller not minter, to is zero, amount is zero,
-  or supply cap would be exceeded), the function reverts.
--/
-def mintAllocation_revert_spec (to : Address) (amount : Uint256) (s : ContractState) : Prop :=
-  (s.sender ≠ s.storageAddr minterSlot.slot ∨ to = 0 ∨ amount = 0
-   ∨ add (s.storage totalMintedSlot.slot) amount > MAX_SUPPLY) →
-  ∃ msg, ((mintAllocation to amount).run s).fst = .revert msg s
+/-- tge() reverts when already live (tgeTimestamp != 0). -/
+def tge_revert_already_live (s : ContractState) : Prop :=
+  (s.storage tgeTimestamp.slot ≠ 0) →
+  ((tge).run s).fst.isRevert
 
-/-! ## disableTransferRestrictions spec -/
+/-- tge() reverts when called before CCA_END + TGE_COOLDOWN. -/
+def tge_revert_too_early (s : ContractState) : Prop :=
+  (s.storage tgeTimestamp.slot = 0 ∧
+   s.blockTimestamp < add (s.storage ccaEnd.slot) TGE_COOLDOWN) →
+  ((tge).run s).fst.isRevert
 
-/--
-  Spec for `disableTransferRestrictions`:
-  When called by owner and restrictions are currently true,
-  they become false in the post-state.
-  When already false, state is unchanged.
-  When called by non-owner, reverts.
--/
-def disableTransferRestrictions_spec (s s' : ContractState) : Prop :=
-  (s.sender = s.storageAddr ownerSlot.slot) →
-    (s.storage transfersRestrictedSlot.slot = true →
-      s'.storage transfersRestrictedSlot.slot = false ∧
-      sameStorageExceptSlots [transfersRestrictedSlot.slot] s s') ∧
-    (s.storage transfersRestrictedSlot.slot = false → s' = s)
+/-- tge() sets tgeTimestamp on success. -/
+def tge_sets_timestamp (s s' : ContractState) : Prop :=
+  (s.storage tgeTimestamp.slot = 0 ∧
+   s.blockTimestamp >= add (s.storage ccaEnd.slot) TGE_COOLDOWN) →
+  s'.storage tgeTimestamp.slot = s.blockTimestamp
 
-/-! ## toggleTransferWhitelist spec -/
+/-- setTransferWhitelisted reverts when caller lacks WHITELIST_ROLE. -/
+def setTransferWhitelisted_revert_no_role (account : Address) (whitelisted : Uint256) (s : ContractState) : Prop :=
+  (s.storageMap2 roleMembers.slot WHITELIST_ROLE s.sender ≠ 1) →
+  ((setTransferWhitelisted account whitelisted).run s).fst.isRevert
 
-/--
-  Spec for `toggleTransferWhitelist(account)`:
-  When called by whitelist manager, the whitelist status for `account` is flipped.
-  Other storage is unchanged.
--/
-def toggleTransferWhitelist_spec (account : Address) (s s' : ContractState) : Prop :=
-  (s.sender = s.storageAddr whitelistManagerSlot.slot) →
-    s'.storageMap transferWhitelistedSlot.slot account =
-      not (s.storageMap transferWhitelistedSlot.slot account) ∧
-    storageMapUnchangedExceptKeyAtSlot transferWhitelistedSlot.slot account s s' ∧
-    sameStorageContext s s' ∧
-    sameStorageAddrContext s s'
+/-- setTransferWhitelisted reverts when account is zero address. -/
+def setTransferWhitelisted_revert_zero (whitelisted : Uint256) (s : ContractState) : Prop :=
+  (s.storageMap2 roleMembers.slot WHITELIST_ROLE s.sender = 1) →
+  ((setTransferWhitelisted 0 whitelisted).run s).fst.isRevert
 
-/-! ## transfer spec -/
+/-- setTransferWhitelisted sets the whitelist status on success. -/
+def setTransferWhitelisted_sets (account : Address) (whitelisted : Uint256) (s s' : ContractState) : Prop :=
+  (s.storageMap2 roleMembers.slot WHITELIST_ROLE s.sender = 1 ∧ account ≠ 0) →
+  s'.storageMap transferWhitelisted.slot account = whitelisted
 
-/--
-  Spec for `transfer(to, amount)`:
-  When preconditions hold (sufficient balance, not restricted or whitelisted),
-  sender balance decreases by amount, recipient increases by amount,
-  totalSupply unchanged, other balances unchanged.
--/
-def transfer_spec (to : Address) (amount : Uint256) (s s' : ContractState) : Prop :=
-  s'.storageMap balancesSlot.slot s.sender =
-    sub (s.storageMap balancesSlot.slot s.sender) amount ∧
-  s'.storageMap balancesSlot.slot to =
-    add (s.storageMap balancesSlot.slot to) amount ∧
-  s'.storage totalSupplySlot.slot = s.storage totalSupplySlot.slot ∧
-  storageMapUnchangedExceptKeysAtSlot balancesSlot.slot s.sender to s s' ∧
-  sameStorageAddrContext s s' ∧
-  sameContext s s'
+/-- isTransferRestricted returns 0 (not restricted) when tgeTimestamp != 0 (post-TGE). -/
+def isTransferRestricted_post_tge (from to : Address) (s : ContractState) : Prop :=
+  (s.storage tgeTimestamp.slot ≠ 0) →
+  ((isTransferRestricted from to).run s).fst = ContractResult.success 0 s
 
-/-! ## Contract-level invariant -/
+/-- isTransferRestricted returns 0 when from == 0 (mint). -/
+def isTransferRestricted_mint_exempt (to : Address) (s : ContractState) : Prop :=
+  ((isTransferRestricted 0 to).run s).fst = ContractResult.success 0 s
 
-/--
-  The totalSupply invariant: totalSupply = sum of all balances.
-  NOTE: This is stated as a predicate but cannot be proven directly in Verity
-  without whole-mapping iteration support. It is included here for documentation
-  and can be verified through per-transition invariants.
--/
-def totalSupply_invariant (s : ContractState) : Prop :=
-  s.storage totalSupplySlot.slot = s.storage totalSupplySlot.slot
-  -- Placeholder: in practice, this would require summing all balances
-  -- which Verity does not currently support natively.
+/-- isTransferRestricted returns 0 when to == 0 (burn). -/
+def isTransferRestricted_burn_exempt (from : Address) (s : ContractState) : Prop :=
+  ((isTransferRestricted from 0).run s).fst = ContractResult.success 0 s
 
-/--
-  The supply cap invariant: totalMinted ≤ MAX_SUPPLY.
-  This IS provable because it only involves scalar variables.
--/
+/-- isTransferRestricted returns 1 when pre-TGE, non-mint/burn, non-bonding, non-CCA, non-whitelisted. -/
+def isTransferRestricted_blocks (from to : Address) (s : ContractState) : Prop :=
+  (s.storage tgeTimestamp.slot = 0 ∧
+   from ≠ 0 ∧ to ≠ 0 ∧
+   from ≠ s.storageAddr bondingRegistry.slot ∧
+   to ≠ s.storageAddr bondingRegistry.slot ∧
+   from ≠ s.storageAddr claimSource.slot ∧
+   s.storageMap transferWhitelisted.slot from = 0 ∧
+   s.storageMap transferWhitelisted.slot to = 0) →
+  ((isTransferRestricted from to).run s).fst = ContractResult.success 1 s
+
+/-- Supply cap invariant: totalSupply ≤ MAX_SUPPLY. -/
 def supply_cap_invariant (s : ContractState) : Prop :=
-  s.storage totalMintedSlot.slot ≤ MAX_SUPPLY
+  s.storage totalSupply.slot ≤ MAX_SUPPLY
 
-/--
-  The one-way restriction invariant: transfersRestricted can only go from true to false.
-  This is verified by checking that every function that modifies it only sets it to false
-  (never to true after initialization).
--/
-def restriction_monotonic_invariant (s_old s_new : ContractState) : Prop :=
-  s_old.storage transfersRestrictedSlot.slot = false →
-  s_new.storage transfersRestrictedSlot.slot = false
+end Contracts.InterfoldToken.Spec
