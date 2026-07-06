@@ -117,6 +117,9 @@ export const deployInterfold = async (
   const SEVEN_DAYS_IN_SECONDS = 60 * 60 * 24 * 7;
   const TGE_COOLDOWN_SECONDS = 60 * 60 * 24 * 40;
   const FOUR_YEARS_IN_SECONDS = 60 * 60 * 24 * 365 * 4;
+  const ONE_MONTH_IN_SECONDS = THIRTY_DAYS_IN_SECONDS;
+  const LOCK_SUNSET_DELAY_SECONDS =
+    FOUR_YEARS_IN_SECONDS + ONE_MONTH_IN_SECONDS;
   const SORTITION_SUBMISSION_WINDOW = 10;
   const addressOne = "0x0000000000000000000000000000000000000001";
 
@@ -249,7 +252,8 @@ export const deployInterfold = async (
     ccaEnd,
     claimSource: ownerAddress,
     bondingRegistry: bondingRegistryAddress,
-    noMoreLocks: ccaEnd + BigInt(TGE_COOLDOWN_SECONDS + FOUR_YEARS_IN_SECONDS),
+    noMoreLocks:
+      ccaEnd + BigInt(TGE_COOLDOWN_SECONDS + LOCK_SUNSET_DELAY_SECONDS),
     hre,
   });
   const interfoldTokenAddress = await interfoldToken.getAddress();
@@ -468,8 +472,8 @@ export const deployInterfold = async (
     publicationBase: 1000000, // 1.00 USDC
     verificationPerProof: 5000, // 0.005 USDC
     protocolTreasury: protocolTreasury,
-    marginBps: 1500, // 15%
-    protocolShareBps: 2000, // 20%
+    marginBps: 1000, // 10%
+    protocolShareBps: 182, // 1.82% gross ~= 20% of 10% margin
     dkgUtilizationBps: 2500, // 25%
     computeUtilizationBps: 5000, // 50%
     decryptUtilizationBps: 2500, // 25%
