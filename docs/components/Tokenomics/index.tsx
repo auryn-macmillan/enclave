@@ -25,13 +25,13 @@ type Slice = {
 // Community = vivid brand greens; Other = dark brand neutrals.
 // Colors alternate light↔dark across stacking order for maximum area-chart legibility.
 const ALLOCATION: Slice[] = [
-  // Community (57%)
-  { key: 'Foundation Treasury', pct: 43, color: '#3A7D44', group: 'community' }, // vivid forest
+  // Community (54.5%)
+  { key: 'Foundation Treasury', pct: 40.5, color: '#3A7D44', group: 'community' }, // vivid forest
   { key: 'CCA', pct: 10, color: '#687d71', group: 'community' }, // brand sage
   { key: 'Airdrop', pct: 4, color: '#82F5AD', group: 'community' }, // brand bright mint
-  // Other (43%)
+  // Other (45.5%)
   { key: 'Gnosis Guild', pct: 20, color: '#252525', group: 'other' }, // brand dark charcoal
-  { key: 'Investors', pct: 14, color: '#3A4E42', group: 'other' }, // dark muted forest
+  { key: 'Investors (up to)', pct: 16.5, color: '#3A4E42', group: 'other' }, // dark muted forest
   { key: 'Team and Advisors', pct: 9, color: '#8FAE96', group: 'other' }, // muted sage
 ]
 
