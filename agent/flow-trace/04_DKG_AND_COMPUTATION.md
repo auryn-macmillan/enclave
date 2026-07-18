@@ -637,6 +637,10 @@ ThresholdKeyshare receives AllThresholdSharesCollected
   ├─ Requires EffectsEnabled
   ├─ Requires active_aggregators[e3_id] == true
   ├─ Reads chain state to confirm committee public key is still unset
+  ├─ Encodes the DkgAggregator proof in production
+  ├─ Feature-gated test/CI nodes with `skip_proof_aggregation` reuse the non-empty C5 proof as a
+  │  mock-verifier placeholder; this does not bypass contract verification
+  │  and every node in a test swarm must use the same flag value
   └─ Calls contract.publishCommittee(e3_id, publicKey, pkCommitment, proof)
         │
         │  ┌─── ON-CHAIN (CiphernodeRegistryOwnable) ──────────┐
@@ -646,7 +650,7 @@ ThresholdKeyshare receives AllThresholdSharesCollected
         │  │    2. require(c.publicKey == 0) — publish once      │
         │  │    3. committeeHash = keccak256(abi.encodePacked(c.topNodes)) │
         │  │       c.committeeHash = committeeHash               │
-        │  │    4. When proofAggregationEnabled:                 │
+        │  │    4. require(proof.length > 0)                    │
         │  │       e3.pkVerifier.verify(                         │
         │  │         e3Id, committeeRoot, c.topNodes,            │
         │  │         pkCommitment, committeeHash, proof          │
@@ -658,6 +662,7 @@ ThresholdKeyshare receives AllThresholdSharesCollected
         │  │           [2+H] & [3+H]) vs committeeHash           │
         │  │         • last PI == pkCommitment                   │
         │  │         • M-35: revert on failure (no `bool false`) │
+        │  │       and verify/store per-node fold attestations   │
         │  │    5. c.publicKey = pkCommitment                    │
         │  │       publicKeyHashes[e3Id] = pkCommitment          │
         │  │    6. interfold.onCommitteePublished(e3Id, pkCommitment) │
@@ -676,6 +681,15 @@ ThresholdKeyshare receives AllThresholdSharesCollected
         │  └─────────────────────────────────────────────────────┘
 ```
 
+The serialized `publicKey` event field is a transport hint, not on-chain authority. Before
+`e3-indexer` stores it in `E3.committee_public_key`, it decodes the BFV key, recomputes the
+circuit's public-key commitment using the request's parameter set, and requires equality with the
+event's on-chain `pkCommitment`. TypeScript event consumers receive the same `pkCommitment` and use
+`InterfoldSDK.validatePublicKeyCommitment()` before accepting the bytes; the default application
+does this before advancing to encryption. Malformed bytes or bytes for a different key fail closed
+and never reach first-party encryption clients. Production verifies the C5-backed final DKG proof
+on-chain; the explicit test/CI skip mode works only with mock verifiers that trust its placeholder.
+
 > **C-08 (BfvPkVerifier domain binding) — implemented** The wrapper exposes a
 > `verify(e3Id, committeeRoot, sortedNodes, pkCommitment, committeeHash, proof)` signature.
 > `committeeHash` (computed on-chain as `keccak256(abi.encodePacked(c.topNodes))`) is split into
@@ -683,6 +697,10 @@ ThresholdKeyshare receives AllThresholdSharesCollected
 > `publicInputs[committeeHashLoIdx]`, binding the proof to the specific committee. The contextual
 > params `(e3Id, committeeRoot, sortedNodes)` are forwarded for interface compatibility and future
 > circuit-level binding.
+
+> **Verifier deployment anchors:** `BfvPkVerifier` and `BfvDecryptionVerifier` constructors reject
+> zero/EOA circuit-verifier addresses and zero recursive VK hashes. Production deployment tooling
+> additionally compares the immutable VK hashes with the version-controlled circuit artifacts.
 
 ---
 
@@ -776,6 +794,11 @@ InterfoldSolReader decodes CiphertextOutputPublished event
     │   │   → Circuit: ThresholdShareDecryption (C6)
     │   │   → Proves decryption share was correctly computed from
     │   │     sk_poly_sum, es_poly_sum, and ciphertext
+    │   │   → Publicly commits to the E3 decryption-domain limbs:
+    │   │     keccak256(abi.encode(
+    │   │       chainId, Interfold address, e3Id, committeeHash,
+    │   │       ciphertextOutputHash, committeePublicKey
+    │   │     ))
     │   │   → Fiat-Shamir transcript absorbs full `d` (all coefficients per CRT limb)
     │   ├─ ZkActor generates proof via bb binary
     │   ├─ Signs proof
@@ -868,8 +891,11 @@ InterfoldSolReader decodes CiphertextOutputPublished event
 │   │   ├─ Dispatches ComputeRequest::zk(ZkRequest::DecryptionAggregation {
 │   │   │     c6_total_slots, jobs, params_preset
 │   │   │   })
-│   │   ├─ Each job folds the selected C6 proofs for one ciphertext index and checks them
-│   │   │   against the matching C7 proof inside `DecryptionAggregator`
+│   │   ├─ Each job folds the selected C6 proofs for one ciphertext index, requires every
+│   │   │   C6 leaf to carry the same E3 domain, and checks them against the matching C7 proof
+│   │   │   inside `DecryptionAggregator`
+│   │   ├─ `DecryptionAggregator` exposes that C6-authenticated domain as two public
+│   │   │   128-bit limbs in the final EVM proof
 │   │   ├─ Tracks the in-flight correlation id
 │   │   ├─ ComputeRequestError, missing C6 inner proofs, or C7/decryption-aggregator proof-count
 │   │   │   mismatches now emit
@@ -884,6 +910,10 @@ InterfoldSolReader decodes CiphertextOutputPublished event
   ├─ Requires EffectsEnabled
   ├─ Requires active_aggregators[e3_id] == true
   ├─ Reads chain state to confirm plaintextOutput is still empty
+  ├─ Encodes the final DecryptionAggregator proof in production
+  ├─ Feature-gated test/CI nodes with `skip_proof_aggregation` reuse the non-empty C7 proof as a
+  │  mock-verifier placeholder; this does not bypass contract verification
+  │  and every node in a test swarm must use the same flag value
   └─ Calls contract.publishPlaintextOutput(e3Id, output, proof)
         │
         │  ┌─── ON-CHAIN (Interfold.sol) ─────────────────────────┐
@@ -891,17 +921,21 @@ InterfoldSolReader decodes CiphertextOutputPublished event
         │  │  publishPlaintextOutput(e3Id, output, proof) {      │
         │  │    1. require(stage == CiphertextReady)             │
         │  │    2. require(now <= decryptionDeadline)            │
-        │  │    3. e3.plaintextOutput = output                   │
-        │  │    4. decryptionVerifier.verify(                    │
-        │  │         e3Id, committeeRoot,                        │
-        │  │         committeeNodes, ciphertextOutput,           │
-        │  │         committeePublicKey,                         │
-        │  │         keccak256(output), proof                    │
+        │  │    3. require(proof.length > 0), recompute          │
+        │  │       decryptionDomain = keccak256(abi.encode(      │
+        │  │         chainId, address(this), e3Id,               │
+        │  │         committeeHash, ciphertextOutput,            │
+        │  │         committeePublicKey                          │
+        │  │       )), then call decryptionVerifier.verify(      │
+        │  │         decryptionDomain, keccak256(output),        │
+        │  │         committeeHash, proof                        │
         │  │       )                                             │
+        │  │       → C-03: final proof domain must match the      │
+        │  │         domain already committed by every C6 leaf.  │
         │  │       → M-34: c6Fold / C7 VK hashes are immutable.  │
         │  │       → M-35: revert path only (no `bool false`).   │
-        │  │    5. stage = Complete                              │
-        │  │    6. _distributeRewards(e3Id)                      │
+        │  │    4. stage = Complete                              │
+        │  │    5. _distributeRewards(e3Id)                      │
         │  │       │                                             │
         │  │       │  ┌─ Reward Distribution (pull, H-01/M-02) ┐  │
         │  │       │  │  1. Get active committee nodes:        │  │
