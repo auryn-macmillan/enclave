@@ -36,9 +36,17 @@ interface IDecryptionVerifier {
     /// @notice The domain-binding public-input slot does not equal the value
     ///         recomputed on-chain from the call context.
     error DomainBindingMismatch();
+    /// @notice A `party_id` returned by the proof is not present in the
+    ///         registry's stored DKG anchors for this E3.
+    error DkgAnchorNotFound();
+    /// @notice The proof's `expected_sk`/`expected_esm` commitment for a
+    ///         party does not match the registry's stored DKG anchor.
+    error DkgAnchorMismatch();
 
     /// @notice Verify a DecryptionAggregator EVM proof and bind it to the E3
-    ///         domain recomputed by Interfold.
+    ///         domain recomputed by Interfold and the DKG anchors stored for it.
+    /// @param e3Id Identifier used to resolve the stored DKG anchors. It is
+    ///        passed separately because it cannot be recovered from the domain hash.
     /// @param decryptionDomain `keccak256(abi.encode(chainId, interfold, e3Id,
     ///        committeeHash, ciphertextOutputHash, committeePublicKey))`.
     /// @param plaintextOutputHash `keccak256(plaintextOutput)` expected by the Interfold.
@@ -46,6 +54,7 @@ interface IDecryptionVerifier {
     /// @param proof ABI-encoded `(bytes rawProof, bytes32[] publicInputs)`.
     /// @return success Always `true` on success; the wrapper reverts on any failure.
     function verify(
+        uint256 e3Id,
         bytes32 decryptionDomain,
         bytes32 plaintextOutputHash,
         bytes32 committeeHash,

@@ -504,12 +504,12 @@ GOVERNANCE lifts ban:
 
 ## Cluster 6 Audit Addendum (deregistration & bans)
 
-- **Collateral exit is blocked while a slash is open** (H-05, AUD H-03).
-  `BondingRegistry` checks `hasOpenSlashProposal(operator)` on every authorized current or retained
-  historical manager and reverts `OperatorUnderSlash()` from ticket withdrawal, license unbonding,
-  deregistration, and exit claims. Execution, an upheld appeal, or permissionless appeal expiry
-  unwinds the counter. After manager rotation, governance must retain the old manager until every
-  E3 and proposal that depends on it is terminal, then explicitly revoke it.
+- **Collateral exit is blocked while a slash is open** (H-05, AUD H-03). `BondingRegistry` checks
+  `hasOpenSlashProposal(operator)` on every authorized current or retained historical manager and
+  reverts `OperatorUnderSlash()` from ticket withdrawal, license unbonding, deregistration, and exit
+  claims. Execution, an upheld appeal, or permissionless appeal expiry unwinds the counter. After
+  manager rotation, governance must retain the old manager until every E3 and proposal that depends
+  on it is terminal, then explicitly revoke it.
 
 - **Two-step ban** (M-14, M-15): bans now require `proposeBan` → `confirmBan` from a **distinct**
   signer holding `GOVERNANCE_ROLE`. `cancelBan` rescinds an unconfirmed proposal. Legacy direct-set

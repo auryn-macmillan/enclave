@@ -95,6 +95,7 @@ library InterfoldPricing {
             )
         );
         IDecryptionVerifier(verifierAddress).verify(
+            e3Id,
             decryptionDomain,
             plaintextHash,
             committeeHash,

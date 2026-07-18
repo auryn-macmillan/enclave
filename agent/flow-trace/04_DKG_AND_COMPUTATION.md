@@ -414,7 +414,8 @@ ShareVerificationActor receives ShareVerificationDispatched(kind=ShareProofs)
 │   │   │     C4a→C6  (SameParty):                C4a's commitment == C6's expected_sk_commitment
 │   │   │     C4b→C6  (SameParty):                C4b's commitment == C6's expected_e_sm_commitment
 │   │   │     C6→C7   (CrossParty):               C6's d_commitment matches C7's expected_d_commitment
-│   │   │     (on-chain / E3 state)              C3 `ct_commitment` output and C6 `ct_commitment` input bind to the same ciphertext as user_data_encryption (not a CommitmentLink row)
+│   │   │     (on-chain / E3 state)              C3/C6 ciphertext commitments are checked against their ciphertext witnesses off-chain;
+│   │   │                                      the final EVM proof does not yet expose a ciphertext commitment for comparison with `keccak256(e3.ciphertextOutput)`
 │   │   │
 │   │   ├─ On mismatch: publishes CommitmentConsistencyViolation
 │   │   │   → AccusationManager initiates accusation quorum (see Part 5)
@@ -702,6 +703,15 @@ on-chain; the explicit test/CI skip mode works only with mock verifiers that tru
 > zero/EOA circuit-verifier addresses and zero recursive VK hashes. Production deployment tooling
 > additionally compares the immutable VK hashes with the version-controlled circuit artifacts.
 
+The decryption wrapper exposes
+`verify(e3Id, decryptionDomain, plaintextOutputHash, committeeHash, proof)`. `Interfold` recomputes
+`decryptionDomain` over
+`(chainId, Interfold address, e3Id, committeeHash, ciphertextOutputHash, committeePublicKey)`. The
+wrapper checks the domain limbs in the final proof, then uses the separate `e3Id` to resolve the
+registry's stored DKG anchors and compares every surfaced party ID, secret-key commitment, and
+smudging-noise commitment. The party IDs are circuit-side 1-indexed Shamir coordinates and are
+translated to the registry's 0-indexed committee slots for this comparison.
+
 ---
 
 ## Phase 3: Encrypted Computation
@@ -896,6 +906,8 @@ InterfoldSolReader decodes CiphertextOutputPublished event
 │   │   │   inside `DecryptionAggregator`
 │   │   ├─ `DecryptionAggregator` exposes that C6-authenticated domain as two public
 │   │   │   128-bit limbs in the final EVM proof
+│   │   ├─ `DecryptionAggregator` requires 1-indexed, strictly increasing party IDs;
+│   │   │   zero, out-of-range, and duplicate reconstruction slots are rejected
 │   │   ├─ Tracks the in-flight correlation id
 │   │   ├─ ComputeRequestError, missing C6 inner proofs, or C7/decryption-aggregator proof-count
 │   │   │   mismatches now emit
@@ -927,12 +939,14 @@ InterfoldSolReader decodes CiphertextOutputPublished event
         │  │         committeeHash, ciphertextOutput,            │
         │  │         committeePublicKey                          │
         │  │       )), then call decryptionVerifier.verify(      │
-        │  │         decryptionDomain, keccak256(output),        │
+         │  │         e3Id, decryptionDomain, keccak256(output),  │
         │  │         committeeHash, proof                        │
         │  │       )                                             │
         │  │       → C-03: final proof domain must match the      │
         │  │         domain already committed by every C6 leaf.  │
-        │  │       → M-34: c6Fold / C7 VK hashes are immutable.  │
+         │  │       → IF-003: e3Id resolves stored DKG anchors;  │
+         │  │       │  proof party IDs and SK/ESM commitments match.│
+         │  │       → M-34: c6Fold / C7 VK hashes are immutable.  │
         │  │       → M-35: revert path only (no `bool false`).   │
         │  │    4. stage = Complete                              │
         │  │    5. _distributeRewards(e3Id)                      │

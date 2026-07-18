@@ -322,8 +322,9 @@ steps:
    and t is the plaintext modulus. The decoding handles centered representation so coefficients are
    correctly recovered within `[0, t)`
 
-C7 proves all three steps were done correctly. The output is the final plaintext — the result of the
-encrypted computation, publicly verifiable by anyone. This circuit runs once, executed by the
+C7 proves all three steps were done correctly. The equality check applies to every decoded
+coefficient, including coefficients claimed as zero. The output is the final plaintext — the result
+of the encrypted computation, publicly verifiable by anyone. This circuit runs once, executed by the
 aggregator.
 
 ---
@@ -517,11 +518,13 @@ for the full contract.
 ### Decryption recursive proof
 
 The decryption recursive proof (`BfvDecryptionVerifier`) follows the same shape: a recursive Honk
-proof aggregates **C6** from at least **T+1** parties plus **C7**, surfaces `expected_sk_commits[]`
-and `expected_esm_commits[]` per party, and binds to the on-chain committee hash. The registry
-compares the surfaced commitments against the anchors stored at `publishCommittee` — if any anchor
-differs the proof is rejected — and the plaintext is decoded from the proof's last 100 public inputs
-(one `uint64` coefficient each, packed into bytes).
+proof aggregates **C6** from at least **T+1** parties plus **C7**, carries a domain over the chain,
+deployment, E3, committee, ciphertext, and committee-key context, and surfaces the party IDs plus
+`expected_sk_commits[]` and `expected_esm_commits[]` per party. The wrapper receives `e3Id`
+separately so it can compare those surfaced commitments against the anchors stored at
+`publishCommittee`; if any anchor differs, or if the E3 domain differs, the proof is rejected. The
+plaintext is decoded from the proof's last 100 public inputs (one `uint64` coefficient each, packed
+into bytes).
 
 ### Slashing-evidence binding
 

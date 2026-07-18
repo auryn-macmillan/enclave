@@ -14,6 +14,7 @@ contract MockDecryptionVerifier is IDecryptionVerifier {
     bytes4 private constant _FAIL_MAGIC = 0xdeadbeef;
 
     function verify(
+        uint256,
         bytes32,
         bytes32,
         bytes32,
