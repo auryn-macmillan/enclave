@@ -523,8 +523,31 @@ export const publishCiphertext = task(
     defaultValue: "",
     type: ArgumentType.STRING,
   })
+  .addOption({
+    name: "ciphertextCommitment",
+    description: "circuit-compatible SAFE commitment to the decoded ciphertext",
+    defaultValue: "",
+    type: ArgumentType.STRING,
+  })
+  .addOption({
+    name: "ciphertextCommitmentFile",
+    description: "file containing the 32-byte ciphertext commitment",
+    defaultValue: "",
+    type: ArgumentType.STRING,
+  })
   .setAction(async () => ({
-    default: async ({ e3Id, data, dataFile, proof, proofFile }, hre) => {
+    default: async (
+      {
+        e3Id,
+        data,
+        dataFile,
+        proof,
+        proofFile,
+        ciphertextCommitment,
+        ciphertextCommitmentFile,
+      },
+      hre,
+    ) => {
       const { deployAndSaveInterfold } = await import(
         "../scripts/deployAndSave/interfold"
       );
@@ -547,9 +570,21 @@ export const publishCiphertext = task(
         proofToSend = file.toString();
       }
 
+      let commitmentToSend = ciphertextCommitment;
+      if (ciphertextCommitmentFile) {
+        commitmentToSend =
+          "0x" + fs.readFileSync(ciphertextCommitmentFile).toString("hex");
+      }
+      if (!isHexString(commitmentToSend, 32)) {
+        throw new Error(
+          "A 32-byte --ciphertext-commitment or --ciphertext-commitment-file is required",
+        );
+      }
+
       const tx = await interfold.publishCiphertextOutput(
         e3Id,
         dataToSend,
+        commitmentToSend,
         proofToSend,
       );
 
