@@ -5,8 +5,8 @@
 Before a node can register, it must stake two types of collateral:
 
 1. **FOLD tokens** (license bond) — governance/utility token, staked directly
-2. **Stablecoin via tFOLD tickets** (ticket collateral) — USDC wrapped into non-transferable
-   InterfoldTicketToken
+2. **Collateral via tFOLD tickets** (ticket collateral) — the configured ERC-20 asset is wrapped
+   into non-transferable InterfoldTicketToken. The planned launch asset is sUSDS.
 
 Collateral ownership and operator identity are separate namespaces:
 
@@ -89,17 +89,17 @@ Collateral ownership and operator identity are separate namespaces:
 
 ┌───────────────────────────────────────────────────────────┐
 │              InterfoldTicketToken (tFOLD)                      │
-│  ERC20Wrapper over stablecoin (e.g. USDC)                 │
+│  ERC20Wrapper over the configured collateral asset        │
 │                                                           │
 │  NON-TRANSFERABLE: _update() reverts on transfer          │
 │  NO DELEGATION: delegate() reverts                        │
 │  NO APPROVALS: approve() reverts                          │
 │                                                           │
 │  Only BondingRegistry (registry role) can:                │
-│    depositFor()  → wrap USDC, mint tFOLD to operator        │
-│    depositFrom() → pull USDC from X, mint tFOLD to Y       │
+│    depositFor()  → wrap collateral, mint tFOLD to operator │
+│    depositFrom() → pull collateral, mint tFOLD to operator │
 │    burnTickets() → burn tFOLD, NO underlying returned       │
-│    withdrawTo()  → burn tFOLD, return underlying USDC       │
+│    withdrawTo()  → burn tFOLD, return collateral           │
 │    payout()      → send underlying from payableBalance    │
 │                                                           │
 │  Used as: TICKET COLLATERAL token                         │
@@ -111,6 +111,10 @@ Collateral ownership and operator identity are separate namespaces:
 establish either token's economic value. Both assets must transfer exact amounts and must not rebase
 account balances. Deposits verify the custody increase. Exits, payouts, and license transfers verify
 the recipient increase and custody decrease. A mismatch reverts the complete transaction.
+
+The protocol deployment configuration keeps `feeToken` separate from `ticketUnderlyingToken`. The
+planned launch uses USDS for fees and sUSDS for ticket collateral. A fixed `ticketPrice` or ticket
+slash penalty represents a fixed number of sUSDS shares, not a fixed USDS redemption value.
 
 Bonding-asset rotation is liability-gated. A replacement ticket wrapper cannot be configured while
 the old wrapper has issued tickets or a payable balance. The registry tracks `totalLicenseLiability`
@@ -225,27 +229,28 @@ A completed ban or unban refreshes the affected registered operator immediately.
 
 ## Step 2: Fund Tickets
 
-The owner calls `addTicketBalanceFor(operator, amount)`: USDC is pulled from the owner but
-non-transferable tFOLD is minted to the operator so committee snapshots remain keyed to the node.
+The owner calls `addTicketBalanceFor(operator, amount)`: ticket collateral is pulled from the owner,
+but non-transferable tFOLD is minted to the operator so committee snapshots remain keyed to the
+node.
 
 These steps are token operations, not an onboarding order. The operator must already be registered:
 `addTicketBalanceFor` reverts with `NotRegistered()` otherwise. Onboarding runs bond, register, then
 tickets — see [01_REGISTRATION.md](01_REGISTRATION.md#step-3-owner-funded-registration).
 
-> **IMPORTANT:** The `amount` parameter is in **underlying stablecoin base units** (e.g., USDC wei),
-> NOT in ticket count. `ticketPrice` is only used in the activation check
+> **IMPORTANT:** The `amount` parameter is in **underlying token base units** (sUSDS share units at
+> launch), NOT in ticket count. `ticketPrice` is only used in the activation check
 > (`balanceOf / ticketPrice >= minTicketBalance`) and in sortition eligibility — it is NOT used to
 > multiply the deposit amount.
 
 ```
-Bond owner submits addTicketBalanceFor(operator, 100_000_000)
+Bond owner submits addTicketBalanceFor(operator, amount)
 │
-├─ 1. Approve stablecoin spend:
-│     └─ USDC.approve(ticketTokenAddress, 100_000_000)
+├─ 1. Approve collateral spend:
+│     └─ ticketUnderlying.approve(ticketTokenAddress, amount)
 │        → Note: approval is to the TicketToken contract (not BondingRegistry)
-│        → because depositFrom pulls USDC into the TicketToken wrapper
+│        → because depositFrom pulls collateral into the TicketToken wrapper
 │
-├─ 2. BondingRegistry.addTicketBalanceFor(operator, 100_000_000)
+├─ 2. BondingRegistry.addTicketBalanceFor(operator, amount)
 │     │
 │     │  ┌─── ON-CHAIN (BondingRegistry.sol) ──────────────────┐
 │     │  │                                                      │
@@ -255,9 +260,9 @@ Bond owner submits addTicketBalanceFor(operator, 100_000_000)
 │     │  │    3. require(operators[operator].registered)        │
 │     │  │    4. require(!exitInProgress(operator))             │
 │     │  │    5. ticketToken.depositFrom(                       │
-│     │  │         msg.sender,  // pull USDC from bond owner    │
+│     │  │         msg.sender,  // pull collateral from owner   │
 │     │  │         operator,    // mint tFOLD to operator       │
-│     │  │         amount       // RAW stablecoin units         │
+│     │  │         amount       // raw underlying units         │
 │     │  │       )              // NO ticketPrice multiplication│
 │     │  │       │                                              │
 │     │  │       │  ┌─ InterfoldTicketToken.depositFrom() ────┐  │
@@ -327,7 +332,7 @@ Bond owner submits unbondLicenseFor(operator, 10000)
 
 Only the owner may call `removeTicketBalanceFor(operator, amount)`.
 
-> **IMPORTANT:** Like `addTicketBalance`, the `amount` here is in **raw stablecoin base units**
+> **IMPORTANT:** Like `addTicketBalance`, the `amount` here is in **raw underlying token units**
 > (tFOLD units, which are 1:1 with underlying). There is NO `ticketPrice` multiplication.
 
 ```
@@ -351,7 +356,7 @@ Bond owner submits removeTicketBalanceFor(operator, rawAmount)
 │     │  │       │  │    payableBalance += amount             │  │
 │     │  │       │  │    _burn(operator, amount)             │  │
 │     │  │       │  │    → tFOLD destroyed                     │  │
-│     │  │       │  │    → Underlying USDC NOT returned yet  │  │
+│     │  │       │  │    → Collateral is not returned yet    │  │
 │     │  │       │  │    → Tracked in payableBalance for     │  │
 │     │  │       │  │      later payout()                    │  │
 │     │  │       │  └────────────────────────────────────────┘  │
@@ -364,7 +369,7 @@ Bond owner submits removeTicketBalanceFor(operator, rawAmount)
 │     │  │  }                                                    │
 │     │  └───────────────────────────────────────────────────────┘
 │
-└─ Tickets burned, USDC queued for exit after delay
+└─ Tickets burned, collateral queued for exit after delay
 ```
 
 ---
@@ -408,7 +413,7 @@ Caller submits claimExitsFor(operator, maxTicket, maxLicense)
 │     │  │       ticketToken.payout(recipient, ticketAmount)     │
 │     │  │       │                                               │
 │     │  │       │  ┌─ InterfoldTicketToken.payout() ──────────┐  │
-│     │  │       │  │  Transfers underlying USDC from        │  │
+│     │  │       │  │  Transfers collateral from             │  │
 │     │  │       │  │  payableBalance to bond owner           │  │
 │     │  │       │  │  payableBalance -= amount               │  │
 │     │  │       │  │  underlying.safeTransfer(to, amount)    │  │
@@ -462,21 +467,21 @@ active = registered
                 BOND LICENSE                          BUY TICKETS
                 ────────────                          ───────────
   Bond owner                               Bond owner
-  FOLD wallet ──→ BondingRegistry          USDC wallet ──→ InterfoldTicketToken
-                  (operator licenseBond++)                 (wraps USDC → mints tFOLD)
+  FOLD wallet ──→ BondingRegistry          collateral wallet ──→ InterfoldTicketToken
+                  (operator licenseBond++)                        (wraps asset → mints tFOLD)
                                                            tFOLD → Operator balance
 
                UNBOND LICENSE                         BURN TICKETS
                ──────────────                         ────────────
   licenseBond -= amount                    tFOLD burned from operator
-  amount → ExitQueue (locked)              USDC stays in tFOLD contract (payableBalance)
+  amount → ExitQueue (locked)              collateral stays in tFOLD contract (payableBalance)
                                            amount → ExitQueue (locked)
 
                               CLAIM EXITS
                               ───────────
                    After exitDelay seconds:
                    FOLD → returned to bond owner
-                   USDC → bond owner from tFOLD.payableBalance
+                   collateral → bond owner from tFOLD.payableBalance
 ```
 
 ---

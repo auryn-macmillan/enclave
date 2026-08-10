@@ -147,8 +147,8 @@ Bond owner or operator submits deregisterOperatorFor(operator)
    └─ the bond owner may also claim licenses
 ```
 
-Underlying USDC and FOLD are both paid to the bond owner. The queue and slash target remain keyed by
-the operator until the claim completes.
+The ticket collateral asset and FOLD are both paid to the bond owner. The queue and slash target
+remain keyed by the operator until the claim completes.
 
 The next registration uses a free tree index before it appends a leaf. Historical E3 roots remain
 unchanged because each request stores its root value before later tree updates.
@@ -479,7 +479,7 @@ Time ─────────────────────────
 │ or deactivate    │   EXIT DELAY       │                  │
 │                  │  (configured)       │                  │
 │ Assets queued    │                    │ Assets claimable │
-│ tFOLD burned       │  Cannot cancel     │ USDC returned    │
+│ tFOLD burned       │  Cannot cancel     │ asset returned   │
 │ FOLD locked      │  Can be slashed!   │ FOLD returned to │
 │                  │                    │ withdrawal addr  │
 │                  │                    │                  │
