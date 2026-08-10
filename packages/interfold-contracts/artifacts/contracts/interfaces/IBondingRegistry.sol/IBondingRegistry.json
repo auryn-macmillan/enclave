@@ -447,6 +447,22 @@
       "type": "error"
     },
     {
+      "inputs": [
+        {
+          "internalType": "address",
+          "name": "configured",
+          "type": "address"
+        },
+        {
+          "internalType": "address",
+          "name": "expected",
+          "type": "address"
+        }
+      ],
+      "name": "TicketTokenRegistryMismatch",
+      "type": "error"
+    },
+    {
       "inputs": [],
       "name": "Unauthorized",
       "type": "error"
@@ -2283,5 +2299,5 @@
   "deployedLinkReferences": {},
   "immutableReferences": {},
   "inputSourceName": "project/contracts/interfaces/IBondingRegistry.sol",
-  "buildInfoId": "solc-0_8_28-ca77c377ef97433368d5bdac52ec0588fdf90512"
+  "buildInfoId": "solc-0_8_28-2669d7c5659f9a42878527352413c8338ef4bc08"
 }
