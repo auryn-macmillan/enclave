@@ -383,7 +383,19 @@ CommitteeFinalizer actor receives CommitteeRequested event
 ```
 CiphernodeRegistrySolWriter receives CommitteeFinalizeRequested
 │
+├─ Preflight: should_finalize_committee() (eth_call)
+│   └─ Skips the transaction when the committee is not finalizable
+│      (CommitteeAlreadyFinalized / CommitteeNotRequested /
+│       SubmissionWindowNotClosed / ThresholdNotMet)
+│
 └─ Calls contract.finalizeCommittee(e3Id).send()
+    │
+    │  If the transaction is mined with a failed receipt, the writer runs the
+    │  state check again (send_tx_idempotent in crates/evm/src/helpers.rs).
+    │  A revert with CommitteeAlreadyFinalized plus a non-empty
+    │  getActiveCommitteeNodes list shows that another sender finalized after
+    │  the preflight, so the node logs the outcome and reports no error. The
+    │  Failed stage gives the same revert with an empty list and stays an error.
     │
     │  ┌─── ON-CHAIN (CiphernodeRegistryOwnable) ──────────────┐
     │  │                                                         │

@@ -18,7 +18,8 @@ use crate::domain::ciphernode_registry_events::{
 use crate::domain::error_decoder::{decode_error_from_str, format_evm_error};
 use crate::domain::log_timestamp::from_log_chain_id_to_ts;
 use crate::helpers::{
-    encode_zk_proof, send_tx_with_retry, transaction_nonce_guard, EthProvider, ProviderFactory,
+    encode_zk_proof, send_tx_idempotent, send_tx_with_retry, transaction_nonce_guard, EthProvider,
+    ProviderFactory, TxOutcome,
 };
 use crate::messages::{EvmEvent, EvmEventProcessor, EvmLog, EvmLogRejected, InterfoldEvmEvent};
 use actix::prelude::*;
