@@ -103,6 +103,7 @@ export async function actionDeploy(): Promise<void> {
 Protocol contracts deployed
   ticketToken:            ${deployment.ticketToken}
   slashingManager:        ${deployment.slashingManager}
+  slashingEvidenceLib:    ${deployment.slashingEvidenceLib}
   ciphernodeRegistry:     ${deployment.ciphernodeRegistry}
   interfold:              ${deployment.interfold}
   interfoldLifecycle:     ${deployment.interfoldLifecycle}

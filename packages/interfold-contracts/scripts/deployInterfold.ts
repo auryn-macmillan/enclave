@@ -679,6 +679,9 @@ export const deployInterfold = async (
     await interfold.decryptionVerifiers(encryptionSchemeId);
   const pkVerifierAddress = await interfold.pkVerifiers(encryptionSchemeId);
 
+  console.log("Enabling E3 requests...");
+  await (await interfold.setRequestsPaused(false)).wait();
+
   console.log(`
     ============================================
     Deployment Complete!

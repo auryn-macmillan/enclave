@@ -83,6 +83,7 @@ export interface ProtocolDeployment {
   bondingSlashingLib: string;
   ticketToken: string;
   slashingManager: string;
+  slashingEvidenceLib: string;
   poseidonT3: string;
   ciphernodeRegistry: string;
   ciphernodeRegistryImplementation: string;
@@ -122,6 +123,7 @@ export interface SafeProposal {
 export interface ProtocolContracts {
   ticketToken: string;
   slashingManager: string;
+  slashingEvidenceLib: string;
   poseidonT3: string;
   ciphernodeRegistry: string;
   ciphernodeRegistryImplementation: string;
