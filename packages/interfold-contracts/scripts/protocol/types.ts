@@ -85,6 +85,7 @@ export interface ProtocolDeployment {
   slashingManager: string;
   slashingEvidenceLib: string;
   poseidonT3: string;
+  registrySortitionLib: string;
   ciphernodeRegistry: string;
   ciphernodeRegistryImplementation: string;
   ciphernodeRegistryProxyAdmin: string;
@@ -125,6 +126,7 @@ export interface ProtocolContracts {
   slashingManager: string;
   slashingEvidenceLib: string;
   poseidonT3: string;
+  registrySortitionLib: string;
   ciphernodeRegistry: string;
   ciphernodeRegistryImplementation: string;
   ciphernodeRegistryProxyAdmin: string;
