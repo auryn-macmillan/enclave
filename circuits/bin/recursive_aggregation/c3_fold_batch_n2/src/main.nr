@@ -16,7 +16,7 @@ pub global C3_SLOTS: u32 = N_PARTIES * L_THRESHOLD;
 pub global C3_FOLD_PUBLIC_LEN: u32 = 4 + (3 * C3_SLOTS);
 pub global C3_FOLD_PREFIX_LEN: u32 = C3_FOLD_PUBLIC_LEN - (3 * C3_SLOTS);
 
-pub global LEAVES_COUNT: u32 = 2;
+pub global LEAVES_COUNT: u32 = 1;
 
 /// Verify slot `slot` (a CONST compile-time value, unique per leaf) against the
 /// genesis acc (asserts the slot was empty and writes the new commitments).
@@ -39,25 +39,21 @@ fn main(
     iprf0: UltraHonkZKProof,
     c3pi0: [Field; 3],
     ikh0: pub Field,
-    ivk1: UltraHonkVerificationKey,
-    iprf1: UltraHonkZKProof,
-    c3pi1: [Field; 3],
-    ikh1: pub Field,
     avk: UltraHonkVerificationKey,
     aproof: UltraHonkProof,
     api: [Field; C3_FOLD_PUBLIC_LEN],
     akh: pub Field,
-    gen_hash0: pub Field,
-    gen_hash1: pub Field,
+    gen_hash0: pub Field
 ) -> pub ([Field; C3_SLOTS], [Field; C3_SLOTS], [Field; C3_SLOTS]) {
-    // acc is the KERNEL GENESIS: non-ZK verify + zeroed-slot checks done per leaf.
+    // acc = KERNEL GENESIS proof, verified non-ZK; the batch leaves then claim
+    // fresh accumulator slots (compact layout).
     verify_honk_proof_non_zk(avk, aproof, api, akh);
-    let (p0, m0, c0) = leaf3::<0>(ivk0, iprf0, c3pi0, ikh0, api);
-    let (p1, m1, c1) = leaf3::<1>(ivk1, iprf1, c3pi1, ikh1, api);
+    let (p0, m0, c0) = leaf3::<1>(ivk0, iprf0, c3pi0, ikh0, api);
     let mut pk: [Field; C3_SLOTS] = [0; C3_SLOTS];
     let mut msg: [Field; C3_SLOTS] = [0; C3_SLOTS];
     let mut ct: [Field; C3_SLOTS] = [0; C3_SLOTS];
-    pk[0] = p0; msg[0] = m0; ct[0] = c0;
-    pk[1] = p1; msg[1] = m1; ct[1] = c1;
+    // carry the kernel anchor (slot 0) from the genesis accumulator
+    pk[0] = api[4]; msg[0] = api[4 + C3_SLOTS]; ct[0] = api[4 + (2 * C3_SLOTS)];
+    pk[1] = p0; msg[1] = m0; ct[1] = c0;
     (pk, msg, ct)
 }
