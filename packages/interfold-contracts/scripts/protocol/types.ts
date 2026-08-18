@@ -27,7 +27,16 @@ export interface PricingConfig {
 export interface ProtocolConfigFile {
   name: string;
   chainId: number;
-  safe: string;
+  /** Address that owns the protocol contracts and executes the wiring calls. */
+  protocolOwner: string;
+  /** Optional Safe address when the protocol owner is itself a Safe. */
+  safe?: string;
+  /** Optional Aragon Admin plugin route for DAO-owned protocol deployments. */
+  governance?: {
+    adminPlugin: string;
+    proposerSafe: string;
+    proposalMetadata?: string;
+  };
   fold: string;
   bondingRegistryProxy: string;
   bondingRegistryProxyAdmin: string;
@@ -70,10 +79,16 @@ export interface ProtocolConfigFile {
     allowFeeToken: boolean;
   };
   verifiers?: {
+    /** Deploy the generated BFV verifier stack with this protocol deployment. */
+    deploy?: boolean;
     decryptionVerifier?: string;
     pkVerifier?: string;
     dkgFoldAttestationVerifier?: string;
   };
+  ciphertextVerifier?: string;
+  /** Deploy the stateless MockE3Program as the initial E3 program. */
+  deployMockE3Program?: boolean;
+  bindInitialE3Program?: boolean;
   e3Programs: [string];
 }
 
@@ -81,7 +96,8 @@ export interface ProtocolDeployment {
   name: string;
   chainId: number;
   operator: string;
-  safe: string;
+  protocolOwner: string;
+  safe?: string;
   fold: string;
   feeToken: string;
   ticketUnderlyingToken: string;
@@ -95,10 +111,19 @@ export interface ProtocolDeployment {
   bondingOwnershipLib: string;
   bondedCheckpoints: string;
   /**
-   * Deployed by `--action activate-voting`, after the Safe batch initializes the registry: the
+   * Deployed by `--action activate-voting`, after the governance batch initializes the registry: the
    * `BondedVotes` constructor rejects a registry that does not yet bond the token it reads.
    */
   bondedVotes?: string;
+  decryptionVerifier?: string;
+  pkVerifier?: string;
+  dkgFoldAttestationVerifier?: string;
+  dkgAggregatorVerifier?: string;
+  decryptionAggregatorVerifier?: string;
+  verifierZkTranscriptLib?: string;
+  dkgVerifierRelationsLib?: string;
+  decryptionVerifierRelationsLib?: string;
+  initialE3Program: string;
   ticketToken: string;
   slashingManager: string;
   slashingEvidenceLib: string;
@@ -116,6 +141,7 @@ export interface ProtocolDeployment {
   e3RefundManagerImplementation: string;
   e3RefundManagerProxyAdmin: string;
   safeTransactions: string;
+  governanceSafeBuilder?: string;
   safeProposal?: SafeProposal;
 }
 
@@ -164,10 +190,19 @@ export interface ProtocolContracts {
   bondingOwnershipLib: string;
   bondedCheckpoints: string;
   /**
-   * Deployed by `--action activate-voting`, after the Safe batch initializes the registry: the
+   * Deployed by `--action activate-voting`, after the governance batch initializes the registry: the
    * `BondedVotes` constructor rejects a registry that does not yet bond the token it reads.
    */
   bondedVotes?: string;
+  decryptionVerifier?: string;
+  pkVerifier?: string;
+  dkgFoldAttestationVerifier?: string;
+  dkgAggregatorVerifier?: string;
+  decryptionAggregatorVerifier?: string;
+  verifierZkTranscriptLib?: string;
+  dkgVerifierRelationsLib?: string;
+  decryptionVerifierRelationsLib?: string;
+  initialE3Program: string;
 }
 
 export interface ProtocolInterfaces {
