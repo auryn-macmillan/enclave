@@ -119,6 +119,55 @@ describe("Protocol deployment", function () {
     }
   });
 
+  it("rejects config names that cannot be used as deployment file names", function () {
+    const source = new URL(
+      "../../deploy/protocol/example.protocol.config.json",
+      import.meta.url,
+    );
+    const config = JSON.parse(fs.readFileSync(source, "utf8"));
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "interfold-protocol-config-name-"),
+    );
+    const configFile = path.join(tempDir, "protocol.json");
+
+    try {
+      config.name = "../mainnet-protocol";
+      fs.writeFileSync(configFile, JSON.stringify(config));
+      expect(() => loadConfig(configFile)).to.throw(
+        "Config name may only contain letters, numbers, underscores and hyphens",
+      );
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("normalizes the optional escrow votes adapter", function () {
+    const source = new URL(
+      "../../deploy/protocol/example.protocol.config.json",
+      import.meta.url,
+    );
+    const config = JSON.parse(fs.readFileSync(source, "utf8"));
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "interfold-protocol-escrow-votes-"),
+    );
+    const configFile = path.join(tempDir, "protocol.json");
+    const previousAdapter = process.env.ESCROW_VOTES_ADAPTER;
+    const adapter = "0x0000000000000000000000000000000000000002";
+
+    try {
+      config.protocolOwner = "0x0000000000000000000000000000000000000001";
+      fs.writeFileSync(configFile, JSON.stringify(config));
+      expect(loadConfig(configFile).escrowVotesAdapter).to.equal(undefined);
+
+      process.env.ESCROW_VOTES_ADAPTER = adapter;
+      expect(loadConfig(configFile).escrowVotesAdapter).to.equal(adapter);
+    } finally {
+      if (previousAdapter === undefined) delete process.env.ESCROW_VOTES_ADAPTER;
+      else process.env.ESCROW_VOTES_ADAPTER = previousAdapter;
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects external wiring for the deployed MockE3Program", function () {
     const source = new URL(
       "../../deploy/protocol/example.protocol.config.json",
@@ -144,6 +193,31 @@ describe("Protocol deployment", function () {
       fs.writeFileSync(configFile, JSON.stringify(config));
       expect(() => loadConfig(configFile)).to.throw(
         "bindInitialE3Program must be false when deployMockE3Program is true",
+      );
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects configuring and deploying a ciphertext verifier at the same time", function () {
+    const source = new URL(
+      "../../deploy/protocol/example.protocol.config.json",
+      import.meta.url,
+    );
+    const config = JSON.parse(fs.readFileSync(source, "utf8"));
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "interfold-mock-ciphertext-config-"),
+    );
+    const configFile = path.join(tempDir, "protocol.json");
+
+    try {
+      config.protocolOwner = "0x0000000000000000000000000000000000000001";
+      config.deployMockCiphertextVerifier = true;
+      config.ciphertextVerifier =
+        "0x0000000000000000000000000000000000000002";
+      fs.writeFileSync(configFile, JSON.stringify(config));
+      expect(() => loadConfig(configFile)).to.throw(
+        "ciphertextVerifier must be omitted when deployMockCiphertextVerifier is true",
       );
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
@@ -205,6 +279,7 @@ describe("Protocol deployment", function () {
       pkVerifier: await pkVerifier.getAddress(),
       dkgFoldAttestationVerifier: await dkgFoldAttestationVerifier.getAddress(),
     };
+    config.deployMockCiphertextVerifier = true;
 
     const result = await deployProtocolContracts(ethers, operator, config);
     const ticket = await ethers.getContractAt(
@@ -237,10 +312,14 @@ describe("Protocol deployment", function () {
     expect(result.contracts.dkgFoldAttestationVerifier).to.equal(
       await dkgFoldAttestationVerifier.getAddress(),
     );
+    expect(result.contracts.ciphertextVerifier).to.match(
+      /^0x[0-9a-fA-F]{40}$/,
+    );
     for (const verifier of [
       result.contracts.decryptionVerifier,
       result.contracts.pkVerifier,
       result.contracts.dkgFoldAttestationVerifier,
+      result.contracts.ciphertextVerifier,
     ]) {
       expect(verifier).to.match(/^0x[0-9a-fA-F]{40}$/);
       expect(await ethers.provider.getCode(verifier as string)).to.not.equal(
@@ -280,6 +359,19 @@ describe("Protocol deployment", function () {
     expect(attach).to.have.lengthOf(1);
     expect(attach[0].data.toLowerCase()).to.contain(
       result.contracts.bondedCheckpoints.slice(2).toLowerCase(),
+    );
+
+    const ciphertextSelector = interfold.interface.getFunction(
+      "setCiphertextVerifier",
+    )!.selector;
+    const ciphertextTx = txs.filter(
+      (tx) =>
+        tx.to.toLowerCase() === result.contracts.interfold.toLowerCase() &&
+        tx.data.startsWith(ciphertextSelector),
+    );
+    expect(ciphertextTx).to.have.lengthOf(1);
+    expect(ciphertextTx[0].data.toLowerCase()).to.contain(
+      result.contracts.ciphertextVerifier!.slice(2).toLowerCase(),
     );
   });
 });

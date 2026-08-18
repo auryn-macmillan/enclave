@@ -127,6 +127,15 @@ async function assertPreconditions(
       "bondingRegistryProxyAdmin",
     ),
   ];
+  if (config.escrowVotesAdapter) {
+    contracts.push(
+      requireContract(
+        ethers.provider,
+        config.escrowVotesAdapter,
+        "escrowVotesAdapter",
+      ),
+    );
+  }
   if (!config.deployMockE3Program) {
     contracts.push(
       requireContract(ethers.provider, config.e3Programs[0], "e3Programs[0]"),
@@ -263,6 +272,7 @@ Protocol contracts deployed
   ciphernodeRegistry:     ${deployment.ciphernodeRegistry}
   interfold:              ${deployment.interfold}
   initialE3Program:       ${deployment.initialE3Program}
+  ciphertextVerifier:     ${deployment.ciphertextVerifier ?? config.ciphertextVerifier ?? "(not configured)"}
   interfoldLifecycle:     ${deployment.interfoldLifecycle}
   interfoldPricing:       ${deployment.interfoldPricing}
   e3RefundManager:        ${deployment.e3RefundManager}
@@ -309,6 +319,7 @@ Protocol configuration is valid
   chainId:              ${config.chainId}
   protocol owner:       ${config.protocolOwner}
   FOLD:                 ${config.fold}
+  escrow votes adapter: ${config.escrowVotesAdapter ?? "(not configured)"}
   fee token:            ${config.feeToken}
   ticket underlying:    ${config.ticketUnderlyingToken}
   BondingRegistry:      ${config.bondingRegistryProxy}
@@ -318,7 +329,11 @@ Protocol configuration is valid
       ? "MockE3Program (deployed with protocol)"
       : config.e3Programs[0]
   }
-  ciphertext verifier:  ${config.ciphertextVerifier ?? "(not configured)"}
+  ciphertext verifier:  ${
+    config.deployMockCiphertextVerifier
+      ? "DeployableMockCiphertextVerifier (deployed with protocol)"
+      : (config.ciphertextVerifier ?? "(not configured)")
+  }
   Aragon Admin plugin:  ${config.governance?.adminPlugin ?? "(not configured)"}
   proposer Safe:        ${config.governance?.proposerSafe ?? "(not configured)"}
 `);
@@ -398,7 +413,12 @@ export async function actionExecuteGovernance(): Promise<void> {
         value: BigInt(tx.value),
         data: tx.data,
       });
-      await response.wait();
+      const receipt = await response.wait();
+      if (!receipt || receipt.status !== 1) {
+        throw new Error(
+          `Transaction ${index + 1}/${transactions.length} was not confirmed successfully`,
+        );
+      }
       console.log(
         `  executed ${index + 1}/${transactions.length}: ${response.hash}. Next index: ${index + 1}`,
       );
