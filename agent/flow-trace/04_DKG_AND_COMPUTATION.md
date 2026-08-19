@@ -813,6 +813,44 @@ smallest binary Poseidon tree that can hold the submitted SAFE ciphertext commit
 minimum depth of one. The compute provider and E3 program must use this same leaf value, order, zero
 value, and depth rule.
 
+The guest derives the input root from the ciphertexts it processed. `ComputeInput` holds only
+`fhe_inputs`, and `ComputeInput::process` calls `MerkleTreeBuilder::compute_leaf_hashes` over those
+ciphertexts before it builds the tree (`crates/compute-provider/src/compute_input.rs`). The leaves
+are therefore a function of the processed set, not a separate prover-supplied value.
+
+This binding matters because nothing else supplies it. `Risc0BfvCiphertextVerifier` takes the input
+root from the proof envelope and never constrains it, so the only check on the root is the
+comparison an E3 program performs against its own on-chain root (`CRISPProgram.verify`,
+`MyProgram.verify`). If the guest accepted the leaves as an independent input, that comparison would
+pass for a tally computed over ciphertexts that were never submitted: a prover would replay the
+genuine on-chain leaves while processing its own ciphertexts. Publication is unpermissioned
+(`Interfold.publishCiphertextOutput` has no authorization modifier) and one-shot, so any party could
+do this, and no dispute path exists.
+
+Two rules follow for anyone changing this path:
+
+- **An E3 program must compare the proof's input root against its own root.** The protocol verifier
+  will not do it.
+- **A Secure Process must derive its leaves, never receive them.**
+  `MerkleTreeBuilder::with_leaf_hashes` is `#[cfg(test)]` for that reason.
+
+`ComputeManager` proves the whole input set in one guest run. The former `start_parallel` path
+proved per chunk and set the final leaves to sub-tree roots, which produced a tree of sub-tree roots
+rather than the flat input root an E3 program compares against. It was unreachable — every call site
+passed `use_parallel = false` — and it is removed. Restoring batching requires first defining what a
+leaf means on that path.
+
+### Ciphertext component count
+
+The SAFE ciphertext commitment covers `c[0]` and `c[1]` only, matching the Noir circuit.
+`bfv_ciphertext_to_greco` rejects any ciphertext whose component count is not exactly two
+(`crates/zk-helpers/src/circuits/threshold/user_data_encryption/utils.rs`). Without that check a
+ciphertext padded with a third polynomial commits to the same value as its two-component prefix, so
+the input root and the output commitment stay identical while threshold decryption rejects the
+padded output — `ShareManager` requires exactly two components. The round would then fail as a
+`DecryptionTimeout`, which `FailurePayerLib` bills to the ciphernodes. Seed-compressed ciphertexts
+are unaffected: `TryConvertFrom` expands the seed into `c[1]` before the converter sees it.
+
 ```
 Compute provider runs computation on encrypted data:
 │
@@ -1259,3 +1297,166 @@ During restart, `ComputeEffectGate` observes replay before compute workers are e
 buffers and deduplicates `ComputeRequest`s, prefers the newest regenerated request, cancels terminal
 E3 work, and releases pending jobs only after `EffectsEnabled`. The gate changes effect timing, not
 durable event order or audit state.
+
+### What the compute-provider crate guarantees, and what an E3 program decides
+
+`e3-compute-provider` is shared by every E3 program, so it holds only what is true for all of them:
+
+- leaves are **derived** from the ciphertexts the Secure Process consumed, never received alongside
+  them;
+- **every** published input contributes a leaf, whatever is computed over.
+
+The leaf layout and which inputs are computed over come from the program, as an `InputPolicy`:
+
+```rust
+pub struct InputPolicy {
+    pub leaf: fn(&PublishedInput) -> Result<String, ComputeError>,
+    pub select: fn(&[PublishedInput]) -> Vec<usize>,
+}
+```
+
+Both are program-specific. A leaf must equal what that program builds on-chain, and no two programs
+need agree. Selection answers "what does a second input for the same participant mean?", which CRISP
+answers differently from a program where every input counts.
+
+`InputPolicy::default()` is the behaviour that predates policies — the leaf is the ciphertext's own
+commitment and every input is computed over — and matches the starter template, whose
+`MyProgram.publishInput` inserts the commitment directly. Every E3 program exports `policy()` beside
+`fhe_processor`, so the guest and the dev runner need not know which program they are running.
+
+`PublishedData` carries what the program published per input: the stored commitment, and opaque
+`metadata` the crate never interprets. CRISP puts its 20-byte slot address and the 5-byte parent
+index there, laid out as `abi.encodePacked(address, uint40)`.
+
+### Input leaf binding and per-slot selection
+
+An E3 program verifies a proof over the ciphertext **commitment** when an input is published. The
+proof never sees the serialized ciphertext the event carries, so the two can disagree, and neither
+the contract nor the circuit can tell: the commitment is a Poseidon sponge over the ciphertext's CRT
+limbs (~49k field elements at the secure preset), and the circuit cannot reproduce the fhe.rs
+serialization. The guest is the first place both representations exist at once.
+
+`CRISPProgram.inputLeaf` therefore binds four values:
+
+```text
+leaf = sha256(sha256(encryptedVote) || encryptedVoteCommitment || slotAddress || parentIndexPlusOne)
+       mod SNARK_SCALAR_FIELD
+```
+
+- the **bytes**, so a submitter cannot publish a valid commitment beside unrelated data;
+- the **commitment**, so any commitment cannot be paired with any ciphertext;
+- the **slot**, because the tree is append-only and the guest selects per slot — an unbound slot
+  would let a prover re-group entries and change which one wins;
+- the **parent**, because the guest walks each slot's chain by it — an unbound parent would let a
+  prover re-point entries and change which one holds the slot.
+
+`MerkleTreeBuilder::compute_leaf_hashes` rebuilds exactly that layout. Both sides pin the same test
+vector (`program/tests/input_leaf.rs` and `tests/input-leaf.test.ts`), and
+`examples/CRISP/program/tests/onchain_root_agreement.rs` asserts Rust reproduces a root a real
+contract produced, from a fixture generated by `tests/input-tree-e2e.test.ts`. A one-byte divergence
+would make every root mismatch and nothing else would detect it.
+
+SHA-256 rather than Keccak: the zkVM accelerates SHA-256 inline, while its Keccak accelerator emits
+a proof assumption the host must prove separately and compose. The extra on-chain cost is about 67k
+gas on a transaction that already carries the ciphertext — a secure-preset ciphertext is about 348
+KB, so calldata and log data dominate by orders of magnitude.
+
+**The input tree is append-only.** `_processVote` always inserts and never updates in place. That is
+a security property, not a storage choice: the mask path requires no signature, so anyone can write
+to any census member's slot. With update-in-place, a third party could replace the bytes of a vote
+that had already been counted and erase it silently while the round still completed. Appending
+leaves the earlier entry in the tree.
+
+Every input names the entry it extends. `publishInput` takes `parentIndexPlusOne` in its calldata,
+reads that entry's commitment out of the per-slot history, and hands it to the circuit as
+`prev_ct_commitment`; zero means the input extends nothing, which the circuit reads as
+`is_first_vote`.
+
+For each slot the Secure Process computes over the **end of that slot's chain of usable entries**
+(`chain_head_per_slot`). Walking in index order, an entry becomes the slot's head only when both
+hold:
+
+- its bytes reproduce its commitment, so it is a ciphertext anyone can read; and
+- the entry it names is the slot's current head.
+
+Entries that fail either rule keep their leaf — removing one would change the root — but are
+skipped. The rule is a function of values the root binds, so any prover holding the same published
+data reaches the same set and none can choose what to drop.
+
+Why the chain rather than "the most recent usable entry": `CRISPProgram` cannot tell that a
+submitter's bytes disagree with the commitment they published — only the Secure Process can, and
+only after the input window closes. With a single mutable slot head, anyone could therefore leave a
+slot whose head only they can open, and a slot nobody can mask is a slot where every later input is
+provably its owner voting again. That is a coercion receipt, and a cleaner one than the receipt
+masks exist to destroy. Because an unusable entry is never the head, it is never a valid parent
+either, so the next honest input names the same parent it did and masking continues.
+
+The resulting properties:
+
+- a malformed input costs one entry, not the round;
+- an append with bad bytes cannot erase a counted vote, and cannot freeze the slot against masking;
+- an entry naming a stale parent is dropped, so a mask cannot restore a superseded ciphertext over a
+  later vote;
+- an honest re-vote still replaces the earlier ballot, because it extends the head and adds to
+  nothing;
+- a mask preserves the tally, since the circuit forces its plaintext to zero everywhere
+  (`check_coefficient_zero`) and proves `sum = head + zero`.
+
+**What the rule costs.** Two entries naming the same parent are siblings, and the first usable one
+takes the head; the second is dropped. So an input can be front-run into being dropped — an attacker
+who sees a re-vote in the mempool can land a mask on the same parent first, and the re-vote is not
+counted.
+
+That is the deliberate side of a genuine trade-off, not an oversight. A stale parent is
+indistinguishable from a sibling that was simply built a moment earlier: both name an entry that is
+no longer the head, and only the circuit knows whether an entry _replaces_ the slot or _adds_ to it
+— which is precisely what `is_mask_vote` keeps private. Favour the earlier sibling and a re-vote can
+be delayed; favour the later one and a mask built on a superseded ciphertext can restore it over a
+vote. The first is visible to the voter (the server resolves the chain, so the client can see its
+input was not taken) and is fixed by submitting again. The second is a silent tally corruption that
+nobody can detect or undo. Submitting through the CRISP server's relayer also keeps the transaction
+out of a public mempool, which is where the race would be won.
+
+Closing the gap entirely would need the guest to tell a replace from an add, which means publishing
+that distinction — the thing the whole design exists to hide.
+
+Capacity: `TREE_DEPTH = 20` gives 2^20 entries, against a physical ceiling of roughly three writes
+per block at the secure preset — append-only is not capacity-bound.
+
+A round where _every_ entry is unusable fails at the output commitment, because the processor's
+empty ciphertext does not deserialize. That is only reachable when no honest input exists, and is
+indistinguishable from a round that received none, which the protocol resolves as
+`NoInputsReceived`.
+
+`InputPublished` carries the slot, the commitment, and the parent alongside the bytes. All three
+were already public — the slot and the parent are plaintext `publishInput` arguments, and
+`getSlotIndex` and `inputCommitmentOf` expose the rest — so emitting them leaks nothing and saves
+every consumer from parsing transaction calldata.
+
+### One relation for voting, updating, and masking
+
+The ballot circuit proves the same statement for all three operations:
+
+```text
+published ciphertext = addend + ballot ciphertext
+```
+
+The ballot is a fresh BFV encryption of `k1`, covered by the recursive `user_data_encryption` proof.
+The addend is the slot's current head for a mask, and the zero ciphertext for a vote, a re-vote, or
+any input to an empty slot. `is_mask_vote` chooses between them and is **private**, and the selector
+is derived (`keep_previous = is_mask_vote & !is_first_vote`) rather than taken as a witness — so a
+voter cannot add their new ballot on top of their old one and count twice, and a masker cannot
+discard the head and erase a vote.
+
+The circuit returns `sum_ct_commitment` on every path, so the public inputs, the stored commitment,
+the ballot digest, and the published ciphertext have the same shape whichever operation ran. Telling
+them apart would mean distinguishing a fresh BFV ciphertext from a sum, which the encryption scheme
+hides. The SDK has one code path for all three, and `CrispSDK.prepareBallot` makes the same
+`state/previous-ciphertext` request either way, so the request pattern says nothing either.
+
+The plaintext is fully constrained on both branches. `check_coefficient_values_with_balance` binds
+every coefficient of `k1`: those inside an option segment must be binary, and every coefficient
+outside the ballot region must be zero. `check_coefficient_zero` requires the whole polynomial to be
+zero for a mask. Both read the payload at `k1[D - MAX_MSG_NON_ZERO_COEFFS ..]`, because the witness
+generator reverses the message over the full BFV degree — the ballot occupies the **last** 100
+coefficients, and the options appear back to front.

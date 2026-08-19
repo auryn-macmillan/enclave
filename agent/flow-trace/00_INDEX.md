@@ -203,6 +203,19 @@ _Found during source-code cross-referencing of these trace documents._
 | **IF-003 — decryption proof phase and party binding** | Fixed  | `decryption_aggregator` requires 1-indexed, strictly increasing party IDs, while `BfvDecryptionVerifier` checks the surfaced SK/ESM commitments against the E3's registry-backed DKG anchors.                     |
 | **IF-004 — ciphertext commitment binding**            | Fixed  | The off-chain SAFE commitment is stored at ciphertext publication, propagated as a final decryption-proof public input, and compared on-chain without attempting BFV decoding or Poseidon2 execution in Solidity. |
 
+### CRISP Ballot Remediations
+
+Found while making voting, updating, and masking work as one indistinguishable operation. All of
+them are in the reference app (`examples/CRISP`), not the protocol.
+
+| Finding                                               | Status | Implemented behavior                                                                                                                                                                                                                                                                                                                         |
+| ----------------------------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Ballot rules read only zero padding**               | Fixed  | `check_coefficient_values_with_balance` and `check_coefficient_zero` indexed `k1` as if it were `MAX_MSG_NON_ZERO_COEFFS` wide, while the circuit receives the full reversed BFV degree. Both read padding, so every vote passed any balance bound and a mask could carry an arbitrary payload. `ballot_layout` now derives the real offset. |
+| **Coefficients outside the ballot are unconstrained** | Fixed  | The whole plaintext is bound: binary inside an option segment, zero everywhere else, and zero everywhere for a mask. An unconstrained coefficient survives to the decrypted tally, so it was both a way to corrupt a slot and a channel a coercer could read a receipt from.                                                                 |
+| **Re-votes are accepted and never tallied**           | Fixed  | The witness published `previous + new` while the circuit committed to `new`. One generator now publishes exactly what the circuit commits to on every branch, and the SDK exposes one commitment for the ballot digest.                                                                                                                      |
+| **Occupied-slot masks cannot be published**           | Fixed  | The client built the digest from the ballot commitment while the contract rebuilt it from the stored one, which differ for a mask over an occupied slot. `PreparedBallot.ctCommitment` is now the published ciphertext's commitment on every branch.                                                                                         |
+| **A valid input can freeze a slot**                   | Fixed  | Publishing a real proof beside unusable bytes advanced the slot head to a commitment only the submitter could open, so nobody could mask that slot — and a slot that cannot be masked is one where every later input is provably its owner voting again. Inputs now name the entry they extend and the guest follows the chain.              |
+
 ### Protocol Design Concerns
 
 | #    | Concern                                                         | Severity | Detail                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -297,3 +310,32 @@ _Found during source-code cross-referencing of these trace documents._
 | Z-16 | **Safe slashing-manager retirement**                            | Resolved | Retiring managers remain authorized for their assigned E3s, bans, slash locks, proposals, and pending routes. `closeE3` now also waits for the objective accusation submission deadline. Revocation requires every canonical obligation counter to be zero.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Z-24 | **Build-bound crypto configuration**                            | Resolved | The generated configuration ID binds the encryption scheme, exact parameter hash, and circuit version. Requests accept only that append-only configuration and snapshot its verifier addresses. Rust validates the emitted ID against its local build, and the indexer uses local immutable parameters plus the E3's frozen ID instead of querying mutable live parameter bytes.                                                                                                                                                                                                                                                                                                                                                                                                          |
 | Z-45 | **In-call request fee bound**                                   | Resolved | Each request supplies its expected fee token, expected crypto configuration, and maximum fee. Any change between quote and inclusion reverts before escrow transfer. The SDK obtains a fresh quote when the caller does not provide an explicit maximum.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+
+### Scope of the Zenith `Z-` entries
+
+The `Z-` rows above come from the 2026-08-17 Zenith protocol audit. Read its scope before treating a
+`Resolved` row as external assurance.
+
+The audit reviewed **six Solidity files and no Rust**, at scope commit `c2097da6`, with a mitigation
+review at `c64bcfb8` over the same six files:
+
+```
+E3RefundManager.sol   Interfold.sol   lib/ExitQueueLib.sol
+lib/InterfoldPricing.sol   registry/BondingRegistry.sol   registry/CiphernodeRegistryOwnable.sol
+```
+
+Outside both file lists: `crates/compute-provider` and the RISC Zero guest, `crates/zk-helpers`,
+`verifiers/bfv/Risc0BfvCiphertextVerifier.sol`, `lib/InterfoldLifecycle.sol`,
+`lib/Risc0ComputeProof.sol`, `lib/FailurePayerLib.sol`, and `examples/CRISP/**`.
+
+Two consequences worth holding onto:
+
+- **A `Resolved` row describes this repository's remediation, not an auditor's re-review of it.**
+  Several entries were remediated by adding files that are themselves outside both lists — Z-15's
+  protocol verifier among them — so the remediation code did not pass through the mitigation review.
+- **The compute path was never audited.** The input-root binding defect fixed in
+  `crates/compute-provider` (see `04_DKG_AND_COMPUTATION.md`) sat in unaudited code, which is the
+  simplest explanation for how it survived. Zenith's §2.5 Security Note recommends a follow-up audit
+  before deploying significant capital.
+
+Full scope detail: `packages/interfold-contracts/audits/README.md`.

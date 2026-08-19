@@ -281,6 +281,8 @@ jobs:
       - name: Run ZK Prover Integration Tests (with network downloads)
         run: 'cargo test -p e3-zk-prover --features integration-tests --test integration_tests -- --nocapture'
 
+  # Guards the RISC Zero guest artifact. The on-chain imageId is immutable, so a guest change
+  # that leaves ImageID.sol untouched ships a verifier that no longer matches this tree.
   build_e3_support_risc0:
     needs: [detect_changes]
     if: needs.detect_changes.outputs.docker_support == 'true'
@@ -658,19 +660,51 @@ jobs:
   crisp_unit:
     needs: [detect_changes, build_crisp_sdk]
     if: needs.detect_changes.outputs.crisp == 'true'
-    timeout-minutes: 30
+    # Per leg, because they are not remotely the same size. Anything that generates a ballot proves
+    # five Noir circuits, which a two-vCPU runner takes minutes to do; everything else is seconds.
+    timeout-minutes: ${{ matrix.timeout }}
     runs-on: 'ubuntu-latest'
     strategy:
       matrix:
         include:
           - test-suite: test:circuits
             command: pnpm test:circuits
+            timeout: 15
           - test-suite: test:sdk
             command: pnpm test:sdk
-          - test-suite: test:contracts
-            command: pnpm test:contracts
+            timeout: 45
+            needs-sdk: true
+          # The contract suite is split by proving cost, not by subject. Run whole it took 27m54s
+          # against a 30m cap and started dying to ordinary runner variance, and it grows by minutes
+          # with every ballot a new test needs. Split, the critical path is the largest single leg
+          # rather than the sum, and the checks that prove nothing report in seconds instead of
+          # queueing behind twenty minutes of proving.
+          #
+          # Balanced by ballots, which is what the time is: input-tree 7, ballots 5, unit 0.
+          # `pnpm test:contracts` still runs all of it in one go for local use, and
+          # `crisp_contract_leg_coverage` fails if a test file ever belongs to no leg.
+          #
+          # Every contract leg needs both capabilities: `hardhat.config.ts` imports
+          # `@interfold/contracts/tasks/*`, which only resolves once `evm:build` has emitted `dist/`,
+          # and each leg contains at least one test that imports `@crisp-e3/sdk`.
+          - test-suite: test:contracts:input-tree
+            command: pnpm test:contracts:input-tree
+            timeout: 45
+            needs-evm: true
+            needs-sdk: true
+          - test-suite: test:contracts:ballots
+            command: pnpm test:contracts:ballots
+            timeout: 45
+            needs-evm: true
+            needs-sdk: true
+          - test-suite: test:contracts:unit
+            command: pnpm test:contracts:unit
+            timeout: 15
+            needs-evm: true
+            needs-sdk: true
           - test-suite: cargo test
             command: cargo test
+            timeout: 20
       fail-fast: false
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -724,13 +758,16 @@ jobs:
         working-directory: .
         run: pnpm install --frozen-lockfile
 
+      # Gated on a declared capability rather than on the leg's name. Matching the name made the
+      # label load-bearing: splitting `test:contracts` into three renamed legs silently skipped this
+      # step, and the suite failed on a missing `@interfold/contracts/dist` two steps later.
       - name: Compile Interfold contracts
-        if: matrix.test-suite == 'test:contracts'
+        if: matrix.needs-evm
         working-directory: .
         run: pnpm evm:build
 
       - name: Download Crisp SDK artifacts
-        if: matrix.test-suite == 'test:sdk' || matrix.test-suite == 'test:contracts'
+        if: matrix.needs-sdk
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: crisp-sdk-artifacts
@@ -940,6 +977,36 @@ jobs:
 
       - name: Build circuits
         run: pnpm build:circuits
+
+      # The generated verifier contracts must match the freshly built verification keys. A drift
+      # means the deployed verifier accepts a different circuit from the one in this tree.
+      #
+      # `--no-compile` is load-bearing, not an optimisation. Without it the checker deletes every
+      # nargo target directory first — its guard against comparing stale artifacts — and recompiles
+      # only what it needs, which is the `.json` and the evm `.vk`. That silently discards the
+      # `.vk_recursive` files `build:circuits` had just written, and the upload below then ships an
+      # artifact `zk_prover_e2e` cannot use. Nothing here fails; the damage surfaces two jobs later.
+      # The step above has just built these circuits, so there is nothing stale to guard against.
+      - name: Check generated verifiers are in sync
+        run: pnpm check:verifiers --no-compile
+
+      # Asserted before the upload, so a step that consumes or clears a build output fails in the
+      # job that did it rather than in the job that needed it. Same list `zk_prover_e2e` checks.
+      - name: Verify recursive aggregation artifacts survived
+        run: |
+          for artifact in \
+            circuits/bin/recursive_aggregation/dkg_aggregator/target/dkg_aggregator.json \
+            circuits/bin/recursive_aggregation/dkg_aggregator/target/dkg_aggregator.vk_recursive \
+            circuits/bin/recursive_aggregation/decryption_aggregator/target/decryption_aggregator.json \
+            circuits/bin/recursive_aggregation/decryption_aggregator/target/decryption_aggregator.vk_recursive
+          do
+            test -f "$artifact" || {
+              echo "Missing before upload: $artifact"
+              echo "A step between 'Build circuits' and here removed it."
+              exit 1
+            }
+            echo "  ok $artifact"
+          done
 
       - name: Upload compiled circuit artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

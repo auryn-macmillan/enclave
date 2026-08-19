@@ -450,16 +450,45 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          # This job holds `contents: write` and runs `pnpm install`, which executes lifecycle
+          # scripts from every dependency. Persisting the token in .git/config would leave it on
+          # disk for all of them. The one step that needs it takes it explicitly instead.
+          persist-credentials: false
 
       - name: Download all binary artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist/
 
+      # Pinned to immutable SHAs: this job has `contents: write` and force-pushes `stable`, so a
+      # mutable tag could introduce unreviewed code into the release.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # A RISC Zero proof names a guest image; it does not name the source that produced it. This
+      # record is what lets a third party tie the released source to the deployed imageId.
+      - name: Generate compute-provider provenance manifest
+        run: |
+          pnpm provenance:manifest --out compute-provider-provenance.json
+          # `complete: false` means a field could not be resolved. Publishing it would put a
+          # partial record beside the release as though it were a verification.
+          if ! node -e "process.exit(require('./compute-provider-provenance.json').complete ? 0 : 1)"; then
+            echo "provenance manifest is incomplete; refusing to publish it" >&2
+            node -e "console.error(require('./compute-provider-provenance.json').unresolved.join('\n'))"
+            exit 1
+          fi
+
       - name: Prepare release assets
         run: |
           mkdir -p release-assets
           find dist/ -name "*.tar.gz" -exec cp {} release-assets/ \;
+          cp compute-provider-provenance.json release-assets/
           # `interfold config check` fetches this asset from the latest release,
           # so a release without it leaves operators unable to detect a redeploy.
           if [ ! -f deployments/manifest.json ]; then
@@ -609,7 +638,15 @@ jobs:
 
       - name: Update stable tag (for stable releases only)
         if: needs.validate-and-prepare.outputs.is_prerelease == 'false'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git tag -f stable
+          # Through a credential helper, so the token never reaches a process argument list. Every
+          # process on a runner shares one user, so anything left running by `pnpm install` can read
+          # /proc/*/cmdline; it cannot read another process's environment as easily. The config
+          # stores the helper only — the token is read from the environment when git invokes it.
+          git config --local credential.helper '!f() { echo username=x-access-token; echo "password=$GITHUB_TOKEN"; }; f'
           git push origin stable --force
+          git config --local --unset credential.helper
           echo "✅ Updated 'stable' tag to point to v${{ needs.validate-and-prepare.outputs.version }}"
