@@ -64,14 +64,17 @@ class VersionBumper {
         console.log('      - packages/interfold-contracts')
         console.log('      - packages/interfold-config')
         console.log('      - packages/interfold-react')
+        console.log('      - packages/interfold-mcp')
         console.log('      - crates/wasm')
-        console.log('   3. Update lock files (Cargo.lock, pnpm-lock.yaml)')
-        console.log('   4. Generate/update CHANGELOG.md')
+        const dappNodeAction = this.isPrerelease() ? 'skip for pre-release' : `update to ${this.newVersion}`
+        console.log(`   3. DAppNode package: ${dappNodeAction}`)
+        console.log('   4. Update lock files (Cargo.lock, pnpm-lock.yaml)')
+        console.log('   5. Generate/update CHANGELOG.md')
         if (!this.options.skipGit) {
-          console.log('   5. Commit changes')
-          console.log(`   6. Create tag: v${this.newVersion}`)
+          console.log('   6. Commit changes')
+          console.log(`   7. Create tag: v${this.newVersion}`)
           if (!this.options.skipPush) {
-            console.log('   7. Push commits and tag to origin')
+            console.log('   8. Push commits and tag to origin')
           }
         }
         console.log('\n✅ Dry run complete. Run without --dry-run to perform these actions.')
@@ -83,6 +86,9 @@ class VersionBumper {
 
       // Bump npm packages
       this.bumpNpmPackages()
+
+      // Bump DAppNode package for stable releases
+      this.bumpDappNodePackage()
 
       // Update lock files
       this.updateLockFiles()
@@ -101,6 +107,7 @@ class VersionBumper {
       console.log(`   New version: ${this.newVersion}`)
       console.log(`   Rust crates: ✓`)
       console.log(`   NPM packages: ✓`)
+      console.log(`   DAppNode package: ${this.isPrerelease() ? 'skipped for pre-release' : '✓'}`)
       console.log(`   Lock files: ✓`)
       console.log(`   Changelog: ✓`)
 
@@ -185,12 +192,17 @@ class VersionBumper {
       execSync('git add .', { cwd: this.rootDir })
 
       // Create commit message
-      const commitMessage = `chore(release): bump version to ${this.newVersion}
-  
-  - Updated all Rust crates to ${this.newVersion}
-  - Updated all npm packages to ${this.newVersion}
-  - Updated lock files
-  - Generated CHANGELOG.md`
+      const commitMessageLines = [
+        `chore(release): bump version to ${this.newVersion}`,
+        '',
+        `- Updated all Rust crates to ${this.newVersion}`,
+        `- Updated all npm packages to ${this.newVersion}`,
+      ]
+      if (!this.isPrerelease()) {
+        commitMessageLines.push(`- Updated DAppNode package to ${this.newVersion}`)
+      }
+      commitMessageLines.push('- Updated lock files', '- Generated CHANGELOG.md')
+      const commitMessage = commitMessageLines.join('\n')
 
       // Commit changes
       console.log('   Committing changes...')
@@ -404,6 +416,54 @@ class VersionBumper {
       const packageName = this.getPackageName(packageJsonPath)
       console.log(`   ✓ ${packageName}`)
     }
+  }
+
+  /**
+   * Bump the DAppNode wrapper when publishing a stable ciphernode image.
+   */
+  private bumpDappNodePackage(): void {
+    console.log('\n🧩 Bumping DAppNode package version...')
+
+    if (this.isPrerelease()) {
+      console.log('   Skipping DAppNode package for pre-release tag')
+      return
+    }
+
+    const packagePath = join(this.rootDir, 'dappnode/dappnode_package.json')
+    const packageJson = JSON.parse(readFileSync(packagePath, 'utf-8'))
+    packageJson.version = this.newVersion
+    packageJson.upstreamVersion = this.newVersion
+    writeFileSync(packagePath, JSON.stringify(packageJson, null, 2) + '\n')
+    console.log('   ✓ dappnode_package.json')
+
+    this.replaceInFile(join(this.rootDir, 'dappnode/docker-compose.yml'), [
+      [/UPSTREAM_VERSION: [^\n]+/, `UPSTREAM_VERSION: ${this.newVersion}`],
+      [
+        /image: 'ciphernode\.interfold-ciphernode\.public\.dappnode\.eth:[^']+'/,
+        `image: 'ciphernode.interfold-ciphernode.public.dappnode.eth:${this.newVersion}'`,
+      ],
+    ])
+    console.log('   ✓ docker-compose.yml')
+
+    this.replaceInFile(join(this.rootDir, 'dappnode/Dockerfile'), [
+      [/ARG UPSTREAM_VERSION=[^\n]+/, `ARG UPSTREAM_VERSION=${this.newVersion}`],
+    ])
+    console.log('   ✓ Dockerfile')
+  }
+
+  private replaceInFile(filePath: string, replacements: [RegExp, string][]): void {
+    let content = readFileSync(filePath, 'utf-8')
+    for (const [pattern, replacement] of replacements) {
+      if (!pattern.test(content)) {
+        throw new Error(`Could not find pattern ${pattern} in ${filePath}`)
+      }
+      content = content.replace(pattern, replacement)
+    }
+    writeFileSync(filePath, content)
+  }
+
+  private isPrerelease(): boolean {
+    return this.newVersion.includes('-')
   }
 
   /**
