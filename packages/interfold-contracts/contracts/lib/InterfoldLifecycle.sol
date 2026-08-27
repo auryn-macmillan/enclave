@@ -10,6 +10,7 @@ import { ICiphernodeRegistry } from "../interfaces/ICiphernodeRegistry.sol";
 import { IE3RefundManager } from "../interfaces/IE3RefundManager.sol";
 import { IBondingRegistry } from "../interfaces/IBondingRegistry.sol";
 import { ISlashingManager } from "../interfaces/ISlashingManager.sol";
+import { INodeReleaseRegistry } from "../interfaces/INodeReleaseRegistry.sol";
 import {
     IProtocolDependencyView
 } from "../interfaces/IProtocolDependencyView.sol";
@@ -80,7 +81,8 @@ library InterfoldLifecycle {
         address registryAddress,
         address bondingAddress,
         address slashManagerAddress,
-        address refundManagerAddress
+        address refundManagerAddress,
+        address nodeReleaseRegistryAddress
     ) external view {
         ICiphernodeRegistry registry = ICiphernodeRegistry(registryAddress);
         IBondingRegistry bonding = IBondingRegistry(bondingAddress);
@@ -96,11 +98,15 @@ library InterfoldLifecycle {
         IProtocolDependencyView refundView = IProtocolDependencyView(
             refundManagerAddress
         );
+        INodeReleaseRegistry nodeReleaseRegistry = INodeReleaseRegistry(
+            nodeReleaseRegistryAddress
+        );
         if (
             registryAddress.code.length == 0 ||
             bondingAddress.code.length == 0 ||
             slashManagerAddress.code.length == 0 ||
             refundManagerAddress.code.length == 0 ||
+            nodeReleaseRegistryAddress.code.length == 0 ||
             registryView.interfold() != address(this) ||
             registryView.bondingRegistry() != bondingAddress ||
             registryView.slashingManager() != slashManagerAddress ||
@@ -113,6 +119,9 @@ library InterfoldLifecycle {
             slashView.e3RefundManager() != refundManagerAddress ||
             refundView.interfold() != address(this) ||
             refundView.bondingRegistry() != bondingAddress ||
+            address(nodeReleaseRegistry.bondingRegistry()) != bondingAddress ||
+            address(nodeReleaseRegistry.ciphernodeRegistry()) !=
+            registryAddress ||
             registry.numCiphernodes() != bonding.numRegisteredOperators()
         ) revert IInterfold.DependencyConfigurationMismatch();
     }

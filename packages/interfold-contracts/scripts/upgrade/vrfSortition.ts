@@ -11,6 +11,10 @@ import {
   writeJson,
 } from "../protocol/files";
 import {
+  currentNodeRelease,
+  deployNodeReleaseRegistry,
+} from "../protocol/nodeRelease";
+import {
   assertVrfSubscription,
   buildRandomnessTransactions,
   deployRandomnessProvider,
@@ -107,6 +111,12 @@ export async function prepareVrfSortitionUpgrade(): Promise<void> {
       config.protocolOwner,
       "Interfold ProxyAdmin",
     ),
+    requireProxyAdminOwner(
+      ethers,
+      config.bondingRegistryProxyAdmin,
+      config.protocolOwner,
+      "BondingRegistry ProxyAdmin",
+    ),
     assertVrfSubscription(ethers, config),
   ]);
 
@@ -137,6 +147,14 @@ export async function prepareVrfSortitionUpgrade(): Promise<void> {
     liveBondingRegistry,
     "live bonding registry",
   );
+  if (
+    liveBondingRegistry.toLowerCase() !==
+    config.bondingRegistryProxy.toLowerCase()
+  ) {
+    throw new Error(
+      `Configured BondingRegistry proxy ${config.bondingRegistryProxy} does not match the live registry binding ${liveBondingRegistry}`,
+    );
+  }
   const bondingRegistry = await ethers.getContractAt(
     "BondingRegistry",
     liveBondingRegistry,
@@ -161,12 +179,70 @@ export async function prepareVrfSortitionUpgrade(): Promise<void> {
     "interfold",
     deployment,
   );
+  const bondingUpgrade = await deployUpgradeImplementation(
+    ethers,
+    operator,
+    "bondingRegistry",
+    deployment,
+  );
   if (!registryUpgrade.sortitionLibrary) {
     throw new Error("Registry sortition library was not deployed");
   }
   if (!interfoldUpgrade.lifecycleLibrary || !interfoldUpgrade.pricingLibrary) {
     throw new Error("Interfold libraries were not deployed");
   }
+  if (
+    !bondingUpgrade.assetLibrary ||
+    !bondingUpgrade.eligibilityLibrary ||
+    !bondingUpgrade.slashingLibrary ||
+    !bondingUpgrade.registrationLibrary ||
+    !bondingUpgrade.ownershipLibrary
+  ) {
+    throw new Error("BondingRegistry libraries were not deployed");
+  }
+  let nodeReleaseDeployment: { address: string; interface: any };
+  if (deployment.nodeReleaseRegistry) {
+    await requireContract(
+      ethers.provider,
+      deployment.nodeReleaseRegistry,
+      "recorded node release registry",
+    );
+    const existingNodeRelease = await ethers.getContractAt(
+      "NodeReleaseRegistry",
+      deployment.nodeReleaseRegistry,
+    );
+    for (const [label, actual, expected] of [
+      ["owner", await existingNodeRelease.owner(), config.protocolOwner],
+      [
+        "BondingRegistry",
+        await existingNodeRelease.bondingRegistry(),
+        config.bondingRegistryProxy,
+      ],
+      [
+        "CiphernodeRegistry",
+        await existingNodeRelease.ciphernodeRegistry(),
+        deployment.ciphernodeRegistry,
+      ],
+    ] as const) {
+      if (String(actual).toLowerCase() !== String(expected).toLowerCase()) {
+        throw new Error(
+          `Recorded NodeReleaseRegistry ${label} mismatch: expected ${expected}, got ${actual}`,
+        );
+      }
+    }
+    nodeReleaseDeployment = {
+      address: deployment.nodeReleaseRegistry,
+      interface: existingNodeRelease.interface,
+    };
+  } else {
+    nodeReleaseDeployment = await deployNodeReleaseRegistry(
+      ethers,
+      config.protocolOwner,
+      config.bondingRegistryProxy,
+      deployment.ciphernodeRegistry,
+    );
+  }
+  const nodeRelease = currentNodeRelease();
   const randomness = await deployRandomnessProvider(
     ethers,
     operator,
@@ -184,6 +260,24 @@ export async function prepareVrfSortitionUpgrade(): Promise<void> {
       deployment.interfoldProxyAdmin,
       deployment.interfold,
       interfoldUpgrade.implementation,
+    ),
+    upgradeTransaction(
+      config.bondingRegistryProxyAdmin,
+      config.bondingRegistryProxy,
+      bondingUpgrade.implementation,
+    ),
+    safeTx(
+      deployment.interfold,
+      interfold.interface.encodeFunctionData("setNodeReleaseRegistry", [
+        nodeReleaseDeployment.address,
+      ]),
+    ),
+    safeTx(
+      nodeReleaseDeployment.address,
+      nodeReleaseDeployment.interface.encodeFunctionData(
+        "setRequiredNodeRelease",
+        [nodeRelease.protocolVersion, nodeRelease.nodeGeneration],
+      ),
     ),
     safeTx(
       deployment.interfold,
@@ -231,6 +325,16 @@ export async function prepareVrfSortitionUpgrade(): Promise<void> {
     interfoldImplementation: interfoldUpgrade.implementation,
     lifecycleLibrary: interfoldUpgrade.lifecycleLibrary,
     pricingLibrary: interfoldUpgrade.pricingLibrary,
+    bondingProxy: config.bondingRegistryProxy,
+    bondingProxyAdmin: config.bondingRegistryProxyAdmin,
+    bondingImplementation: bondingUpgrade.implementation,
+    bondingAssetLibrary: bondingUpgrade.assetLibrary,
+    bondingEligibilityLibrary: bondingUpgrade.eligibilityLibrary,
+    bondingSlashingLibrary: bondingUpgrade.slashingLibrary,
+    bondingRegistrationLibrary: bondingUpgrade.registrationLibrary,
+    bondingOwnershipLibrary: bondingUpgrade.ownershipLibrary,
+    nodeReleaseRegistry: nodeReleaseDeployment.address,
+    nodeRelease,
     randomnessProvider: randomness.randomnessProvider,
     randomness: { ...randomnessConfig },
     randomnessFlatFee: config.interfold.pricing.randomnessFlatFee,
@@ -256,6 +360,8 @@ export async function prepareVrfSortitionUpgrade(): Promise<void> {
 VRF sortition upgrade prepared
   registry implementation: ${plan.registryImplementation}
   Interfold implementation:${plan.interfoldImplementation}
+  Bonding implementation: ${plan.bondingImplementation}
+  node release registry:  ${plan.nodeReleaseRegistry}
   randomness provider:      ${plan.randomnessProvider}
   governance batch:         ${plan.safeTransactions}
   Aragon Safe batch:        ${plan.governanceSafeBuilder ?? "(not configured)"}
