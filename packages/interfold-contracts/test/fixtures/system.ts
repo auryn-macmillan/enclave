@@ -23,6 +23,7 @@ import MockPkVerifierModule from "../../ignition/modules/mockPkVerifier";
 import MockCircuitVerifierModule from "../../ignition/modules/mockSlashingVerifier";
 import MockStableTokenModule from "../../ignition/modules/mockStableToken";
 import SlashingManagerModule from "../../ignition/modules/slashingManager";
+import { localPricingConfig } from "../../scripts/pricingConfig";
 import {
   BondingRegistry__factory as BondingRegistryFactory,
   CiphernodeRegistryOwnable__factory as CiphernodeRegistryOwnableFactory,
@@ -37,6 +38,7 @@ import {
   MockDecryptionVerifier__factory as MockDecryptionVerifierFactory,
   MockE3ProgramHarness__factory as MockE3ProgramFactory,
   MockPkVerifier__factory as MockPkVerifierFactory,
+  MockRandomnessProvider__factory as MockRandomnessProviderFactory,
   MockUSDC__factory as MockUSDCFactory,
   SlashingManager__factory as SlashingManagerFactory,
 } from "../../types";
@@ -51,6 +53,7 @@ import type { MockComputeProvider } from "../../types/contracts/test/MockCompute
 import type { MockDecryptionVerifier } from "../../types/contracts/test/MockDecryptionVerifier";
 import type { MockE3ProgramHarness } from "../../types/contracts/test/MockE3ProgramHarness";
 import type { MockPkVerifier } from "../../types/contracts/test/MockPkVerifier";
+import type { MockRandomnessProvider } from "../../types/contracts/test/MockRandomnessProvider";
 import type { MockCircuitVerifier } from "../../types/contracts/test/MockSlashingVerifier.sol/MockCircuitVerifier";
 import type { MockUSDC } from "../../types/contracts/test/MockStableToken.sol/MockUSDC";
 import type { InterfoldTicketToken } from "../../types/contracts/token/InterfoldTicketToken";
@@ -171,6 +174,7 @@ export interface InterfoldSystemMocks {
   ciphertextVerifier: MockCiphertextVerifier;
   pkVerifier: MockPkVerifier;
   mockComputeProvider: MockComputeProvider;
+  randomnessProvider?: MockRandomnessProvider;
   /** Only populated when `deployCircuitVerifier: true`. */
   circuitVerifier?: MockCircuitVerifier;
 }
@@ -422,6 +426,7 @@ export async function deployInterfoldSystem(
         feeToken: await usdcToken.getAddress(),
         feeTokenDecimals: 6,
         timeoutConfig,
+        pricingConfig: localPricingConfig(ownerAddress),
         initialE3Program,
       },
     },
@@ -463,6 +468,17 @@ export async function deployInterfoldSystem(
   await registryForWiring.setBondingRegistry(
     await bondingRegistry.getAddress(),
   );
+  let randomnessProvider: MockRandomnessProvider | undefined;
+  if (!mockCiphernodeRegistry) {
+    randomnessProvider = await new MockRandomnessProviderFactory(owner).deploy(
+      ciphernodeRegistryAddress,
+    );
+    await randomnessProvider.waitForDeployment();
+    await (await randomnessProvider.setAutoFulfill(true)).wait();
+    await ciphernodeRegistry.setRandomnessProvider(
+      await randomnessProvider.getAddress(),
+    );
+  }
   await slashingManager.setBondingRegistry(await bondingRegistry.getAddress());
   await bondingRegistry.setSlashingManager(await slashingManager.getAddress());
   await bondingRegistry.setRewardDistributor(interfoldAddress);
@@ -619,6 +635,7 @@ export async function deployInterfoldSystem(
       ciphertextVerifier,
       pkVerifier,
       mockComputeProvider,
+      randomnessProvider,
       circuitVerifier,
     },
     owner,

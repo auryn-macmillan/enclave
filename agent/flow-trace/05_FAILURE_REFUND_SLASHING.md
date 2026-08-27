@@ -6,9 +6,13 @@ An E3 can fail at any stage due to timeouts, insufficient participants, or misbe
 first attributes economic responsibility from `FailureReason`:
 
 - Requester, data-provider, or compute-provider failures pay completed work and the protocol share
-  from fee escrow; the requester receives the unspent remainder.
-- Supplier/ciphernode failures return 100% of fee escrow to the requester with no protocol cut.
-  Honest nodes are compensated from actual ticket collateral slashed from faulty nodes.
+  from service fee escrow; the requester receives the unspent remainder.
+- Supplier/ciphernode failures return 100% of service fee escrow to the requester with no protocol
+  cut. Honest nodes are compensated from actual ticket collateral slashed from faulty nodes.
+
+The flat randomness fee is a request-time infrastructure charge, not fee escrow. Interfold credits
+it to the request-time treasury after an accepted randomness request. No success, failure, or
+cancellation path pays this amount to ciphernodes or returns it to the requester.
 
 Slashed assets remain token-specific pull claims. Compensation is therefore limited to collateral
 actually slashed and does not require an oracle or relabel one ERC-20 as another.
@@ -104,31 +108,36 @@ Specific triggers:
 
 ### Requester Cancellation
 
-Only the address that created an E3 can call `cancelE3(e3Id)`. The call is valid in `Requested`,
-`CommitteeFinalized`, `KeyPublished`, and `CiphertextReady`. It records the current stage before it
-sets the terminal `Failed` stage and emits `RequesterCancelled` through the standard failure events.
+Only the address that created an E3 can call `cancelE3(e3Id)`. Cancellation is a recovery path for
+an asynchronous randomness request that did not produce a usable result by its frozen deadline. It
+is valid only while the E3 remains in `Requested`, the Registry reports no seed, and the randomness
+deadline has passed.
 
-Cancellation and settlement are separate. This lets the E3 stop even if a registry lookup or token
-transfer temporarily fails. Any account can later retry `processE3Failure(e3Id)`.
+The contract does not allow cancellation while a timely VRF result can still arrive. This prevents a
+requester from seeing a pending fulfillment and canceling only when the random word is unfavorable.
+The provider never re-requests or deletes randomness for an E3.
 
 ```text
 Requester calls: Interfold.cancelE3(e3Id)
 │
 ├─ require(msg.sender == request-time requester)
-├─ require(stage is active and not terminal)
+├─ require(stage == Requested)
+├─ require(Registry.sortitionSeed(e3Id) is unavailable)
+├─ require(block.timestamp > randomnessDeadline)
 ├─ _e3Stages[e3Id] = Failed
-├─ _e3FailureReasons[e3Id] = RequesterCancelled
+├─ _e3FailureReasons[e3Id] = CommitteeFormationTimeout
+├─ Registry.releaseCommittee(e3Id)
+│  → release candidate and request obligations
+│  → clear the active randomness provider
+│  → reject new E3 requests until governance restores a provider
+│  → a late provider callback cannot restart sortition
 └─ Emit E3StageChanged and E3Failed
 
-Settlement derives the pre-failure stage from the monotonic deadline markers
-that each lifecycle transition stored before cancellation:
-  Requested          → no completed node milestone
-  CommitteeFinalized → committee-formation allocation completed
-  KeyPublished       → committee formation and DKG completed
-  CiphertextReady    → committee formation and DKG completed
-
-The requester receives the remaining work allocation. The request-time protocol share is retained.
-No decryption allocation is paid unless the E3 completes normally.
+Settlement remains separate from cancellation. Any account can call `processE3Failure(e3Id)` after
+the state change. `CommitteeFormationTimeout` is supplier-paid, so the requester receives the full
+service fee escrow. No node or service protocol allocation is paid from that escrow because no
+committee work began. The flat randomness fee stays charged because a late response can still
+charge the protocol-funded subscription.
 ```
 
 ---
@@ -242,7 +251,7 @@ REQUESTER claims:
 ├─ require(msg.sender == requester from Interfold)
 ├─ require(!requester refund already claimed)
 ├─ requesterAmount is either:
-│   • 100% of fee escrow for ciphernodes/supply liability, or
+│   • 100% of service fee escrow for ciphernodes/supply liability, or
 │   • the unspent request-time work allocation for requester liability
 ├─ Transfer requesterAmount in the per-E3 fee token
 └─ Emit RefundClaimed(e3Id, requester, amount)
@@ -969,8 +978,8 @@ settleSlashedFunds(e3Id, proposalId):
        0, toHonestNodes)
 
 Design rationale:
-  Supplier/ciphernode failures already return 100% of the requester's fee
-  escrow. Ticket slashes compensate honest service providers in the slash
+  Supplier/ciphernode failures already return 100% of the requester's service
+  fee escrow. Ticket slashes compensate honest service providers in the slash
   asset itself. No trusted conversion price is needed, and requester-fault
   failures do not gain a slash-funded rebate for costs they caused.
 ```

@@ -10,8 +10,9 @@ import {
 import { ADDRESS_ONE } from "./constants";
 import { ensurePoseidonT3 } from "./poseidon";
 import { deployProxy } from "./proxies";
+import { deployRandomnessProvider } from "./randomness";
 import type { ProtocolConfigFile, ProtocolDeployResult } from "./types";
-import { deployedAddress, pricingConfig, timeoutConfig } from "./values";
+import { deployedAddress, feeAssetConfig, timeoutConfig } from "./values";
 
 export async function deployProtocolContracts(
   ethers: any,
@@ -82,6 +83,13 @@ export async function deployProtocolContracts(
     ]),
   );
 
+  const randomness = await deployRandomnessProvider(
+    ethers,
+    operator,
+    config,
+    registryProxy.proxy,
+  );
+
   const pricingLibFactory = await ethers.getContractFactory("InterfoldPricing");
   const pricingLib = await pricingLibFactory.deploy();
   await pricingLib.waitForDeployment();
@@ -111,11 +119,7 @@ export async function deployProtocolContracts(
       registryProxy.proxy,
       config.bondingRegistryProxy,
       ADDRESS_ONE,
-      {
-        token: config.feeToken,
-        expectedDecimals: config.feeTokenDecimals,
-        pricing: pricingConfig(config.interfold.pricing),
-      },
+      feeAssetConfig(config),
       BigInt(config.interfold.maxDuration),
       timeoutConfig(config.interfold.timeoutConfig),
       initialE3Program,
@@ -218,6 +222,7 @@ export async function deployProtocolContracts(
       slashingEvidenceLib,
       poseidonT3,
       registrySortitionLib,
+      ...randomness,
       ciphernodeRegistry: registryProxy.proxy,
       ciphernodeRegistryImplementation,
       ciphernodeRegistryProxyAdmin: registryProxy.proxyAdmin,

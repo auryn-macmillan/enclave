@@ -249,15 +249,6 @@ library InterfoldLifecycle {
             revert IInterfold.DKGDeadlinePassed(e3Id, dkgDeadline);
     }
 
-    function honestNodes(
-        address registryAddress,
-        uint256 e3Id
-    ) external view returns (address[] memory) {
-        (address[] memory nodes, ) = ICiphernodeRegistry(registryAddress)
-            .getActiveCommitteeNodes(e3Id);
-        return nodes;
-    }
-
     /// @notice Validates, verifies, and records one ciphertext output.
     function publishCiphertext(
         mapping(uint256 e3Id => E3 e3) storage e3s,
@@ -559,10 +550,10 @@ library InterfoldLifecycle {
     function validateRequest(
         uint256[2] calldata inputWindow,
         uint256 nowTs,
-        uint256 sortitionWindow,
+        address registryAddress,
         IInterfold.E3TimeoutConfig calldata timeoutConfig,
         uint256 maxDuration
-    ) external pure {
+    ) external view {
         if (inputWindow[0] < nowTs)
             revert IInterfold.InvalidInputDeadlineStart(inputWindow[0]);
         if (inputWindow[1] < inputWindow[0])
@@ -570,7 +561,7 @@ library InterfoldLifecycle {
         uint256 totalDuration = requestLifecycleDuration(
             inputWindow[1],
             nowTs,
-            sortitionWindow,
+            registryAddress,
             timeoutConfig
         );
         if (totalDuration > maxDuration)
@@ -581,13 +572,15 @@ library InterfoldLifecycle {
     function requestLifecycleDuration(
         uint256 inputWindowEnd,
         uint256 requestTime,
-        uint256 sortitionWindow,
+        address registryAddress,
         IInterfold.E3TimeoutConfig memory timeoutConfig
-    ) public pure returns (uint256 duration) {
+    ) public view returns (uint256 duration) {
         if (inputWindowEnd < requestTime)
             revert IInterfold.InvalidInputDeadlineEnd(inputWindowEnd);
         uint256 inputReservation = inputWindowEnd - requestTime;
-        uint256 committeeReservation = sortitionWindow +
+        ICiphernodeRegistry registry = ICiphernodeRegistry(registryAddress);
+        uint256 committeeReservation = registry.randomnessRequestTimeout() +
+            registry.sortitionSubmissionWindow() +
             timeoutConfig.dkgWindow;
         uint256 preCompute = inputReservation > committeeReservation
             ? inputReservation
@@ -598,11 +591,12 @@ library InterfoldLifecycle {
             timeoutConfig.decryptionWindow;
     }
 
-    /// @notice Cancels an active E3 for its original requester.
+    /// @notice Cancels an E3 whose randomness request expired without a usable result.
     function cancelE3(
         mapping(uint256 => IInterfold.E3Stage) storage stages,
         mapping(uint256 => IInterfold.FailureReason) storage failureReasons,
         mapping(uint256 => address) storage requesters,
+        address registryAddress,
         uint256 e3Id,
         address caller
     ) external {
@@ -610,19 +604,25 @@ library InterfoldLifecycle {
         if (requester == address(0)) revert IInterfold.E3DoesNotExist(e3Id);
         if (caller != requester) revert IInterfold.NotRequester(e3Id, caller);
         IInterfold.E3Stage stage = stages[e3Id];
-        if (
-            stage == IInterfold.E3Stage.None ||
-            stage >= IInterfold.E3Stage.Complete
-        ) {
+        if (stage != IInterfold.E3Stage.Requested) {
             revert IInterfold.E3NotCancellable(e3Id, stage);
         }
+        ICiphernodeRegistry registry = ICiphernodeRegistry(registryAddress);
+        (bool randomnessReady, ) = registry.sortitionSeed(e3Id);
+        if (
+            randomnessReady ||
+            block.timestamp <= registry.getCommitteeDeadline(e3Id)
+        ) revert IInterfold.E3NotCancellable(e3Id, stage);
         stages[e3Id] = IInterfold.E3Stage.Failed;
-        failureReasons[e3Id] = IInterfold.FailureReason.RequesterCancelled;
+        failureReasons[e3Id] = IInterfold
+            .FailureReason
+            .CommitteeFormationTimeout;
         emit IInterfold.E3StageChanged(e3Id, stage, IInterfold.E3Stage.Failed);
         emit IInterfold.E3Failed(
             e3Id,
             stage,
-            IInterfold.FailureReason.RequesterCancelled
+            IInterfold.FailureReason.CommitteeFormationTimeout
         );
+        registry.releaseCommittee(e3Id);
     }
 }

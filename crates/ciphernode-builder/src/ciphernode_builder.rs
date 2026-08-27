@@ -30,10 +30,10 @@ use e3_events::{
     EventType, EvmEventConfig, InterfoldEvent,
 };
 use e3_evm::{
-    fetch_accusation_vote_validity, BondingRegistrySolReader, CiphernodeRegistrySol,
-    CiphernodeRegistrySolReader, EvmChainGatewayHandle, InterfoldSolReader, InterfoldSolWriter,
-    ProviderConfig, SlashingManagerSolReader, SlashingManagerSolWriter,
-    SlashingWriterRepositoryFactory,
+    fetch_accusation_vote_validity, fetch_randomness_providers, BondingRegistrySolReader,
+    CiphernodeRegistrySol, CiphernodeRegistrySolReader, EvmChainGatewayHandle, InterfoldSolReader,
+    InterfoldSolWriter, ProviderConfig, RandomnessProviderSolReader, SlashingManagerSolReader,
+    SlashingManagerSolWriter, SlashingWriterRepositoryFactory,
 };
 use e3_fhe::ext::FheExtension;
 use e3_keyshare::ext::ThresholdKeyshareExtension;
@@ -1161,6 +1161,14 @@ fn validate_chain_id(chain: &ChainConfig, actual_chain_id: u64) -> Result<()> {
     Ok(())
 }
 
+fn validate_vrf_chain_id(chain_id: u64) -> Result<()> {
+    ensure!(
+        matches!(chain_id, 1 | 1_337 | 31_337 | 11_155_111),
+        "VRF sortition supports Ethereum mainnet, Sepolia, and local development chains only; received chain_id {chain_id}"
+    );
+    Ok(())
+}
+
 /// Build delay configuration for a specific chain
 fn create_aggregate_delay(chain: &ChainConfig, actual_chain_id: u64) -> (AggregateId, Duration) {
     let aggregate_id = AggregateId::from_chain_id(Some(actual_chain_id));
@@ -1206,7 +1214,10 @@ async fn setup_evm_system(
     for chain in chains.iter().filter(|chain| chain.enabled.unwrap_or(true)) {
         let provider = provider_cache.ensure_read_provider(chain).await?;
         let chain_id = provider.chain_id();
-        // An entropy block read at the chain head can disappear before the ticket transaction.
+        if contract_components.ciphernode_registry {
+            validate_vrf_chain_id(chain_id)?;
+        }
+        // Delay ingestion until the configured number of confirmations is present.
         let ingestion_confirmations = chain.ingestion_confirmations()?;
         evm_config.insert(chain_id, chain.try_into()?);
 
@@ -1274,6 +1285,30 @@ async fn setup_evm_system(
                 )
                 .recipient()
             });
+
+            let randomness_addresses = fetch_randomness_providers(
+                provider.provider(),
+                contract_address,
+                contract.deploy_block().unwrap_or(0),
+            )
+            .await?;
+            if randomness_addresses.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "ciphernode registry {} has no randomness provider configured",
+                    contract_address
+                ));
+            }
+            for randomness_address in randomness_addresses {
+                let randomness_read_provider = provider.clone();
+                system.with_contract(randomness_address, move |next| {
+                    RandomnessProviderSolReader::setup(
+                        &next,
+                        randomness_read_provider,
+                        contract_address,
+                    )
+                    .recipient()
+                });
+            }
 
             // TODO: Should we not let this pass and just use '?'?
             // Above if we include interfold in the config and we don't have a wallet it will fail
@@ -1375,6 +1410,7 @@ async fn wait_for_evm_gateways(gateways: Vec<EvmChainGatewayHandle>) -> Result<(
 mod tests {
     use super::{
         create_aggregate_delay, reconcile_committee_snapshots, recovered_ciphernode_selections,
+        validate_vrf_chain_id,
     };
     use e3_config::{
         chain_config::ChainConfig,
@@ -1425,6 +1461,20 @@ mod tests {
         let (_, delay) = create_aggregate_delay(&chain_with_finalization_ms(None), 1);
 
         assert_eq!(delay, Duration::ZERO);
+    }
+
+    #[test]
+    fn supports_ethereum_vrf_chains() {
+        for chain_id in [1, 11_155_111, 31_337, 1_337] {
+            assert!(validate_vrf_chain_id(chain_id).is_ok());
+        }
+    }
+
+    #[test]
+    fn rejects_arbitrum_vrf_chains() {
+        let error = validate_vrf_chain_id(42_161).expect_err("Arbitrum must be rejected");
+
+        assert!(error.to_string().contains("Ethereum mainnet"));
     }
 
     #[test]

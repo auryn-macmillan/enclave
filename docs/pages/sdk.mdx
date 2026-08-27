@@ -118,17 +118,21 @@ ciphertext will be encrypted under the wrong parameters and decryption will fail
 ### Requesting computations
 
 ```ts
-const hash = await sdk.requestE3({
+const requestParams = {
   committeeSize: 0, // CommitteeSize.Minimum (N=3)
   inputWindow: [
     BigInt(Math.floor(Date.now() / 1000)),
     BigInt(Math.floor(Date.now() / 1000) + 5 * 60),
-  ],
+  ] as const,
   e3Program: '0x...',
   paramSet: 0, // ParamSet.Insecure512 — use 1 (Secure8192) only on a secure network
   computeProviderParams: '0x',
   customParams: '0x',
-})
+}
+const quote = await sdk.getE3Quote(requestParams)
+const approvalHash = await sdk.approveFeeToken(quote)
+await sdk.waitForTransaction(approvalHash)
+const hash = await sdk.requestE3({ ...requestParams, maxFee: quote })
 ```
 
 ### Event subscriptions
@@ -275,35 +279,84 @@ All exports are also available from the main `@interfold/sdk` entry point.
 
 ## Event types
 
-The SDK provides two event type enums for subscribing to on-chain events:
+The SDK provides three event type enums for subscribing to on-chain events:
 
 ### `InterfoldEventType`
 
-| Enum Key                         | Solidity Event Name          |
-| -------------------------------- | ---------------------------- |
-| `E3_REQUESTED`                   | `E3Requested`                |
-| `CIPHERTEXT_OUTPUT_PUBLISHED`    | `CiphertextOutputPublished`  |
-| `PLAINTEXT_OUTPUT_PUBLISHED`     | `PlaintextOutputPublished`   |
-| `E3_PROGRAM_ENABLED`             | `E3ProgramEnabled`           |
-| `E3_PROGRAM_DISABLED`            | `E3ProgramDisabled`          |
-| `ENCRYPTION_SCHEME_ENABLED`      | `EncryptionSchemeEnabled`    |
-| `ENCRYPTION_SCHEME_DISABLED`     | `EncryptionSchemeDisabled`   |
-| `CIPHERNODE_REGISTRY_SET`        | `CiphernodeRegistrySet`      |
-| `MAX_DURATION_SET`               | `MaxDurationSet`             |
-| `ALLOWED_E3_PROGRAMS_PARAMS_SET` | `AllowedE3ProgramsParamsSet` |
-| `OWNERSHIP_TRANSFERRED`          | `OwnershipTransferred`       |
-| `INITIALIZED`                    | `Initialized`                |
+| Enum Key                      | Solidity Event Name         |
+| ----------------------------- | --------------------------- |
+| `E3_REQUESTED`                | `E3Requested`               |
+| `CIPHERTEXT_OUTPUT_PUBLISHED` | `CiphertextOutputPublished` |
+| `PLAINTEXT_OUTPUT_PUBLISHED`  | `PlaintextOutputPublished`  |
+| `E3_PROGRAM_REGISTERED`       | `E3ProgramRegistered`       |
+| `ENCRYPTION_SCHEME_ENABLED`   | `EncryptionSchemeEnabled`   |
+| `CIPHERNODE_REGISTRY_SET`     | `CiphernodeRegistrySet`     |
+| `MAX_DURATION_SET`            | `MaxDurationSet`            |
+| `PARAM_SET_REGISTERED`        | `ParamSetRegistered`        |
+| `OWNERSHIP_TRANSFERRED`       | `OwnershipTransferred`      |
+| `INITIALIZED`                 | `Initialized`               |
 
 ### `RegistryEventType`
 
-| Enum Key                | Solidity Event Name    |
-| ----------------------- | ---------------------- |
-| `COMMITTEE_REQUESTED`   | `CommitteeRequested`   |
-| `COMMITTEE_PUBLISHED`   | `CommitteePublished`   |
-| `COMMITTEE_FINALIZED`   | `CommitteeFinalized`   |
-| `INTERFOLD_SET`         | `InterfoldSet`         |
-| `OWNERSHIP_TRANSFERRED` | `OwnershipTransferred` |
-| `INITIALIZED`           | `Initialized`          |
+| Enum Key                             | Solidity Event Name               |
+| ------------------------------------ | --------------------------------- |
+| `COMMITTEE_REQUESTED`                | `CommitteeRequested`              |
+| `COMMITTEE_RANDOMNESS_REQUESTED`     | `CommitteeRandomnessRequested`    |
+| `RANDOMNESS_CIRCUIT_BREAKER_TRIPPED` | `RandomnessCircuitBreakerTripped` |
+| `COMMITTEE_PUBLISHED`                | `CommitteePublished`              |
+| `COMMITTEE_FINALIZED`                | `SortitionCommitteeFinalized`     |
+| `INTERFOLD_SET`                      | `InterfoldSet`                    |
+| `OWNERSHIP_TRANSFERRED`              | `OwnershipTransferred`            |
+| `INITIALIZED`                        | `Initialized`                     |
+
+`CommitteeRequested` is retained for pre-VRF registry logs. The ciphernode runtime creates its own
+durable event with the same name after the registry accepts a VRF result.
+
+### `RandomnessProviderEventType`
+
+| Enum Key               | Solidity Event Name   |
+| ---------------------- | --------------------- |
+| `RANDOMNESS_FULFILLED` | `RandomnessFulfilled` |
+
+The Registry freezes a provider address for each request. Use the address, request ID, and E3 ID
+from `CommitteeRandomnessRequested` to watch and correlate the provider response. These methods are
+available on the main `InterfoldSDK` object:
+
+```typescript
+await sdk.onRandomnessProviderEvent(
+  provider,
+  RandomnessProviderEventType.RANDOMNESS_FULFILLED,
+  ({ data }) => {
+    console.log(data.requestId, data.e3Id, data.fulfilledAt)
+  },
+)
+```
+
+`getHistoricalRandomnessProviderEvents` requires an explicit `fromBlock` unless the listener config
+defines one. It reads fulfillment logs in bounded block ranges. To join history to a live watcher
+without overlap, read through a fixed head and start the watcher at the next block:
+
+```typescript
+const historicalHead = await sdk.getPublicClient().getBlockNumber({ cacheTime: 0 })
+const logs = await sdk.getHistoricalRandomnessProviderEvents(
+  provider,
+  RandomnessProviderEventType.RANDOMNESS_FULFILLED,
+  providerDeployBlock,
+  historicalHead,
+)
+await sdk.onRandomnessProviderEvent(
+  provider,
+  RandomnessProviderEventType.RANDOMNESS_FULFILLED,
+  handleFulfillment,
+  historicalHead + 1n,
+)
+```
+
+A fulfillment means that the provider stored a response. Query the Registry to determine whether the
+response was timely and usable. Live watchers also suppress repeated delivery of the same block,
+transaction, and log index. Calls that share one provider and event watcher must use the same
+explicit `fromBlock`; omit it to join the active watcher. The SDK rejects a conflicting explicit
+start block instead of silently dropping it.
 
 ## E3 lifecycle enums
 
@@ -426,9 +479,9 @@ that wraps or complements the core Interfold SDK.
   request.
 - **Fee token approval**: call `sdk.approveFeeToken(amount)` before `requestE3` to approve the fee
   token spend.
-- **Cancel an E3**: call `sdk.cancelE3(e3Id)` from the original requester account. The refund keeps
-  the value of completed milestones and returns the remaining work allocation through the normal
-  failed-E3 claim flow.
+- **Cancel an E3**: call `sdk.cancelE3(e3Id)` from the original requester account only after the VRF
+  deadline expires without a usable result. A valid result disables cancellation. The failed-E3
+  claim returns all service fee escrow, while the flat randomness fee remains charged.
 - **Query E3 data**: use `sdk.getE3(e3Id)` to read the full E3 struct, `sdk.getE3Stage(e3Id)` for
   the current lifecycle stage (returns `E3Stage` enum), and `sdk.getFailureReason(e3Id)` if the E3
   has failed (returns `FailureReason` enum).
