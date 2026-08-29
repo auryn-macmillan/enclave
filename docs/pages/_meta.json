@@ -101,6 +101,16 @@
   "ciphernode-operators": {
     "title": "Ciphernode Operators"
   },
+  "-- Governance": {
+    "type": "separator",
+    "title": "Governance"
+  },
+  "governance": {
+    "title": "Interfold Governance"
+  },
+  "constitution": {
+    "title": "The Interfold Constitution"
+  },
   "-- Examples": {
     "type": "separator",
     "title": "Examples"
