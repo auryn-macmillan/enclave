@@ -81,6 +81,17 @@ describe('release candidate ancestry', () => {
   })
 })
 
+test('changelog policy excludes mechanical release commits', () => {
+  const config = JSON.parse(readFileSync(join(ROOT_DIR, '.auto-changelog'), 'utf8'))
+  const ignoredCommit = new RegExp(config.ignoreCommitPattern)
+
+  assert.equal(config.commitLimit, false)
+  assert.equal(config.tagPrefix, 'v')
+  assert.match('chore(release): bump version to 1.0.0', ignoredCommit)
+  assert.match('chore(release): bump version to 1.0.0 (#10)', ignoredCommit)
+  assert.doesNotMatch('feat: current behavior (#11)', ignoredCommit)
+})
+
 describe('npm publication recovery', () => {
   function fixture() {
     const rootDir = temporaryDirectory('interfold-npm-publish')

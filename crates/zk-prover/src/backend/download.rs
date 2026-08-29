@@ -4,13 +4,13 @@
 // without even the implied warranty of MERCHANTABILITY
 // or FITNESS FOR A PARTICULAR PURPOSE.
 
-use crate::config::{verify_checksum, BbTarget, ChecksumManifest, CircuitInfo};
+use crate::config::{verify_checksum, BbTarget, ChecksumManifest, CircuitInfo, VersionInfo};
 use crate::error::ZkError;
 use flate2::read::GzDecoder;
 use futures_util::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 use tar::Archive;
 use tokio::fs;
@@ -180,21 +180,8 @@ impl ZkBackend {
 
         match result {
             Ok(bytes) => {
-                if self.circuits_dir.exists() {
-                    fs::remove_dir_all(&self.circuits_dir).await?;
-                }
-
-                let decoder = GzDecoder::new(&bytes[..]);
-                let mut archive = Archive::new(decoder);
-                archive.unpack(&self.base_dir)?;
-
-                let circuit_infos = self.verify_circuits().await?;
-
-                version_info.circuits = circuit_infos;
-                version_info.circuits_version = Some(version.clone());
-                version_info.last_updated = Some(chrono::Utc::now().to_rfc3339());
-                version_info.save(&self.version_file()).await?;
-
+                self.install_circuits_bytes(&bytes, &mut version_info, false)
+                    .await?;
                 info!("installed circuits v{}", version);
             }
             Err(e) => {
@@ -205,6 +192,80 @@ impl ZkBackend {
             }
         }
 
+        Ok(())
+    }
+
+    /// Install a circuit release archive from the local filesystem.
+    pub async fn install_circuits_archive(&self, path: &Path) -> Result<(), ZkError> {
+        let bytes = fs::read(path).await?;
+        let mut version_info = self.load_version_info().await;
+        self.install_circuits_bytes(&bytes, &mut version_info, true)
+            .await?;
+        info!(
+            "installed circuits v{} from {}",
+            self.config.required_circuits_version,
+            path.display()
+        );
+        Ok(())
+    }
+
+    async fn install_circuits_bytes(
+        &self,
+        bytes: &[u8],
+        version_info: &mut VersionInfo,
+        require_checksums: bool,
+    ) -> Result<(), ZkError> {
+        fs::create_dir_all(&self.base_dir).await?;
+
+        let staging_dir = tempfile::Builder::new()
+            .prefix(".circuits-install-")
+            .tempdir_in(&self.base_dir)?;
+        let staging_root = staging_dir.path().join("payload");
+        fs::create_dir(&staging_root).await?;
+
+        let decoder = GzDecoder::new(bytes);
+        let mut archive = Archive::new(decoder);
+        for entry in archive.entries()? {
+            let mut entry = entry?;
+            let entry_type = entry.header().entry_type();
+            if is_archive_metadata(entry_type) {
+                continue;
+            }
+            let path = entry.path()?.into_owned();
+            validate_circuit_archive_entry(&path, entry_type)?;
+            if !entry.unpack_in(&staging_root)? {
+                return Err(invalid_circuit_archive_path(&path));
+            }
+        }
+
+        let staged_circuits = staging_root.join("circuits");
+        if !staged_circuits.is_dir() {
+            return Err(ZkError::InvalidInput(
+                "circuit archive does not contain a circuits directory".into(),
+            ));
+        }
+
+        let circuit_infos = verify_circuits_dir(&staged_circuits).await?;
+        if require_checksums && circuit_infos.is_empty() {
+            return Err(ZkError::ChecksumMissing("circuits/checksums.json".into()));
+        }
+
+        let backup_circuits = staging_dir.path().join("previous-circuits");
+        let had_existing_circuits = self.circuits_dir.exists();
+        if had_existing_circuits {
+            fs::rename(&self.circuits_dir, &backup_circuits).await?;
+        }
+        if let Err(install_error) = fs::rename(&staged_circuits, &self.circuits_dir).await {
+            if had_existing_circuits {
+                fs::rename(&backup_circuits, &self.circuits_dir).await?;
+            }
+            return Err(install_error.into());
+        }
+
+        version_info.circuits = circuit_infos;
+        version_info.circuits_version = Some(self.config.required_circuits_version.clone());
+        version_info.last_updated = Some(chrono::Utc::now().to_rfc3339());
+        version_info.save(&self.version_file()).await?;
         Ok(())
     }
 
@@ -227,37 +288,69 @@ impl ZkBackend {
         let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
         Ok(version)
     }
+}
 
-    async fn verify_circuits(&self) -> Result<HashMap<String, CircuitInfo>, ZkError> {
-        let manifest_path = self.circuits_dir.join("checksums.json");
-        if !manifest_path.exists() {
-            warn!("checksums.json not found, skipping circuit verification");
-            return Ok(HashMap::new());
-        }
+fn invalid_circuit_archive_path(path: &Path) -> ZkError {
+    ZkError::InvalidInput(format!(
+        "circuit archive entry must stay inside circuits: {}",
+        path.display()
+    ))
+}
 
-        let manifest_data = fs::read_to_string(&manifest_path).await?;
-        let manifest: ChecksumManifest = serde_json::from_str(&manifest_data)?;
+fn is_archive_metadata(entry_type: tar::EntryType) -> bool {
+    entry_type.is_pax_global_extensions()
+        || entry_type.is_pax_local_extensions()
+        || entry_type.is_gnu_longname()
+        || entry_type.is_gnu_longlink()
+}
 
-        let mut circuit_infos = HashMap::new();
-
-        for (rel_path, expected_hash) in &manifest.files {
-            read_manifest_file(&self.circuits_dir, rel_path, expected_hash).await?;
-
-            circuit_infos.insert(
-                rel_path.clone(),
-                CircuitInfo {
-                    file: rel_path.clone(),
-                    checksum: expected_hash.clone(),
-                },
-            );
-        }
-
-        info!(
-            "verified {} circuit files from checksums.json",
-            circuit_infos.len()
-        );
-        Ok(circuit_infos)
+fn validate_circuit_archive_entry(path: &Path, entry_type: tar::EntryType) -> Result<(), ZkError> {
+    let mut components = path.components();
+    if components.next() != Some(Component::Normal("circuits".as_ref()))
+        || components.any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(invalid_circuit_archive_path(path));
     }
+
+    if !entry_type.is_file() && !entry_type.is_dir() {
+        return Err(ZkError::InvalidInput(format!(
+            "circuit archive entry must be a regular file or directory: {}",
+            path.display()
+        )));
+    }
+
+    Ok(())
+}
+
+async fn verify_circuits_dir(circuits_dir: &Path) -> Result<HashMap<String, CircuitInfo>, ZkError> {
+    let manifest_path = circuits_dir.join("checksums.json");
+    if !manifest_path.exists() {
+        warn!("checksums.json not found, skipping circuit verification");
+        return Ok(HashMap::new());
+    }
+
+    let manifest_data = fs::read_to_string(&manifest_path).await?;
+    let manifest: ChecksumManifest = serde_json::from_str(&manifest_data)?;
+
+    let mut circuit_infos = HashMap::new();
+
+    for (rel_path, expected_hash) in &manifest.files {
+        read_manifest_file(circuits_dir, rel_path, expected_hash).await?;
+
+        circuit_infos.insert(
+            rel_path.clone(),
+            CircuitInfo {
+                file: rel_path.clone(),
+                checksum: expected_hash.clone(),
+            },
+        );
+    }
+
+    info!(
+        "verified {} circuit files from checksums.json",
+        circuit_infos.len()
+    );
+    Ok(circuit_infos)
 }
 
 fn find_bb_in_dir(dir: &Path) -> Result<PathBuf, ZkError> {
@@ -329,8 +422,12 @@ async fn download_with_progress(url: &str, message: &str) -> Result<Vec<u8>, ZkE
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ZkConfig;
+    use e3_config::BBPath;
+    use flate2::{write::GzEncoder, Compression};
     use sha2::{Digest, Sha256};
-    use std::fs;
+    use std::{collections::HashMap, fs, io::Write};
+    use tar::{Builder, Header};
     use tempfile::TempDir;
 
     fn write_file(root: &Path, rel: &str, contents: &[u8]) {
@@ -343,6 +440,140 @@ mod tests {
 
     fn sha256_hex(data: &[u8]) -> String {
         hex::encode(Sha256::digest(data))
+    }
+
+    fn append_archive_file<W: Write>(builder: &mut Builder<W>, path: &str, contents: &[u8]) {
+        let mut header = Header::new_gnu();
+        header.set_mode(0o644);
+        header.set_size(contents.len() as u64);
+        header.set_cksum();
+        builder.append_data(&mut header, path, contents).unwrap();
+    }
+
+    fn append_global_pax_header<W: Write>(builder: &mut Builder<W>) {
+        let contents = b"19 comment=fixture\n";
+        let mut header = Header::new_gnu();
+        header.set_entry_type(tar::EntryType::XGlobalHeader);
+        header.set_mode(0o644);
+        header.set_size(contents.len() as u64);
+        header.set_cksum();
+        builder
+            .append_data(&mut header, "pax_global_header", &contents[..])
+            .unwrap();
+    }
+
+    fn circuit_archive_with_entries(
+        circuit: &[u8],
+        include_manifest: bool,
+        extra_entries: &[(&str, &[u8])],
+    ) -> Vec<u8> {
+        let rel_path = "insecure-512/minimum/default/dkg/pk/pk.json";
+        let encoder = GzEncoder::new(Vec::new(), Compression::default());
+        let mut builder = Builder::new(encoder);
+        append_global_pax_header(&mut builder);
+        append_archive_file(&mut builder, &format!("circuits/{rel_path}"), circuit);
+
+        if include_manifest {
+            let manifest = serde_json::to_vec(&ChecksumManifest {
+                algorithm: "sha256".into(),
+                generated: "test".into(),
+                files: HashMap::from([(rel_path.to_string(), sha256_hex(circuit))]),
+            })
+            .unwrap();
+            append_archive_file(&mut builder, "circuits/checksums.json", &manifest);
+        }
+
+        for (path, contents) in extra_entries {
+            append_archive_file(&mut builder, path, contents);
+        }
+
+        builder.into_inner().unwrap().finish().unwrap()
+    }
+
+    fn circuit_archive(circuit: &[u8], include_manifest: bool) -> Vec<u8> {
+        circuit_archive_with_entries(circuit, include_manifest, &[])
+    }
+
+    fn test_backend(temp: &TempDir) -> ZkBackend {
+        let base_dir = temp.path().join("noir");
+        let mut config = ZkConfig::default();
+        config.required_circuits_version = "candidate".into();
+        ZkBackend::with_config(
+            BBPath::Default(base_dir.join("bin/bb")),
+            base_dir.join("circuits"),
+            base_dir.join("work"),
+            config,
+        )
+    }
+
+    #[tokio::test]
+    async fn local_archive_accepts_pax_metadata_and_records_version() {
+        let temp = TempDir::new().unwrap();
+        let archive_path = temp.path().join("circuits.tar.gz");
+        fs::write(&archive_path, circuit_archive(b"circuit", true)).unwrap();
+        let backend = test_backend(&temp);
+
+        backend
+            .install_circuits_archive(&archive_path)
+            .await
+            .unwrap();
+
+        let version = backend.load_version_info().await;
+        assert_eq!(version.circuits_version.as_deref(), Some("candidate"));
+        assert_eq!(version.circuits.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn local_archive_requires_checksum_manifest() {
+        let temp = TempDir::new().unwrap();
+        let archive_path = temp.path().join("circuits.tar.gz");
+        fs::write(&archive_path, circuit_archive(b"circuit", false)).unwrap();
+        let backend = test_backend(&temp);
+
+        let installed_circuit = backend
+            .circuits_dir
+            .join("insecure-512/minimum/default/dkg/pk/pk.json");
+        write_file(&backend.circuits_dir, "installed.txt", b"installed");
+        write_file(
+            &backend.circuits_dir,
+            "insecure-512/minimum/default/dkg/pk/pk.json",
+            b"previous-circuit",
+        );
+
+        let result = backend.install_circuits_archive(&archive_path).await;
+
+        assert!(matches!(result, Err(ZkError::ChecksumMissing(_))));
+        assert_eq!(fs::read(installed_circuit).unwrap(), b"previous-circuit");
+        assert_eq!(
+            fs::read(backend.circuits_dir.join("installed.txt")).unwrap(),
+            b"installed"
+        );
+    }
+
+    #[tokio::test]
+    async fn local_archive_rejects_entries_outside_circuits() {
+        let temp = TempDir::new().unwrap();
+        let archive_path = temp.path().join("circuits.tar.gz");
+        fs::write(
+            &archive_path,
+            circuit_archive_with_entries(b"circuit", true, &[("bin/bb", b"malicious-binary")]),
+        )
+        .unwrap();
+        let backend = test_backend(&temp);
+        write_file(&backend.base_dir, "bin/bb", b"installed-binary");
+        write_file(&backend.circuits_dir, "installed.txt", b"installed-circuit");
+
+        let result = backend.install_circuits_archive(&archive_path).await;
+
+        assert!(matches!(result, Err(ZkError::InvalidInput(_))));
+        assert_eq!(
+            fs::read(backend.base_dir.join("bin/bb")).unwrap(),
+            b"installed-binary"
+        );
+        assert_eq!(
+            fs::read(backend.circuits_dir.join("installed.txt")).unwrap(),
+            b"installed-circuit"
+        );
     }
 
     #[tokio::test]
