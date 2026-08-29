@@ -9,13 +9,13 @@ This directory contains utility scripts for the Interfold project.
 ### Usage
 
 ```bash
-# Full release (bump, commit, tag, and push)
+# Prepare, commit, and push a release branch
 pnpm bump:versions 1.0.0
 
 # Pre-release version
 pnpm bump:versions 1.0.0-beta.1
 
-# Local only (don't push to remote)
+# Commit locally without pushing the branch
 pnpm bump:versions --no-push 1.0.0
 
 # Manual git operations (just bump versions)
@@ -27,7 +27,7 @@ pnpm bump:versions --dry-run 1.0.0
 
 ### What it does
 
-**By default, the script performs a complete release:**
+**By default, the script prepares a release pull request:**
 
 1. **Validates** your working directory is clean (no uncommitted changes)
 2. **Updates versions** across the entire monorepo:
@@ -39,24 +39,22 @@ pnpm bump:versions --dry-run 1.0.0
    - `pnpm-lock.yaml` for npm dependencies
 4. **Generates changelog** from conventional commits (uses `CHANGELOG.md`)
 5. **Commits** all changes with message: `chore(release): bump version to X.Y.Z`
-6. **Creates** annotated git tag: `vX.Y.Z`
-7. **Pushes** commits and tag to GitHub
-8. **Triggers** the automated release workflow
+6. **Pushes** the release branch to GitHub
 
 ### Examples
 
 ```bash
-# One-command release (recommended)
+# Prepare and push the release branch
 pnpm bump:versions 1.2.3
-# This bumps everything, commits, tags, and pushes - triggering the full release!
+# Open a pull request after this command finishes.
 
 # Pre-release for testing
 pnpm bump:versions 1.2.3-beta.1
-# Automatically detected as pre-release, published to npm with 'next' tag
+# The later release workflow publishes this version with the npm 'next' tag.
 
-# Prepare release locally first
+# Prepare and commit locally first
 pnpm bump:versions --no-push 1.2.3
-# Does everything except push - review first, then: git push && git push --tags
+# Review the commit, then push the release branch.
 
 # Just bump versions (old behavior)
 pnpm bump:versions --skip-git 1.2.3
@@ -65,25 +63,40 @@ pnpm bump:versions --skip-git 1.2.3
 
 ### Options
 
-- `--skip-git` - Skip all git operations (add, commit, tag, push)
-- `--no-push` - Perform git operations locally but don't push
+- `--skip-git` - Skip all git operations (add, commit, push)
+- `--no-push` - Commit locally but do not push the release branch
 - `--dry-run` - Preview what would happen without making any changes
 - `--help` - Show help message
 
 ### Prerequisites
 
+- A release branch. The script rejects `main`, `dev`, and detached commits.
 - Clean working directory (no uncommitted changes)
 - Conventional commits for changelog generation
 - Valid semver version format
 
 ### After Running
 
-Once you run `pnpm bump:versions X.Y.Z` and the tag is pushed, GitHub Actions automatically:
+After the release pull request passes CI and is merged, update `main` and create the tag:
 
-- Builds binaries for all platforms (Linux, macOS)
-- Publishes to npm (with `latest` or `next` tag)
-- Publishes to crates.io
-- Creates GitHub release with changelog and binaries
+```bash
+git checkout main
+git pull --ff-only
+pnpm release:tag X.Y.Z
+```
+
+The tag workflow then:
+
+- Confirms that the tag belongs to `origin/main`.
+- Runs every CI job for the exact tagged commit.
+- Requires the Nix build, binaries, and source-matched circuit archive.
+- Publishes versioned containers and npm packages.
+- Creates the GitHub release only after every required publication succeeds.
+
+Rust workspace crates are not published because they use unreleased git dependencies.
+
+The workflow calls the small commands in `release.mjs`. The implementation is split by purpose in
+`scripts/release/`. Run `pnpm test:release` to test tag ancestry, npm retries, assets, and gates.
 
 ## License Header Checker
 
@@ -187,6 +200,9 @@ pnpm build:circuits --dry-run
 
 # Get source hash for change detection
 pnpm build:circuits hash
+
+# Regenerate protocol hashes and config IDs without compiling circuits
+pnpm build:circuits sync-config --preset insecure-512 --committee minimum
 ```
 
 ### Committee sizes
@@ -223,7 +239,7 @@ the generator would produce.
 
 - `--preset <name>` - Parameter preset: `insecure-512` (default), `secure-8192`, or `all`
 - `--committee <name>` - Committee size: `minimum` (default), `micro`, `small`
-- `--skip-utils-patch` - Skip rewriting `BFV_DKG_H` / `BFV_THRESHOLD_T` in
+- `--skip-utils-patch` - Skip rewriting committee values and BFV configuration hashes in
   `packages/interfold-contracts/scripts/utils.ts`
 - `--group <groups>` - Circuit groups (comma-separated: dkg,threshold)
 - `--circuit <name>` - Build specific circuit(s)
@@ -232,6 +248,10 @@ the generator would produce.
 - `-o, --output <dir>` - Output directory (default: dist/circuits)
 - `--dry-run` - Show what would be built
 - `--no-clean` - Don't clean output directory
+
+`sync-config` updates only `scripts/utils.ts` and `ActiveCryptoConfig.sol`. Use it when BFV
+parameter constants change and the prebuilt circuit artifacts already exist. It does not compile
+Noir circuits or regenerate verification keys.
 
 ### Prerequisites
 
@@ -242,11 +262,20 @@ the generator would produce.
 
 `circuit-artifacts.ts` - Push/pull pre-built circuit artifacts via git branch.
 
+`crates/zk-prover/versions.json` pins the circuit archive that a released ciphernode downloads. Its
+`required_circuits_version` must equal the release tag without the `v` prefix. The release workflow
+checks this before it publishes binaries or `circuits-<version>.tar.gz`.
+
 ### Usage
 
 ```bash
-# Build circuits locally, then push to git branch
-pnpm build:circuits
+# Build or hydrate the required circuit pairs, then push them to the git branch
+pnpm build:circuits --preset insecure-512 --committee minimum
+pnpm build:circuits --preset insecure-512 --committee micro
+pnpm build:circuits --preset insecure-512 --committee small
+pnpm build:circuits --preset secure-8192 --committee minimum
+pnpm build:circuits --preset secure-8192 --committee micro
+pnpm build:circuits --preset secure-8192 --committee small
 pnpm store:circuits push
 
 # Pull circuits from git branch (used by CI)
@@ -255,8 +284,11 @@ pnpm store:circuits pull
 
 ### What it does
 
-- **Push**: Copies `dist/circuits/` to the `circuit-artifacts` orphan branch and pushes to origin
+- **Push**: Merges local `dist/circuits/` into the `circuit-artifacts` branch, refreshes
+  `SHA256SUMS` and `checksums.json`, then pushes to origin
 - **Pull**: Fetches the `circuit-artifacts` branch and extracts to `dist/circuits/`
+- **Replace**: `pnpm store:circuits push --replace` rewrites the branch from local `dist/circuits/`;
+  use only when intentionally deleting old artifact sets
 
 ### Workflow
 
@@ -265,13 +297,26 @@ Circuits are built locally and stored in a git branch:
 1. **Local**: Build circuits and push to branch
 
 ```bash
-   pnpm build:circuits
-   pnpm tsx scripts/circuit-artifacts.ts push
+pnpm build:circuits --preset insecure-512 --committee minimum
+pnpm build:circuits --preset insecure-512 --committee micro
+pnpm build:circuits --preset insecure-512 --committee small
+pnpm build:circuits --preset secure-8192 --committee minimum
+pnpm build:circuits --preset secure-8192 --committee micro
+pnpm build:circuits --preset secure-8192 --committee small
+pnpm store:circuits push
 ```
 
 2. **CI**: Pulls from branch during release, attaches to GitHub release
 
 3. **After release**: Circuits live permanently in release assets
+
+The release archive must include:
+
+- `insecure-512/{minimum,micro,small}` for Sepolia and local rehearsals
+- `secure-8192/{minimum,micro,small}` for Sepolia secure-parameter tests and mainnet committees
+
+Nodes download one archive and select the artifact directory from the E3's on-chain BFV parameter
+set and committee size.
 
 ## Verifier Generator
 
@@ -279,24 +324,23 @@ Circuits are built locally and stored in a git branch:
 Noir circuits.
 
 The generated `.sol` files under `packages/interfold-contracts/contracts/verifiers/bfv/honk/` are
-**committed to git** and correspond to **exactly one `(preset, committee)` pair**:
-`(insecure-512, minimum)` (the development / CI / benchmark default). The Honk verifiers bake in the
-recursive VKs of `dkg_aggregator` / `decryption_aggregator`, which are preset- and committee-
-dependent — different BFV parameter sets or `H/T` sizes compile to different VKs and therefore
-different `.sol` bytes. The committed files only match `(insecure-512, minimum)`.
+**committed to git**. The root files correspond to `(insecure-512, minimum)`, which is the
+development / CI / benchmark default. Non-canonical pairs are committed under
+`honk/<preset>/<committee>/`. The Honk verifiers bake in the recursive VKs of `dkg_aggregator` /
+`decryption_aggregator`, which are preset- and committee-dependent. Different BFV parameter sets or
+`H/T` sizes compile to different VKs and therefore different `.sol` bytes.
 
 The generator enforces this: both `--check` and `--write` refuse to run unless
-`dist/circuits/insecure-512/.build-stamp.json` exists and reports `"preset": "insecure-512"`, and
-`circuits/bin/.active-preset.json::committee` matches the requested committee. The stamps are
-written by [`pnpm build:circuits --preset <preset> --committee <name>`](#circuit-builder) and are
-the only on-disk record of which `(preset, committee)` built `circuits/bin/`. If either dimension
-drifts, the generator refuses with a clear fix recipe instead of silently producing the wrong
-`.sol`.
+`dist/circuits/<preset>/<committee>/.build-stamp.json` exists and reports the requested preset, and
+`circuits/bin/.active-preset.json` matches the requested preset and committee. The stamps are
+written by [`pnpm build:circuits --preset <preset> --committee <name>`](#circuit-builder) and record
+which `(preset, committee)` produced the artifacts. If either dimension drifts, the generator
+refuses with a clear fix recipe instead of silently producing the wrong `.sol`.
 
-For non-canonical committees (e.g. `small`), pass `--committee <name>`; the verifiers land under
-`honk/<name>/` so the canonical-committee `.sol` files committed to git aren't clobbered. `--check`
-mode skips the diff for non-canonical committees because there's no committed file to diff against —
-benchmark and deploy flows already deploy fresh aggregator verifiers from runtime artifacts.
+For non-canonical pairs, pass `--preset <name> --committee <name>`; the verifiers land under
+`honk/<preset>/<committee>/` so the canonical `.sol` files committed to git are not clobbered.
+`--check` compares that pair with its committed files. CI hydrates and checks all six supported
+pairs.
 
 The script has two modes:
 
@@ -318,8 +362,12 @@ pnpm generate:verifiers --check
 # Regenerate (default; equivalent to --write)
 pnpm generate:verifiers
 
-# Generate for a non-canonical committee (writes under honk/small/)
-pnpm generate:verifiers --committee small --write
+# Generate for non-canonical pairs
+pnpm build:circuits --preset secure-8192 --committee minimum
+pnpm generate:verifiers --preset secure-8192 --committee minimum --write
+
+pnpm build:circuits --preset secure-8192 --committee small
+pnpm generate:verifiers --preset secure-8192 --committee small --write
 
 # Generate only for specific group
 pnpm generate:verifiers --group dkg
@@ -362,15 +410,15 @@ Automates the full pipeline from Noir circuits to on-chain Solidity verifiers:
 
 There are two distinct failure modes — the error output tells you which one:
 
-**1. Canonical preset not built** — the generator refuses up front because
-`dist/circuits/insecure-512/.build-stamp.json` is missing or reports a different preset. The
-committed verifiers are pinned to `insecure-512`; nothing under `circuits/bin/` is trusted unless
-the build stamp confirms the canonical preset was last built.
+**1. Target preset and committee not built** — the generator refuses up front because
+`dist/circuits/<preset>/<committee>/.build-stamp.json` is missing or reports a different preset. The
+committed verifier root is pinned to `insecure-512/minimum`; non-canonical pairs use their own
+subdirectories under `honk/<preset>/<committee>/`.
 
 To fix:
 
 ```bash
-pnpm build:circuits --preset insecure-512
+pnpm build:circuits --preset insecure-512 --committee minimum
 # then retry the original command
 ```
 
@@ -384,9 +432,10 @@ the bytes don't match. Typical causes:
 To fix:
 
 1. Verify your `nargo` / `bb` versions match `crates/zk-prover/versions.json`.
-2. Run `pnpm build:circuits --preset insecure-512`.
-3. Run `pnpm generate:verifiers --write`.
-4. Commit the resulting diff under `packages/interfold-contracts/contracts/verifiers/bfv/honk/`.
+2. Run `pnpm build:circuits --preset insecure-512 --committee minimum`.
+3. Run `pnpm generate:verifiers --preset insecure-512 --committee minimum --write`.
+4. Run the same build and generate commands for each non-canonical pair.
+5. Commit the resulting diff under `packages/interfold-contracts/contracts/verifiers/bfv/honk/`.
 
 ### Options
 

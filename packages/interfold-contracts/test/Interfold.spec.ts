@@ -9,6 +9,8 @@ import {
   ACTIVE_CRYPTO_CONFIG_ID,
   ADDRESS_TWO as AddressTwo,
   BFV_PARAMS_DEFAULT,
+  BFV_PARAMS_SECURE,
+  PRODUCTION_CRYPTO_CONFIG_ID,
   buildMockAggregationPublishArgs,
   deployInterfoldSystem,
   ENCRYPTION_SCHEME_ID as encryptionSchemeId,
@@ -94,10 +96,10 @@ describe("Interfold", function () {
       );
     });
 
-    it("exposes the crypto configuration accepted by new requests", async function () {
+    it("exposes the production default crypto configuration", async function () {
       const { interfold } = await loadFixture(setup);
       expect(await interfold.activeCryptoConfigId()).to.equal(
-        ACTIVE_CRYPTO_CONFIG_ID,
+        PRODUCTION_CRYPTO_CONFIG_ID,
       );
     });
 
@@ -214,12 +216,15 @@ describe("Interfold", function () {
         .withArgs(notTheOwner);
     });
 
-    it("keeps only the active circuit parameter set", async function () {
+    it("accepts only supported circuit parameter sets", async function () {
       const { interfold } = await loadFixture(setup);
 
       expect(await interfold.paramSetRegistry(0)).to.equal(BFV_PARAMS_DEFAULT);
+      await expect(interfold.setParamSet(1, BFV_PARAMS_SECURE))
+        .to.emit(interfold, "ParamSetRegistered")
+        .withArgs(1, BFV_PARAMS_SECURE);
       await expect(
-        interfold.setParamSet(1, BFV_PARAMS_DEFAULT),
+        interfold.setParamSet(2, BFV_PARAMS_DEFAULT),
       ).to.be.revertedWithCustomError(interfold, "UnsupportedCryptoConfig");
     });
 
@@ -538,16 +543,17 @@ describe("Interfold", function () {
       const { interfold, ciphernodeRegistryContract, request, usdcToken } =
         await loadFixture(setup);
       const sortitionWindow = time.duration.days(1);
-      const now = await time.latest();
-      const impossibleRequest = {
-        ...request,
-        inputWindow: [now + 10, now + 20] as [number, number],
-      };
 
       await ciphernodeRegistryContract.setSortitionSubmissionWindow(
         sortitionWindow,
       );
       await usdcToken.approve(await interfold.getAddress(), ethers.MaxUint256);
+      const requestAt = BigInt((await time.latest()) + 1);
+      const impossibleRequest = {
+        ...request,
+        inputWindow: [requestAt, requestAt + 10n] as [bigint, bigint],
+      };
+      await time.setNextBlockTimestamp(requestAt);
       await interfold.request(impossibleRequest);
       const e3Id = uint256ControllerPrefix(await interfold.getAddress());
       expect(await interfold.nexte3Id()).to.equal(e3Id + 1n);
@@ -573,22 +579,24 @@ describe("Interfold", function () {
     });
     it("instantiates a new E3", async function () {
       const { interfold, request, usdcToken } = await loadFixture(setup);
-
-      await makeRequest(interfold, usdcToken, {
-        committeeSize: request.committeeSize,
-        inputWindow: request.inputWindow,
-        e3Program: request.e3Program,
-        paramSet: request.paramSet,
-        computeProviderParams: request.computeProviderParams,
-        customParams: request.customParams,
-      });
+      await usdcToken.approve(await interfold.getAddress(), ethers.MaxUint256);
+      const requestAt = BigInt((await time.latest()) + 1);
+      const freshRequest = {
+        ...request,
+        inputWindow: [requestAt, requestAt + BigInt(inputWindowDuration)] as [
+          bigint,
+          bigint,
+        ],
+      };
+      await time.setNextBlockTimestamp(requestAt);
+      await interfold.request(freshRequest);
 
       const e3 = await interfold.getE3(firstE3Id);
       const block = await ethers.provider.getBlock("latest").catch((e) => e);
 
       expect(e3.committeeSize).to.equal(request.committeeSize);
-      expect(e3.inputWindow[0]).to.equal(request.inputWindow[0]);
-      expect(e3.inputWindow[1]).to.equal(request.inputWindow[1]);
+      expect(e3.inputWindow[0]).to.equal(freshRequest.inputWindow[0]);
+      expect(e3.inputWindow[1]).to.equal(freshRequest.inputWindow[1]);
       expect(e3.e3Program).to.equal(request.e3Program);
       // H-26: `requestBlock` now stores `block.timestamp` (a stable EIP-6372
       // clock) instead of `block.number`, so the snapshot agrees with the
@@ -604,14 +612,17 @@ describe("Interfold", function () {
     });
     it("emits E3Requested event", async function () {
       const { interfold, request, usdcToken } = await loadFixture(setup);
-      const tx = await makeRequest(interfold, usdcToken, {
-        committeeSize: request.committeeSize,
-        inputWindow: request.inputWindow,
-        e3Program: request.e3Program,
-        paramSet: request.paramSet,
-        computeProviderParams: request.computeProviderParams,
-        customParams: request.customParams,
-      });
+      await usdcToken.approve(await interfold.getAddress(), ethers.MaxUint256);
+      const requestAt = BigInt((await time.latest()) + 1);
+      const freshRequest = {
+        ...request,
+        inputWindow: [requestAt, requestAt + BigInt(inputWindowDuration)] as [
+          bigint,
+          bigint,
+        ],
+      };
+      await time.setNextBlockTimestamp(requestAt);
+      const tx = await interfold.request(freshRequest);
       const e3 = await interfold.getE3(firstE3Id);
 
       await expect(tx)
@@ -642,15 +653,17 @@ describe("Interfold", function () {
         operator3,
       } = await loadFixture(setup);
       const e3Id = firstE3Id;
-
-      await makeRequest(interfold, usdcToken, {
-        committeeSize: request.committeeSize,
-        inputWindow: request.inputWindow,
-        e3Program: request.e3Program,
-        paramSet: request.paramSet,
-        computeProviderParams: request.computeProviderParams,
-        customParams: request.customParams,
-      });
+      await usdcToken.approve(await interfold.getAddress(), ethers.MaxUint256);
+      const requestAt = BigInt((await time.latest()) + 1);
+      const freshRequest = {
+        ...request,
+        inputWindow: [requestAt, requestAt + BigInt(inputWindowDuration)] as [
+          bigint,
+          bigint,
+        ],
+      };
+      await time.setNextBlockTimestamp(requestAt);
+      await interfold.request(freshRequest);
 
       await setupAndPublishCommittee(ciphernodeRegistryContract, e3Id, data, [
         operator1,

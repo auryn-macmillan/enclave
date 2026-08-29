@@ -75,12 +75,11 @@ impl BfvPreset {
     }
 }
 
-/// Default BFV preset used across the workspace.
+/// Default BFV preset used for local development and tests.
 ///
-/// This is the canonical preset for production (secure threshold 8192).
-/// Use this constant when you need a single default rather than
-/// hardcoding a specific preset. For the corresponding parameter set,
-/// use [`default_param_set()`] or `BfvParamSet::from(DEFAULT_BFV_PRESET)`.
+/// Production code that needs a chain-bound preset must select it explicitly from the active
+/// protocol configuration. Use [`default_param_set()`] or `BfvParamSet::from(DEFAULT_BFV_PRESET)`
+/// only when a fast local default is acceptable.
 pub const DEFAULT_BFV_PRESET: BfvPreset = BfvPreset::InsecureThreshold512;
 
 /// Returns the default BFV parameter set (same as `DEFAULT_BFV_PRESET` converted to [`BfvParamSet`]).
@@ -463,7 +462,7 @@ impl BfvPreset {
     /// Returns the per-committee artifact directory: `"{preset}/{committee}"`.
     ///
     /// Use this at runtime so each committee size resolves to its own compiled artifacts
-    /// (e.g. `"secure-8192/medium"`, `"insecure-512/micro"`).
+    /// (e.g. `"secure-8192/small"`, `"insecure-512/micro"`).
     pub fn artifacts_dir_for_committee<C: AsRef<str>>(&self, committee: C) -> String {
         format!("{}/{}", self.artifacts_dir(), committee.as_ref())
     }
