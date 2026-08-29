@@ -5,13 +5,13 @@ description: 'Overview of ciphernode operations, contracts, and lifecycle'
 
 # Ciphernode Operators
 
-Ciphernodes are the distributed workers that power the Interfold network. They participate in
-threshold cryptography to enable encrypted execution environments (E3s) while ensuring no single
-party can access the underlying plaintext data.
+Ciphernode operators run the software that forms the Interfold network’s distributed threshold layer.
+Ciphernodes participate in threshold cryptography for Encrypted Execution Environments (E3s),
+helping ensure that no single operator controls key generation or output decryption.
 
-> **Interactive setup:** the dashboard has a step-by-step operator guide. It reads the live bonding
-> registry and sends each on-chain step from your wallet. Open
-> [Run a ciphernode](https://dashboard.theinterfold.com/#operator).
+> **Run a ciphernode:** Prefer a browser-based setup? The Interfold dashboard provides a
+> step-by-step operator flow that reads the live bonding registry and sends each on-chain step from
+> your wallet. Open [Run a ciphernode](https://dashboard.theinterfold.com/#operator).
 
 ## What is a Ciphernode?
 
@@ -24,8 +24,8 @@ A ciphernode is a node operator that:
 - **Maintains availability**: Stays online and responsive to participate in sortition and committee
   duties
 
-Ciphernodes earn rewards for successful participation and risk slashing for missed duties or
-malicious behavior.
+Operators selected for E3 committees may be subject to slashing if they fail assigned committee
+duties or commit other defined protocol violations.
 
 ## Contract Architecture
 
@@ -185,7 +185,7 @@ stateDiagram-v2
 | **Unbonded**    | No ciphernode bond deposited; cannot register                                      |
 | **Bonded**      | FOLD bonded but not yet registered in the registry                                 |
 | **Registered**  | In the registry but lacking minimum ticket balance                                 |
-| **Active**      | Fully operational; eligible for committee selection via sortition                  |
+| **Active**      | Registered and meeting the on-chain requirements for committee selection via sortition |
 | **Inactive**    | Registered but below minimum requirements (tickets or ciphernode bond)             |
 | **ExitPending** | Deregistration requested; waiting for exit delay before claiming or re-registering |
 
@@ -203,6 +203,9 @@ Before operating a ciphernode, ensure you have:
 
 ## Getting Started
 
+Operating a ciphernode requires both running the node software and establishing an eligible on-chain
+operator position. Start by getting the software running before bonding and registration.
+
 Follow these guides in order to become an active ciphernode operator:
 
 1. **[Running a Ciphernode](/ciphernode-operators/running)** - Set up your node using DappNode,
@@ -214,5 +217,8 @@ Follow these guides in order to become an active ciphernode operator:
 4. **[Exits, Rewards & Slashing](/ciphernode-operators/exits-and-slashing)** - Learn about rewards
    and exit procedures
 
-To do the on-chain steps in a browser instead of the CLI, use the
-[interactive operator guide](https://dashboard.theinterfold.com/#operator) on the dashboard.
+To do the on-chain steps in a browser instead of the CLI, use
+[Run a ciphernode](https://dashboard.theinterfold.com/#operator) on the dashboard.
+
+Need help running or configuring a ciphernode? Join the
+[Interfold technical chat](https://t.me/interfoldhq_technical).
