@@ -8,7 +8,7 @@ import hre from "hardhat";
 import {
   Faucet__factory as FaucetFactory,
   InterfoldToken__factory as InterfoldTokenFactory,
-  MockFeeOnTransferToken__factory as MockFeeOnTransferTokenFactory,
+  MockUSDC__factory as MockUSDCFactory,
 } from "../types";
 import {
   getDeploymentChain,
@@ -22,7 +22,7 @@ import {
  * Force-deploys a fresh Faucet (the deployAndSave guard is idempotent on the
  * constructor args, so it would otherwise return the existing address),
  * overwrites the `Faucet` entry in deployed_contracts.json, whitelists it in
- * FOLD and funds it with FOLD + ticket collateral.
+ * FOLD and funds it with FOLD + the configured Sepolia fee token.
  *
  * FOLD funding uses `mint()`, which is only valid while FOLD is in the Virtual
  * phase (before CCA_START). The deployer holds no FOLD of its own, so there is
@@ -46,24 +46,16 @@ const main = async () => {
   }
 
   const foldAddress = readDeploymentArgs("InterfoldToken", chain)?.address;
-  const ticketUnderlyingValue = readDeploymentArgs(
-    "InterfoldTicketToken",
-    chain,
-  )?.constructorArgs?.baseToken;
-  const ticketUnderlyingAddress =
-    typeof ticketUnderlyingValue === "string" ? ticketUnderlyingValue : "";
-  if (!foldAddress || !ticketUnderlyingAddress) {
+  const feeTokenAddress = readDeploymentArgs("MockUSDC", chain)?.address;
+  if (!foldAddress || !feeTokenAddress) {
     throw new Error(
-      "InterfoldToken (FOLD) and/or ticket-underlying token not found in deployed_contracts.json. " +
+      "InterfoldToken (FOLD) and/or MockUSDC fee token not found in deployed_contracts.json. " +
         "Run the full deploy first.",
     );
   }
 
   const fold = InterfoldTokenFactory.connect(foldAddress, signer);
-  const ticketUnderlying = MockFeeOnTransferTokenFactory.connect(
-    ticketUnderlyingAddress,
-    signer,
-  );
+  const feeToken = MockUSDCFactory.connect(feeTokenAddress, signer);
 
   // Phase 0 == Virtual. mint() reverts (MintingClosed) once CCA_START passes.
   const phase = await fold.phase();
@@ -77,7 +69,7 @@ const main = async () => {
   console.log("Deploying Faucet...");
   const faucet = await new FaucetFactory(signer).deploy(
     foldAddress,
-    ticketUnderlyingAddress,
+    feeTokenAddress,
   );
   await faucet.waitForDeployment();
   const faucetAddress = await faucet.getAddress();
@@ -87,12 +79,12 @@ const main = async () => {
   // Derive supply from the contract's per-claim amounts so it covers the
   // target number of mints regardless of how the amounts are configured.
   const foldSupply = (await faucet.AMOUNT_FOLD()) * FAUCET_TARGET_MINTS;
-  const ticketCollateralSupply =
+  const feeTokenSupply =
     (await faucet.AMOUNT_FEE_TOKEN()) * FAUCET_TARGET_MINTS;
 
   storeDeploymentArgs(
     {
-      constructorArgs: { fold: foldAddress, feeToken: ticketUnderlyingAddress },
+      constructorArgs: { fold: foldAddress, feeToken: feeTokenAddress },
       blockNumber,
       address: faucetAddress,
     },
@@ -112,8 +104,9 @@ const main = async () => {
     )
   ).wait();
 
-  console.log("Minting ticket collateral to Faucet...");
-  await (await ticketUnderlying.mint(faucetAddress, ticketCollateralSupply)).wait();
+  console.log("Minting fee token to Faucet...");
+  await (await feeToken.mint(faucetAddress, feeTokenSupply)).wait();
+  const fundedFeeToken = await feeToken.balanceOf(faucetAddress);
 
   console.log(`
     ============================================
@@ -122,7 +115,7 @@ const main = async () => {
     Faucet:  ${faucetAddress}
     Block:   ${blockNumber}
     FOLD:    ${ethers.formatEther(foldSupply)}
-    Ticket:  ${ethers.formatEther(ticketCollateralSupply)}
+    Fee:     ${ethers.formatEther(fundedFeeToken)}
     ============================================
   `);
 };

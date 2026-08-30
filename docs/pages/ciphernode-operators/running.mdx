@@ -147,8 +147,8 @@ chains:
         address: '0x4c3CBA2C57A8F56e765738D55Bb1450eA8d1560e'
         deploy_block: 11594970
       faucet:
-        address: '0xEDA6baC3e353458A77d0Fa0f4d866f0F181060E2'
-        deploy_block: 11595264
+        address: '0x6ecAA2dcCd6837A85360131D31564Aa2F9Be00F3'
+        deploy_block: 11597330
 ```
 
 ### Check Your Addresses Are Current
@@ -263,8 +263,8 @@ chains:
         address: '0x4c3CBA2C57A8F56e765738D55Bb1450eA8d1560e'
         deploy_block: 11594970
       faucet:
-        address: '0xEDA6baC3e353458A77d0Fa0f4d866f0F181060E2'
-        deploy_block: 11595264
+        address: '0x6ecAA2dcCd6837A85360131D31564Aa2F9Be00F3'
+        deploy_block: 11597330
 ```
 
 ### Create the Credentials Secret
@@ -389,15 +389,15 @@ the check.
 
 Each chain requires these contract addresses:
 
-| Contract              | Description                                 | Required for ciphernode |
-| --------------------- | ------------------------------------------- | ----------------------- |
-| `interfold`           | Main Interfold coordinator contract         | Yes                     |
-| `ciphernode_registry` | Tracks registered operators                 | Yes                     |
-| `bonding_registry`    | Manages bonds and tickets                   | Yes                     |
-| `slashing_manager`    | Manages slashing penalties                  | Yes                     |
-| `e3_program`          | E3 Program contract address                 | No                      |
-| `fee_token`           | Fee token address for E3 requests           | No                      |
-| `faucet`              | Testnet faucet for FOLD + ticket collateral | No                      |
+| Contract              | Description                         | Required for ciphernode |
+| --------------------- | ----------------------------------- | ----------------------- |
+| `interfold`           | Main Interfold coordinator contract | Yes                     |
+| `ciphernode_registry` | Tracks registered operators         | Yes                     |
+| `bonding_registry`    | Manages bonds and tickets           | Yes                     |
+| `slashing_manager`    | Manages slashing penalties          | Yes                     |
+| `e3_program`          | E3 Program contract address         | No                      |
+| `fee_token`           | Fee token address for E3 requests   | No                      |
+| `faucet`              | Testnet faucet for FOLD + fee token | No                      |
 
 Each contract can be specified as a simple address string or with a deploy block for faster syncing:
 
@@ -408,8 +408,8 @@ contracts:
     deploy_block: 11594970
   ciphernode_registry: '0x37A409FfB1858a91AE27f4A609970EEA10818dA6'
   faucet:
-    address: '0xEDA6baC3e353458A77d0Fa0f4d866f0F181060E2'
-    deploy_block: 11595264
+    address: '0x6ecAA2dcCd6837A85360131D31564Aa2F9Be00F3'
+    deploy_block: 11597330
 ```
 
 ---

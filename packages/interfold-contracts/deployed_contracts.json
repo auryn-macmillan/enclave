@@ -212,10 +212,10 @@
     "Faucet": {
       "constructorArgs": {
         "fold": "0xa799b10Ac36cdb9633FB9af7007e8C16248064c6",
-        "feeToken": "0x4B7a61E871dA121070ea56f61c978F7D795533D2"
+        "feeToken": "0x4c3CBA2C57A8F56e765738D55Bb1450eA8d1560e"
       },
-      "blockNumber": 11595264,
-      "address": "0xEDA6baC3e353458A77d0Fa0f4d866f0F181060E2"
+      "blockNumber": 11597330,
+      "address": "0x6ecAA2dcCd6837A85360131D31564Aa2F9Be00F3"
     }
   },
   "mainnet": {

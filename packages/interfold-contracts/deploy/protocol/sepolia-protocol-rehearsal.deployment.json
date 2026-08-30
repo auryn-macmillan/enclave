@@ -133,6 +133,6 @@
     }
   ],
   "dkgFoldAttestationVerifier": "0x8829D56F5F0627F3f3805409ecDCFee65ec97076",
-  "safeTransactions": "/Users/hmza/Code/work/interfold/packages/interfold-contracts/deploy/protocol/sepolia-protocol-rehearsal.safe-transactions.json",
+  "safeTransactions": "packages/interfold-contracts/deploy/protocol/sepolia-protocol-rehearsal.safe-transactions.json",
   "bondedVotes": "0x477f6401fb71E2DC6fF00d8dEDFdEF974577efC9"
 }

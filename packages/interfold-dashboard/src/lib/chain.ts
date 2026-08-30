@@ -69,7 +69,7 @@ const NETWORKS: Record<string, NetworkProfile> = {
     ciphernodeRegistry: '0x37A409FfB1858a91AE27f4A609970EEA10818dA6',
     crispProgram: '0x70254B956D87Be536453eDA42684bD7b6db96aB5',
     bondingRegistry: '0xbfBCF1F9aBc929992008d787420e58198e17B73A',
-    faucet: '0xEDA6baC3e353458A77d0Fa0f4d866f0F181060E2',
+    faucet: '0x6ecAA2dcCd6837A85360131D31564Aa2F9Be00F3',
     // Earliest of the Interfold/CiphernodeRegistry/CRISPProgram deploy blocks
     // (CRISPProgram) — a later value silently drops early application events.
     deployBlock: '11594764',
@@ -138,7 +138,7 @@ export const CONTRACTS = {
   // needs hardcoded — the ciphernode bond token, ticket wrapper, and ticket underlying
   // are all read back from it at runtime so they cannot drift.
   BondingRegistry: envStr('VITE_BONDING_REGISTRY_ADDRESS', NET.bondingRegistry) as Address,
-  // Testnet-only convenience faucet (FOLD + ticket collateral). The zero address or an
+  // Testnet-only convenience faucet (FOLD + fee token). The zero address or an
   // empty string disables the faucet card in the operator guide.
   Faucet: faucetAddress() as Address,
 }

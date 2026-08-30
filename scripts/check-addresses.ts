@@ -56,6 +56,9 @@ const FILES: Record<string, Role> = {
   'packages/interfold-contracts/deploy/protocol/mainnet-protocol.vrf-sortition.upgrade.governance.safe-builder.json': 'record',
   'packages/interfold-contracts/deploy/protocol/mainnet-protocol.vrf-sortition.upgrade.json': 'record',
   'packages/interfold-contracts/deploy/protocol/mainnet-protocol.vrf-sortition.upgrade.safe.json': 'record',
+  'packages/interfold-contracts/deploy/protocol/sepolia-protocol-rehearsal.config.json': 'record',
+  'packages/interfold-contracts/deploy/protocol/sepolia-protocol-rehearsal.deployment.json': 'record',
+  'packages/interfold-contracts/deploy/protocol/sepolia-protocol-rehearsal.safe-transactions.json': 'record',
   'examples/CRISP/packages/crisp-contracts/deployed_contracts.json': 'record',
   'dappnode/tests/test-hardening.sh': 'record',
 
@@ -88,8 +91,7 @@ const ALLOWED: Record<string, string> = {
   // Sepolia ticket collateral is a mock ERC20 that backs InterfoldTicketToken.
   // It is not a manifest top-level contract, but operator docs name it directly
   // so testers can distinguish ticket collateral from the E3 fee token.
-  '0x4b7a61e871da121070ea56f61c978f7d795533d2':
-    'Ticket collateral token, sepolia',
+  '0x4b7a61e871da121070ea56f61c978f7d795533d2': 'Ticket collateral token, sepolia',
 
   // TODO: record these in deployed_contracts.json so the manifest can publish
   // them. Until then no check can tell a correct value here from a stale one.

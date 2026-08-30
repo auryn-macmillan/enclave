@@ -57,8 +57,8 @@ mod erc20 {
 use erc20::IERC20;
 use faucet_contract::FaucetContract;
 
-/// Calls `faucet()` on the configured Faucet contract, sending FOLD + ticket
-/// collateral to the operator's signing address. Testnet only.
+/// Calls `faucet()` on the configured Faucet contract, sending FOLD + the configured test token to
+/// the operator's signing address. Testnet only.
 pub async fn execute(out: Console, config: &AppConfig, selection: Option<&str>) -> Result<()> {
     let chain = select_chain(config, selection)?;
     let faucet_contract = chain
@@ -96,9 +96,9 @@ pub async fn execute(out: Console, config: &AppConfig, selection: Option<&str>) 
         .symbol()
         .call()
         .await
-        .unwrap_or_else(|_| "ticket collateral".to_string());
+        .unwrap_or_else(|_| "test token".to_string());
     let fee_token_label = if fee_token_symbol.trim().is_empty() {
-        "ticket collateral"
+        "test token"
     } else {
         fee_token_symbol.trim()
     };
