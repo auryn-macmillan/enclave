@@ -4,7 +4,7 @@
 // without even the implied warranty of MERCHANTABILITY
 // or FITNESS FOR A PARTICULAR PURPOSE.
 
-//! Reads `packages/crisp-contracts/deployed_contracts.json` for localhost dev addresses.
+//! Reads `packages/crisp-contracts/deployed_contracts.json` for deployed CRISP addresses.
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -28,6 +28,8 @@ struct ChainDeployments {
 #[derive(Debug, Deserialize)]
 struct DeployedContractsFile {
     localhost: Option<ChainDeployments>,
+    sepolia: Option<ChainDeployments>,
+    mainnet: Option<ChainDeployments>,
 }
 
 fn deployments_json_path() -> Result<PathBuf> {
@@ -39,16 +41,31 @@ fn deployments_json_path() -> Result<PathBuf> {
         .join("deployed_contracts.json"))
 }
 
-/// `MockVotingToken` address from the latest localhost deploy, if present.
-pub fn localhost_mock_voting_token() -> Result<Option<String>> {
+fn read_deployments() -> Result<DeployedContractsFile> {
     let path = deployments_json_path()?;
     if !path.exists() {
-        return Ok(None);
+        return Ok(DeployedContractsFile {
+            localhost: None,
+            sepolia: None,
+            mainnet: None,
+        });
     }
     let raw = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-    let file: DeployedContractsFile =
-        serde_json::from_str(&raw).with_context(|| format!("parse {}", path.display()))?;
-    Ok(file
+    serde_json::from_str(&raw).with_context(|| format!("parse {}", path.display()))
+}
+
+fn chain_deployments(file: &DeployedContractsFile, chain_id: u64) -> Option<&ChainDeployments> {
+    match chain_id {
+        1 => file.mainnet.as_ref(),
+        11_155_111 => file.sepolia.as_ref(),
+        31_337 | 1_337 => file.localhost.as_ref(),
+        _ => None,
+    }
+}
+
+/// `MockVotingToken` address from the latest localhost deploy, if present.
+pub fn localhost_mock_voting_token() -> Result<Option<String>> {
+    Ok(read_deployments()?
         .localhost
         .and_then(|c| c.mock_voting_token)
         .map(|e| e.address))
@@ -59,29 +76,23 @@ pub fn localhost_mock_voting_token() -> Result<Option<String>> {
 /// The open census for ONCHAIN rounds: pass it as the round's token to run a round anyone can
 /// register into during the input window.
 pub fn localhost_self_registry() -> Result<Option<String>> {
-    let path = deployments_json_path()?;
-    if !path.exists() {
-        return Ok(None);
-    }
-    let raw = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-    let file: DeployedContractsFile =
-        serde_json::from_str(&raw).with_context(|| format!("parse {}", path.display()))?;
-    Ok(file
+    Ok(read_deployments()?
         .localhost
         .and_then(|c| c.self_registry)
         .map(|e| e.address))
 }
 
+/// `SelfRegistry` address for a deployed chain, if recorded.
+pub fn self_registry_for_chain_id(chain_id: u64) -> Result<Option<String>> {
+    let file = read_deployments()?;
+    Ok(chain_deployments(&file, chain_id)
+        .and_then(|c| c.self_registry.as_ref())
+        .map(|e| e.address.clone()))
+}
+
 /// `CRISPProgram` address from the latest localhost deploy, if present.
 pub fn localhost_crisp_program() -> Result<Option<String>> {
-    let path = deployments_json_path()?;
-    if !path.exists() {
-        return Ok(None);
-    }
-    let raw = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-    let file: DeployedContractsFile =
-        serde_json::from_str(&raw).with_context(|| format!("parse {}", path.display()))?;
-    Ok(file
+    Ok(read_deployments()?
         .localhost
         .and_then(|c| c.crisp_program)
         .map(|e| e.address))
