@@ -3,65 +3,49 @@
   "networks": {
     "sepolia": {
       "chain_id": 11155111,
-      "mocks": true,
+      "mocks": false,
       "contracts": {
         "interfold": {
-          "address": "0x3E856E24c7a95d0e04d387f847DA6FA9f6F6c20C",
-          "deploy_block": 11534993
+          "address": "0xE755Ef6c18897C76F3E71C9eA92CA67C5e73e6E3",
+          "deploy_block": 11594970
         },
         "ciphernode_registry": {
-          "address": "0x374F4542eC634d5437Dd65020781A9D9Df9c2AB8",
-          "deploy_block": 11534965
+          "address": "0x37A409FfB1858a91AE27f4A609970EEA10818dA6",
+          "deploy_block": 11594970
         },
         "bonding_registry": {
-          "address": "0x90250Dc48CBe109fFaA02AeAFbFBdbF12D7BD4d4",
-          "deploy_block": 11534966
+          "address": "0xbfBCF1F9aBc929992008d787420e58198e17B73A",
+          "deploy_block": 11594970
         },
         "slashing_manager": {
-          "address": "0x489FB674B143E48eaCAaC999B3DF9EA6E95eA79f",
-          "deploy_block": 11534963
+          "address": "0x05f005e2F8121b67e646A8ad7e8C76141A55380B",
+          "deploy_block": 11594970
         },
         "fee_token": {
-          "address": "0xC35B783cA97710be47Fc81D10dADc895EfcD865c",
-          "deploy_block": 11534960
+          "address": "0x4c3CBA2C57A8F56e765738D55Bb1450eA8d1560e",
+          "deploy_block": 11594970
         },
         "faucet": {
-          "address": "0x6e281411C055BEEbD74bDFcB9aB095aa98907F85",
-          "deploy_block": 11534982
+          "address": "0xEDA6baC3e353458A77d0Fa0f4d866f0F181060E2",
+          "deploy_block": 11595264
         }
       },
       "reference": {
         "InterfoldToken": {
-          "address": "0x9752444A6a955D420402EaFf5f818afCddb9c340",
-          "deploy_block": 11534976
+          "address": "0xa799b10Ac36cdb9633FB9af7007e8C16248064c6",
+          "deploy_block": 11594970
         },
         "InterfoldTicketToken": {
-          "address": "0xfFFFc3BB04aEe950c0ed5DEe3214408f09fff488",
-          "deploy_block": 11534961
+          "address": "0xfA8A5570Da0E9d696d2064E79805E11d40006042",
+          "deploy_block": 11594970
         },
         "E3RefundManager": {
-          "address": "0x79f9EA83Db0fbe3a2cEB765b18285915331A9dc2",
-          "deploy_block": 11534995
+          "address": "0x65600cbf8DB3ba5C32DA2781452752183D807E06",
+          "deploy_block": 11594970
         },
-        "MockE3Program": {
-          "address": "0x5874CD49929ffcf380C82cDE1e74188dEaff9791",
-          "deploy_block": 11534990
-        },
-        "MockComputeProvider": {
-          "address": "0x3c3434840a1EAA214E0c8abb34A0386e4E22B3A5",
-          "deploy_block": 11534986
-        },
-        "MockDecryptionVerifier": {
-          "address": "0x12845e690fD56216C89428d91D5E931142b9779F",
-          "deploy_block": 11534987
-        },
-        "MockCiphertextVerifier": {
-          "address": "0xc2905bDcD4449F143d46593AeAf5383A590D2e32",
-          "deploy_block": 11534988
-        },
-        "MockPkVerifier": {
-          "address": "0x22b5Fda887D1c84Df3d4D916452388F99a6A7b61",
-          "deploy_block": 11534989
+        "NodeReleaseRegistry": {
+          "address": "0xd5205463DB59D83b61FbBeB548ADC76F3aa081Cb",
+          "deploy_block": 11594970
         }
       }
     },

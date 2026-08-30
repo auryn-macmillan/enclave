@@ -65,17 +65,17 @@ const NETWORKS: Record<string, NetworkProfile> = {
     name: 'Sepolia',
     rpc: 'https://ethereum-sepolia.publicnode.com',
     explorer: 'https://sepolia.etherscan.io',
-    interfold: '0x3E856E24c7a95d0e04d387f847DA6FA9f6F6c20C',
-    ciphernodeRegistry: '0x374F4542eC634d5437Dd65020781A9D9Df9c2AB8',
-    crispProgram: '0x8654F380760c46857188097Fa0AD0bf995603124',
-    bondingRegistry: '0x90250Dc48CBe109fFaA02AeAFbFBdbF12D7BD4d4',
-    faucet: '0x6e281411C055BEEbD74bDFcB9aB095aa98907F85',
+    interfold: '0xE755Ef6c18897C76F3E71C9eA92CA67C5e73e6E3',
+    ciphernodeRegistry: '0x37A409FfB1858a91AE27f4A609970EEA10818dA6',
+    crispProgram: '0x70254B956D87Be536453eDA42684bD7b6db96aB5',
+    bondingRegistry: '0xbfBCF1F9aBc929992008d787420e58198e17B73A',
+    faucet: '0xEDA6baC3e353458A77d0Fa0f4d866f0F181060E2',
     // Earliest of the Interfold/CiphernodeRegistry/CRISPProgram deploy blocks
-    // (CiphernodeRegistry) — a later value silently drops early registry events.
-    deployBlock: '11508403',
-    // MockUSDC on the Sepolia deployment.
-    feeSymbol: 'USDC',
-    feeDecimals: 6,
+    // (CRISPProgram) — a later value silently drops early application events.
+    deployBlock: '11594764',
+    // Mock fee token on the Sepolia deployment.
+    feeSymbol: 'FoT',
+    feeDecimals: 18,
     computeWindow: '86400',
     decryptionWindow: '3600',
   },
@@ -138,7 +138,7 @@ export const CONTRACTS = {
   // needs hardcoded — the ciphernode bond token, ticket wrapper, and ticket underlying
   // are all read back from it at runtime so they cannot drift.
   BondingRegistry: envStr('VITE_BONDING_REGISTRY_ADDRESS', NET.bondingRegistry) as Address,
-  // Testnet-only convenience faucet (FOLD + fee token). The zero address or an
+  // Testnet-only convenience faucet (FOLD + ticket collateral). The zero address or an
   // empty string disables the faucet card in the operator guide.
   Faucet: faucetAddress() as Address,
 }

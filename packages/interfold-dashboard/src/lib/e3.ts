@@ -171,7 +171,7 @@ export type E3FullDetails = E3Summary & {
   resultTxHash?: `0x${string}`
   resultAt?: number
   resultBlock?: bigint
-  // Fees, in fee-token base units (MockUSDC, 6 decimals). feeEscrowed is the
+  // Fees, in fee-token base units. feeEscrowed is the
   // amount currently held for the E3 — note Interfold zeroes it on settlement or
   // refund, so a completed/refunded E3 reads 0. committeeReward is the real
   // total paid out to the committee (only known once RewardsDistributed fires).

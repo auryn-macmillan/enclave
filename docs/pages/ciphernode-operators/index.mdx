@@ -5,8 +5,8 @@ description: 'Overview of ciphernode operations, contracts, and lifecycle'
 
 # Ciphernode Operators
 
-Ciphernode operators run the software that forms the Interfold network’s distributed threshold layer.
-Ciphernodes participate in threshold cryptography for Encrypted Execution Environments (E3s),
+Ciphernode operators run the software that forms the Interfold network’s distributed threshold
+layer. Ciphernodes participate in threshold cryptography for Encrypted Execution Environments (E3s),
 helping ensure that no single operator controls key generation or output decryption.
 
 > **Run a ciphernode:** Prefer a browser-based setup? The Interfold dashboard provides a
@@ -63,15 +63,15 @@ and add ticket collateral while requests are paused.
 
 | Contract              | Address                                      | Deploy block |
 | --------------------- | -------------------------------------------- | ------------ |
-| Interfold             | `0x3E856E24c7a95d0e04d387f847DA6FA9f6F6c20C` | 11534993     |
-| CiphernodeRegistry    | `0x374F4542eC634d5437Dd65020781A9D9Df9c2AB8` | 11534965     |
-| BondingRegistry       | `0x90250Dc48CBe109fFaA02AeAFbFBdbF12D7BD4d4` | 11534966     |
-| SlashingManager       | `0x489FB674B143E48eaCAaC999B3DF9EA6E95eA79f` | 11534963     |
-| E3RefundManager       | `0x79f9EA83Db0fbe3a2cEB765b18285915331A9dc2` | 11534995     |
-| InterfoldTicketToken  | `0xfFFFc3BB04aEe950c0ed5DEe3214408f09fff488` | 11534961     |
-| InterfoldToken (FOLD) | `0x9752444A6a955D420402EaFf5f818afCddb9c340` | 11534976     |
-| MockUSDC (fee token)  | `0xC35B783cA97710be47Fc81D10dADc895EfcD865c` | 11534960     |
-| Faucet                | `0x6e281411C055BEEbD74bDFcB9aB095aa98907F85` | 11534982     |
+| Interfold             | `0xE755Ef6c18897C76F3E71C9eA92CA67C5e73e6E3` | 11594970     |
+| CiphernodeRegistry    | `0x37A409FfB1858a91AE27f4A609970EEA10818dA6` | 11594970     |
+| BondingRegistry       | `0xbfBCF1F9aBc929992008d787420e58198e17B73A` | 11594970     |
+| SlashingManager       | `0x05f005e2F8121b67e646A8ad7e8C76141A55380B` | 11594970     |
+| E3RefundManager       | `0x65600cbf8DB3ba5C32DA2781452752183D807E06` | 11594970     |
+| InterfoldTicketToken  | `0xfA8A5570Da0E9d696d2064E79805E11d40006042` | 11594970     |
+| InterfoldToken (FOLD) | `0xa799b10Ac36cdb9633FB9af7007e8C16248064c6` | 11594970     |
+| Fee token (FoT)       | `0x4c3CBA2C57A8F56e765738D55Bb1450eA8d1560e` | 11594970     |
+| Ticket collateral     | `0x4B7a61E871dA121070ea56f61c978F7D795533D2` | 11594970     |
 
 ### Proof Verification
 
@@ -85,27 +85,17 @@ intended for public-network rehearsal. Replace it before enabling production CRI
 | MockE3Program                    | `0x4976E5E47852eFCe6851d35B95A1A2E19456F3D7` | 25786371     |
 | DeployableMockCiphertextVerifier | `0xB568e5aD762F7a75F1EC65A985ec4038F6409297` | 25786403     |
 
-> **The current Sepolia deployment does not verify proofs.** It was deployed with
-> `DEPLOY_MOCKS=true` and without `ENABLE_ZK_VERIFICATION`, so the verifier addresses below are
-> mocks that accept any proof. Use this network to wire up and operate a node, not to test proving
-> correctness.
+The current Sepolia deployment uses the real CRISP program, the real RISC Zero ciphertext verifier
+adapter, and BFV verifier routes for both `insecure-512` and `secure-8192` with minimum, micro, and
+small committees. Use `insecure-512` for fast operator checks and `secure-8192` when rehearsing the
+production CRISP proving path.
 
-| Mock contract          | Address                                      | Deploy block |
-| ---------------------- | -------------------------------------------- | ------------ |
-| MockE3Program          | `0x5874CD49929ffcf380C82cDE1e74188dEaff9791` | 11534990     |
-| MockComputeProvider    | `0x3c3434840a1EAA214E0c8abb34A0386e4E22B3A5` | 11534986     |
-| MockDecryptionVerifier | `0x12845e690fD56216C89428d91D5E931142b9779F` | 11534987     |
-| MockCiphertextVerifier | `0xc2905bDcD4449F143d46593AeAf5383A590D2e32` | 11534988     |
-| MockPkVerifier         | `0x22b5Fda887D1c84Df3d4D916452388F99a6A7b61` | 11534989     |
+`interfold config check` reports stale protocol addresses, so you do not have to remember which
+deployment you are pointed at.
 
-`interfold config check` reports this too, so you do not have to remember which deployment you are
-pointed at.
-
-On a deployment built with `ENABLE_ZK_VERIFICATION`, these mocks are replaced by the DKG and
-decryption aggregator circuits, which are the sole on-chain verifiers for BFV public-key publication
-and plaintext decryption respectively (each aggregator internally verifies the underlying
-node-fold/C5 and C6-fold/C7 sub-proofs). Their addresses appear in `deployed_contracts.json` as
-`DkgAggregatorVerifier` and `DecryptionAggregatorVerifier`; neither is present on Sepolia today.
+The DKG and decryption aggregator circuits are the sole on-chain verifiers for BFV public-key
+publication and plaintext decryption respectively. Each aggregator internally verifies the
+underlying node-fold/C5 and C6-fold/C7 sub-proofs.
 
 > Always verify addresses from `packages/interfold-contracts/deployed_contracts.json` or your
 > deployment output. Addresses differ per network.
@@ -124,7 +114,7 @@ against `BondingRegistry`.
 | `unbondCiphernodeFor(operator, amount)`                 | Bond owner             | Queue bonded FOLD for exit                               |
 | `registerOperatorFor(operator)`                         | Bond owner             | Add the operator key to the ciphernode registry          |
 | `deregisterOperatorFor(operator)`                       | Bond owner or operator | Request deregistration and queue all collateral          |
-| `addTicketBalanceFor(operator, amount)`                 | Bond owner             | Deposit the fee token and mint tickets                   |
+| `addTicketBalanceFor(operator, amount)`                 | Bond owner             | Deposit ticket collateral and mint tickets               |
 | `removeTicketBalanceFor(operator, amount)`              | Bond owner             | Burn tickets and queue the underlying for exit           |
 | `claimExitsFor(operator, maxTicket, 0)`                 | Anyone                 | Settle matured tickets to the bond owner                 |
 | `claimExitsFor(operator, maxTicket, maxCiphernodeBond)` | Bond owner             | Claim matured tickets and ciphernode bond collateral     |
@@ -180,14 +170,14 @@ stateDiagram-v2
 
 ### State Descriptions
 
-| State           | Description                                                                        |
-| --------------- | ---------------------------------------------------------------------------------- |
-| **Unbonded**    | No ciphernode bond deposited; cannot register                                      |
-| **Bonded**      | FOLD bonded but not yet registered in the registry                                 |
-| **Registered**  | In the registry but lacking minimum ticket balance                                 |
+| State           | Description                                                                            |
+| --------------- | -------------------------------------------------------------------------------------- |
+| **Unbonded**    | No ciphernode bond deposited; cannot register                                          |
+| **Bonded**      | FOLD bonded but not yet registered in the registry                                     |
+| **Registered**  | In the registry but lacking minimum ticket balance                                     |
 | **Active**      | Registered and meeting the on-chain requirements for committee selection via sortition |
-| **Inactive**    | Registered but below minimum requirements (tickets or ciphernode bond)             |
-| **ExitPending** | Deregistration requested; waiting for exit delay before claiming or re-registering |
+| **Inactive**    | Registered but below minimum requirements (tickets or ciphernode bond)                 |
+| **ExitPending** | Deregistration requested; waiting for exit delay before claiming or re-registering     |
 
 ## Requirements
 

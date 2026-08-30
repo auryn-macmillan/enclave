@@ -65,6 +65,7 @@ const FILES: Record<string, Role> = {
   'packages/interfold-dashboard/.env.example': 'consumer',
   'packages/interfold-dashboard/src/lib/chain.ts': 'consumer',
   'examples/CRISP/interfold.config.yaml': 'consumer',
+  'tests/integration/interfold.config.yaml': 'consumer',
   'dappnode/docker-compose.yml': 'consumer',
 }
 
@@ -82,7 +83,13 @@ const ALLOWED: Record<string, string> = {
 
   // An E3 program belongs to its application, not to the protocol. See the
   // comment on `CONTRACT_KEYS` in packages/interfold-contracts/scripts/genManifest.ts.
-  '0x8654f380760c46857188097fa0ad0bf995603124': 'CRISPProgram, sepolia',
+  '0x70254b956d87be536453eda42684bd7b6db96ab5': 'CRISPProgram, sepolia',
+
+  // Sepolia ticket collateral is a mock ERC20 that backs InterfoldTicketToken.
+  // It is not a manifest top-level contract, but operator docs name it directly
+  // so testers can distinguish ticket collateral from the E3 fee token.
+  '0x4b7a61e871da121070ea56f61c978f7d795533d2':
+    'Ticket collateral token, sepolia',
 
   // TODO: record these in deployed_contracts.json so the manifest can publish
   // them. Until then no check can tell a correct value here from a stale one.
@@ -96,6 +103,9 @@ const ALLOWED: Record<string, string> = {
   '0x15d34aaf54267db7d7c367839aaf71a00a2c6a65': 'Anvil account 4',
   '0x9965507d1a55bcc2695c58ba16fb37d819b0a4dc': 'Anvil account 5',
   '0x9a676e781a523b5d0c0e43731313a708cb607508': 'Anvil account 7',
+  '0xb7278a61aa25c888815afc32ad3cc52ff24fe575': 'local devnet deployment',
+  '0x5fc8d32690cc91d4c39d9d3abcbd16989f875707': 'local devnet deployment',
+  '0xcf7ed3acca5a467e9e704c703e8d87f634fb0fc9': 'local devnet deployment',
   '0x8198f5d8f8cffe8f9c413d98a0a55aeb8ab9fbb7': 'local devnet deployment',
   '0xa513e6e4b8f2a923d98304ec87f64353c4d5c853': 'local devnet deployment',
   '0xc3e53f4d16ae77db1c982e75a937b9f60fe63690': 'local devnet deployment',

@@ -48,6 +48,8 @@ mod erc20 {
         #[sol(rpc)]
         interface IERC20 {
             function balanceOf(address account) external view returns (uint256);
+            function decimals() external view returns (uint8);
+            function symbol() external view returns (string);
         }
     );
 }
@@ -55,8 +57,8 @@ mod erc20 {
 use erc20::IERC20;
 use faucet_contract::FaucetContract;
 
-/// Calls `faucet()` on the configured Faucet contract, sending FOLD + fee
-/// tokens to the operator's signing address. Testnet only.
+/// Calls `faucet()` on the configured Faucet contract, sending FOLD + ticket
+/// collateral to the operator's signing address. Testnet only.
 pub async fn execute(out: Console, config: &AppConfig, selection: Option<&str>) -> Result<()> {
     let chain = select_chain(config, selection)?;
     let faucet_contract = chain
@@ -89,6 +91,17 @@ pub async fn execute(out: Console, config: &AppConfig, selection: Option<&str>) 
 
     let fold = IERC20::new(fold_addr, provider.provider().clone());
     let fee_token = IERC20::new(fee_token_addr, provider.provider().clone());
+    let fee_token_decimals = fee_token.decimals().call().await.unwrap_or(6);
+    let fee_token_symbol = fee_token
+        .symbol()
+        .call()
+        .await
+        .unwrap_or_else(|_| "ticket collateral".to_string());
+    let fee_token_label = if fee_token_symbol.trim().is_empty() {
+        "ticket collateral"
+    } else {
+        fee_token_symbol.trim()
+    };
 
     let caller_fold = fold.balanceOf(recipient).call().await?;
     let caller_fee_token = fee_token.balanceOf(recipient).call().await?;
@@ -99,10 +112,11 @@ pub async fn execute(out: Console, config: &AppConfig, selection: Option<&str>) 
     if !needs_fold && !needs_fee_token {
         log!(
             out,
-            "Nothing to claim: {:#x} already holds at least {} FOLD and {} fee tokens.",
+            "Nothing to claim: {:#x} already holds at least {} FOLD and {} {}.",
             recipient,
             format_units(amount_fold, 18),
-            format_units(amount_fee_token, 6)
+            format_units(amount_fee_token, fee_token_decimals),
+            fee_token_label
         );
         return Ok(());
     }
@@ -122,9 +136,10 @@ pub async fn execute(out: Console, config: &AppConfig, selection: Option<&str>) 
         let faucet_fee_token = fee_token.balanceOf(faucet_address).call().await?;
         if faucet_fee_token < amount_fee_token {
             bail!(
-                "Faucet is out of fee tokens (has {}, needs {}). Ask an admin to refund it.",
-                format_units(faucet_fee_token, 6),
-                format_units(amount_fee_token, 6)
+                "Faucet is out of {} (has {}, needs {}). Ask an admin to refund it.",
+                fee_token_label,
+                format_units(faucet_fee_token, fee_token_decimals),
+                format_units(amount_fee_token, fee_token_decimals)
             );
         }
     }
@@ -157,7 +172,11 @@ pub async fn execute(out: Console, config: &AppConfig, selection: Option<&str>) 
             ""
         },
         if needs_fee_token {
-            format!("{} fee tokens", format_units(amount_fee_token, 6))
+            format!(
+                "{} {}",
+                format_units(amount_fee_token, fee_token_decimals),
+                fee_token_label
+            )
         } else {
             String::new()
         },
