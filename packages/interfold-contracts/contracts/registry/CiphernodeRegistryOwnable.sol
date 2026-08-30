@@ -108,7 +108,7 @@ contract CiphernodeRegistryOwnable is
 
     /// @notice Maximum serialized public-key candidate size.
     /// @dev Covers every currently supported BFV preset, including SecureThreshold8192.
-    uint256 public constant MAX_COMMITTEE_PUBLIC_KEY_BYTES = 256 * 1024;
+    uint256 public constant MAX_COMMITTEE_PUBLIC_KEY_BYTES = 512 * 1024;
 
     /// @notice Thrown when {addCiphernode} would push the LazyIMT past its
     ///         configured {TREE_DEPTH} capacity.

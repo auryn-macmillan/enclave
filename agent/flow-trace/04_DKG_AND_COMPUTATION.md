@@ -744,7 +744,7 @@ phase.
         │  │                                                     │
         │  │  publishCommitteePublicKey(e3Id, publicKey) {      │
         │  │    1. require the proven commitment                │
-        │  │    2. require 0 < publicKey.length <= 256 KiB      │
+        │  │    2. require 0 < publicKey.length <= 512 KiB      │
         │  │    3. Emit CommitteePublished with the candidate,  │
         │  │       stored commitment, and empty compatibility   │
         │  │       proof field                                  │

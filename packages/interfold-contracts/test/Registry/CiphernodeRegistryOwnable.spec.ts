@@ -988,6 +988,9 @@ describe("CiphernodeRegistryOwnable", function () {
       );
 
       const maxLength = await registry.MAX_COMMITTEE_PUBLIC_KEY_BYTES();
+      const observedSecure8192PublicKeyLength = 356_384n;
+      expect(maxLength).to.be.gte(observedSecure8192PublicKeyLength);
+
       await expect(registry.publishCommitteePublicKey(firstE3Id, "0x"))
         .to.be.revertedWithCustomError(registry, "InvalidPublicKeyLength")
         .withArgs(0, maxLength);
