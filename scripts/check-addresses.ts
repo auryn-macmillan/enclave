@@ -57,6 +57,8 @@ const FILES: Record<string, Role> = {
   'packages/interfold-contracts/deploy/protocol/mainnet-protocol.vrf-sortition.upgrade.json': 'record',
   'packages/interfold-contracts/deploy/protocol/mainnet-protocol.vrf-sortition.upgrade.safe.json': 'record',
   'packages/interfold-contracts/deploy/protocol/sepolia-protocol-rehearsal.config.json': 'record',
+  'packages/interfold-contracts/deploy/protocol/sepolia-protocol-rehearsal.ciphernodeRegistry.upgrade.json': 'record',
+  'packages/interfold-contracts/deploy/protocol/sepolia-protocol-rehearsal.ciphernodeRegistry.upgrade.safe.json': 'record',
   'packages/interfold-contracts/deploy/protocol/sepolia-protocol-rehearsal.deployment.json': 'record',
   'packages/interfold-contracts/deploy/protocol/sepolia-protocol-rehearsal.safe-transactions.json': 'record',
   'examples/CRISP/packages/crisp-contracts/deployed_contracts.json': 'record',
