@@ -20,6 +20,10 @@ that value as `leaf`. The official bridge hashes `leaf` once more when it checks
 Merkle root. The Solidity adapter first requires `leaf == contentHash`, then calls the bridge. Every
 reader also re-hashes the retrieved bytes against `contentHash` before use.
 
+The SDK encodes each six-field input envelope as a flat ABI parameter sequence. The server decodes
+that sequence as function parameters. It uses the same parameter encoding for the payload that
+`CRISPProgram.publishInput` reads through Solidity `abi.decode`.
+
 ## Two-step voter flow
 
 ```text

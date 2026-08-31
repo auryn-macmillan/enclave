@@ -447,6 +447,10 @@ design citation alone does not establish current runtime behavior.
   prove VectorX availability for the exact committed content hash. The input tuple cannot change
   between the calls, and `CRISPProgram.verify` must reject while any committed input remains
   pending. — `flow-trace/08`
+- **CRISP input envelopes use one flat ABI parameter sequence.** The SDK uses `encodeAbiParameters`
+  for the six fields. The server uses parameter decoding for that sequence and parameter encoding
+  for the signed commitment payload that Solidity reads through `abi.decode`. Treating the envelope
+  as one wrapped struct adds a leading tuple offset and breaks the boundary. — `flow-trace/08`
 - **Avail-backed CRISP rounds leave a usable voting interval.** `CRISPProgram.validate` derives the
   worst-case key time from the E3 timeout snapshot and the request-time Registry windows. The
   commitment cutoff must be at least one hour after both that time and the configured input start.

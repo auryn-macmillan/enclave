@@ -80,6 +80,14 @@ sol! {
     }
 }
 
+fn decode_input_envelope(encoded: &[u8]) -> anyhow::Result<InputEnvelope> {
+    Ok(InputEnvelope::abi_decode_params_validate(encoded)?)
+}
+
+fn encode_input_commitment_envelope(envelope: &InputCommitmentEnvelope) -> Vec<u8> {
+    envelope.abi_encode_params()
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum JobKind {
@@ -307,7 +315,7 @@ impl AvailabilityService {
         e3_id: &str,
         encoded_envelope: Vec<u8>,
     ) -> anyhow::Result<AvailabilityJobView> {
-        let envelope = InputEnvelope::abi_decode(&encoded_envelope)?;
+        let envelope = decode_input_envelope(&encoded_envelope)?;
         let actual = keccak256(&envelope.availabilityProof);
         anyhow::ensure!(
             actual == envelope.encryptedVoteHash,
@@ -931,7 +939,7 @@ impl AvailabilityService {
         else {
             anyhow::bail!("aggregate ciphertext jobs have no input commitment payload");
         };
-        let envelope = InputEnvelope::abi_decode(staged_envelope)?;
+        let envelope = decode_input_envelope(staged_envelope)?;
         let contract = CRISPContract::new(
             &self.http_rpc_url,
             &self.private_key,
@@ -964,15 +972,15 @@ impl AvailabilityService {
         let attestation = signer
             .sign_hash_sync(&digest)
             .map_err(|error| anyhow::anyhow!("failed to attest input availability: {error}"))?;
-        Ok(InputCommitmentEnvelope {
+        let commitment_envelope = InputCommitmentEnvelope {
             noirProof: envelope.noirProof,
             slotAddress: envelope.slotAddress,
             encryptedVoteCommitment: envelope.encryptedVoteCommitment,
             encryptedVoteHash: envelope.encryptedVoteHash,
             parentIndexPlusOne: envelope.parentIndexPlusOne,
             availabilityAttestation: Bytes::copy_from_slice(&attestation.as_bytes()),
-        }
-        .abi_encode())
+        };
+        Ok(encode_input_commitment_envelope(&commitment_envelope))
     }
 
     async fn submit_input_commitment(
@@ -1014,7 +1022,7 @@ impl AvailabilityService {
         else {
             anyhow::bail!("aggregate ciphertext jobs cannot finalize an input");
         };
-        let envelope = InputEnvelope::abi_decode(staged_envelope)?;
+        let envelope = decode_input_envelope(staged_envelope)?;
         let contract = CRISPContract::new(
             &self.http_rpc_url,
             &self.private_key,
@@ -1101,7 +1109,7 @@ impl AvailabilityService {
         else {
             return Ok(false);
         };
-        let envelope = InputEnvelope::abi_decode(staged_envelope)?;
+        let envelope = decode_input_envelope(staged_envelope)?;
         let provider = ProviderBuilder::new().connect(&self.http_rpc_url).await?;
         let contract = ICrispAvailabilityState::new(self.e3_program_address.parse()?, provider);
         Ok(contract
@@ -1129,7 +1137,7 @@ impl AvailabilityService {
                 staged_envelope,
                 ..
             } => {
-                let envelope = InputEnvelope::abi_decode(staged_envelope)?;
+                let envelope = decode_input_envelope(staged_envelope)?;
                 let contract =
                     ICrispAvailabilityState::new(self.e3_program_address.parse()?, provider);
                 Ok(contract
@@ -1169,7 +1177,7 @@ impl AvailabilityService {
         else {
             return Ok(false);
         };
-        let envelope = InputEnvelope::abi_decode(staged_envelope)?;
+        let envelope = decode_input_envelope(staged_envelope)?;
         let contract = CRISPContract::new(
             &self.http_rpc_url,
             &self.private_key,
@@ -1198,7 +1206,7 @@ impl AvailabilityService {
         else {
             return Ok(false);
         };
-        let envelope = InputEnvelope::abi_decode(staged_envelope)?;
+        let envelope = decode_input_envelope(staged_envelope)?;
         let contract = CRISPContract::new(
             &self.http_rpc_url,
             &self.private_key,
@@ -1272,5 +1280,54 @@ impl AvailabilityService {
             .insert(job.id.as_bytes(), serde_json::to_vec(job)?)?;
         self.jobs.flush()?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SDK_INPUT_ENVELOPE: &str = concat!(
+        "00000000000000000000000000000000000000000000000000000000000000c0",
+        "0000000000000000000000001111111111111111111111111111111111111111",
+        "2222222222222222222222222222222222222222222222222222222222222222",
+        "3333333333333333333333333333333333333333333333333333333333333333",
+        "0000000000000000000000000000000000000000000000000000000000000007",
+        "0000000000000000000000000000000000000000000000000000000000000100",
+        "0000000000000000000000000000000000000000000000000000000000000003",
+        "0102030000000000000000000000000000000000000000000000000000000000",
+        "0000000000000000000000000000000000000000000000000000000000000002",
+        "aabb000000000000000000000000000000000000000000000000000000000000",
+    );
+
+    #[test]
+    fn sdk_input_envelope_uses_solidity_parameter_encoding() {
+        let encoded = hex::decode(SDK_INPUT_ENVELOPE).unwrap();
+        let envelope = decode_input_envelope(&encoded).unwrap();
+
+        assert_eq!(envelope.noirProof.as_ref(), &[1, 2, 3]);
+        assert_eq!(
+            envelope.slotAddress,
+            "0x1111111111111111111111111111111111111111"
+                .parse::<alloy::primitives::Address>()
+                .unwrap()
+        );
+        assert_eq!(envelope.encryptedVoteCommitment, B256::repeat_byte(0x22));
+        assert_eq!(envelope.encryptedVoteHash, B256::repeat_byte(0x33));
+        assert_eq!(envelope.parentIndexPlusOne.to::<u64>(), 7);
+        assert_eq!(envelope.availabilityProof.as_ref(), &[0xaa, 0xbb]);
+
+        let commitment_envelope = InputCommitmentEnvelope {
+            noirProof: envelope.noirProof,
+            slotAddress: envelope.slotAddress,
+            encryptedVoteCommitment: envelope.encryptedVoteCommitment,
+            encryptedVoteHash: envelope.encryptedVoteHash,
+            parentIndexPlusOne: envelope.parentIndexPlusOne,
+            availabilityAttestation: envelope.availabilityProof,
+        };
+        assert_eq!(
+            encode_input_commitment_envelope(&commitment_envelope),
+            encoded
+        );
     }
 }
