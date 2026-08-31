@@ -25,7 +25,9 @@ use std::{
     process::Command,
 };
 
-use risc0_build::{embed_methods_with_options, DockerOptionsBuilder, GuestOptionsBuilder};
+use risc0_build::{
+    embed_methods_with_options, DockerOptionsBuilder, GuestListEntry, GuestOptionsBuilder,
+};
 use risc0_build_ethereum::generate_solidity_files;
 
 // Paths where the generated Solidity files will be written.
@@ -96,6 +98,51 @@ fn guest_builder_tag(support_dir: &Path) -> String {
     tag
 }
 
+/// Copies each Docker-built ELF to the path used by the upload command.
+fn copy_docker_elves_to_release(guests: &[GuestListEntry]) {
+    for guest in guests {
+        let source = Path::new(guest.path.as_ref());
+        let docker_dir = source.parent().unwrap_or_else(|| {
+            panic!(
+                "Docker guest ELF has no parent directory: {}",
+                source.display()
+            )
+        });
+        if docker_dir.file_name().and_then(|name| name.to_str()) != Some("docker") {
+            panic!(
+                "Docker guest ELF is outside the Docker profile: {}",
+                source.display()
+            );
+        }
+
+        let profile_root = docker_dir.parent().unwrap_or_else(|| {
+            panic!(
+                "Docker guest profile has no parent: {}",
+                docker_dir.display()
+            )
+        });
+        let release_dir = profile_root.join("release");
+        fs::create_dir_all(&release_dir).unwrap_or_else(|e| {
+            panic!(
+                "cannot create upload artifact directory {}: {e}",
+                release_dir.display()
+            )
+        });
+
+        let file_name = source
+            .file_name()
+            .unwrap_or_else(|| panic!("Docker guest ELF has no file name: {}", source.display()));
+        let destination = release_dir.join(file_name);
+        fs::copy(source, &destination).unwrap_or_else(|e| {
+            panic!(
+                "cannot copy Docker guest ELF from {} to {}: {e}",
+                source.display(),
+                destination.display()
+            )
+        });
+    }
+}
+
 fn main() {
     // Builds can be made deterministic, and thereby reproducible, by using Docker to build the
     // guest. Set RISC0_USE_DOCKER to 1 (or true) to select the reproducible Docker build. Any
@@ -121,6 +168,10 @@ fn main() {
 
     // Generate Rust source files for the methods crate.
     let guests = embed_methods_with_options(HashMap::from([("guests", guest_options)]));
+
+    if reproducible {
+        copy_docker_elves_to_release(&guests);
+    }
 
     // A native guest build is useful for local development, but its image ID can vary with the
     // host toolchain. Never let such a build replace the production trust anchor checked into the
