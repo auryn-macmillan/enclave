@@ -67,6 +67,7 @@ const VoteManagementProvider = ({ children }: VoteManagementProviderProps) => {
     getWebResult,
     getCurrentRound,
     broadcastVote,
+    waitForVoteAvailability,
   } = useInterfoldServer()
 
   /// Purely local — see the note on `getVoteCacheKey`. Async only to keep the signature the
@@ -212,6 +213,7 @@ const VoteManagementProvider = ({ children }: VoteManagementProviderProps) => {
         setPollOptions,
         initialLoad,
         broadcastVote,
+        waitForVoteAvailability,
         setVotingRound,
         checkVoteStatus,
         markVotedInRound,

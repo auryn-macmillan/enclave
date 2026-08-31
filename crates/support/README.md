@@ -152,13 +152,14 @@ The order matters:
 
 3. Update the `crates/support` call sites that track the crate's API — the compiler will point at
    them, since they built against the old revision until now.
-4. Rebuild the guest against the pinned code with the RISC Zero Docker builder, and commit the
-   regenerated `crates/support/contracts/ImageID.sol`.
+4. Rebuild the guest against the pinned code with `RISC0_USE_DOCKER=1`. The pinned Docker builder
+   regenerates `crates/support/contracts/ImageID.sol`; ordinary native builds deliberately do not
+   touch that production trust anchor.
 5. Redeploy `Risc0BfvCiphertextVerifier`, and every E3 program that stores its own image ID.
 
-Skipping step 4 leaves a deployed verifier that accepts a guest no longer matching this tree, and
-nothing in the repository detects it: there is no longer an automated check that the committed image
-ID is the one the current sources produce, so this order is a convention rather than something CI
+Skipping step 4 leaves a deployed verifier that accepts a guest no longer matching this tree. The
+provenance manifest records the committed image ID and can compare it with a deployed verifier, but
+it does not rebuild the guest, so this build order remains mandatory.
 enforces. The reviewer-facing procedure is `docs/pages/verifying-the-compute-provider.mdx`.
 
 ### Step 3: Upload Program to IPFS (Pinata)
@@ -217,13 +218,14 @@ This triggers:
 
 1. Payment of the quoted fee in the active fee token
 2. Committee selection via sortition
-3. DKG (C0-C5 proofs) → committee public key published on-chain
+3. DKG (C0-C5 proofs) → committee public key published in bounded Ethereum event chunks
 4. Stage → `KeyPublished`
 
 ### Step 7: Encrypt Inputs & Submit to Compute Provider
 
-The instigator encrypts data under the committee's aggregate public key, then POSTs to the program
-server:
+The instigator encrypts data under the committee's aggregate public key. The application publishes
+large ciphertexts to its configured data-availability layer before it commits their references on
+Ethereum. The compute request still POSTs the retrieved bytes to the program server:
 
 ```bash
 curl -X POST http://localhost:13151/run_compute \
@@ -254,10 +256,11 @@ server runs the same computation and returns a fake proof instead.
 
 ### Step 8: Webhook Handler Publishes On-Chain
 
-The callback server (e.g., CRISP) receives the webhook and calls:
+The callback server publishes the aggregate ciphertext to the configured data-availability layer,
+waits for its Ethereum-verifiable receipt, and calls:
 
 ```solidity
-interfold.publishCiphertextOutput(e3Id, ciphertextOutput, ciphertextCommitment, proof);
+interfold.publishCiphertextOutput(e3Id, encodedOutputReference);
 ```
 
 The proof binds nine values. Five identify the context: the chain, the Interfold contract, the E3,

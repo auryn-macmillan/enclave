@@ -194,6 +194,46 @@ program URL:
 > re-upload it to IPFS, then update the `program_url` in your configuration. This ensures Boundless
 > uses your latest program version.
 
+### Encrypted-object data availability
+
+Local development uses `DATA_AVAILABILITY_MODE=mock`. The mock keeps the full input and aggregate
+ciphertext in the CRISP server database and produces a deterministic local receipt. It does not
+model VectorX latency or Avail fees.
+
+Sepolia and Ethereum mainnet use Avail. Before starting the CRISP server:
+
+1. Register an Avail App ID for CRISP.
+2. Fund a dedicated Avail account that can pay for every `submit_data` transaction.
+3. Keep the server database durable. It stores each pending publication until its VectorX proof is
+   available and resumes the job after a restart.
+4. Configure at least a four-hour input window. VectorX normally needs about 1.5 to 2 hours to
+   anchor an Avail block on Ethereum; the default three-hour proof lead leaves one extra hour for
+   submission.
+
+```dotenv
+# Sepolia + Avail Turing
+DATA_AVAILABILITY_MODE=avail
+AVAIL_RPC_URL=wss://turing-rpc.avail.so/ws
+AVAIL_BRIDGE_API_URL=https://turing-bridge-api.avail.so
+AVAIL_APP_ID=<registered-app-id>
+AVAIL_SEED=<dedicated-funded-secret-uri>
+AVAIL_PROOF_LEAD_SECONDS=10800
+E3_DURATION=14400
+
+# Ethereum mainnet uses these two endpoints instead:
+# AVAIL_RPC_URL=wss://avail-rpc.publicnode.com/
+# AVAIL_BRIDGE_API_URL=https://bridge-api.avail.so
+```
+
+The server first validates the Noir proof, publishes the exact encrypted bytes to Avail, waits for
+the official bridge proof, and then submits the compact reference to Ethereum. The aggregate
+ciphertext follows the same path after the RISC Zero proof is ready. On mainnet the voter submits
+the final input transaction from their wallet; the server never relays it with the operator key.
+
+Each accepted Ethereum reference contains `keccak256(exact bytes)`. The CRISP server and
+ciphernodes re-hash retrieved bytes before they use them. An App ID helps indexing, but it is not a
+security boundary.
+
 ### Environment Variables
 
 The `pnpm dev:setup` command automatically creates `.env` files for the server and client from the

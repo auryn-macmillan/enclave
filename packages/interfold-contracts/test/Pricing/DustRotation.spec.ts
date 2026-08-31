@@ -18,6 +18,7 @@ import {
   encodeMockDkgProof,
   ethers,
   networkHelpers,
+  publishAvailableCiphertextOutput,
   PROOF as proof,
   setPricingConfig,
 } from "../fixtures";
@@ -168,7 +169,8 @@ describe("Pricing — per-E3 dust rotation across consecutive E3s", function () 
         [operator1, operator2, operator3],
       );
       await time.increase(inputWindowDuration + 200);
-      await interfold.publishCiphertextOutput(
+      await publishAvailableCiphertextOutput(
+        interfold,
         e3Id,
         data,
         ethers.keccak256(data),

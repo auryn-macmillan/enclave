@@ -2,6 +2,9 @@
 chains:
   - name: 'localhost'
     rpc_url: 'ws://localhost:8545'
+    data_availability:
+      mode: mock_http
+      rpc_url: http://127.0.0.1:4000/availability
     contracts:
       e3_program:
         address: "0xb7278A61aa25c888815aFC32Ad3cC52fF24fE575"

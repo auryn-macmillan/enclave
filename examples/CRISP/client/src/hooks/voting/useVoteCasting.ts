@@ -15,7 +15,7 @@ import { ensureCircuits } from '@/utils/circuits'
 import { useVoteManagementContext } from '@/context/voteManagement'
 import { useNotificationAlertContext } from '@/context/NotificationAlert/NotificationAlert.context.tsx'
 import { Poll } from '@/model/poll.model'
-import { BroadcastVoteRequest, CensusMode, Vote, VoteStateLite, VotingRound } from '@/model/vote.model'
+import { BroadcastVoteRequest, BroadcastVoteResponse, CensusMode, Vote, VoteStateLite, VotingRound } from '@/model/vote.model'
 import { useInterfoldServer } from '../interfold/useInterfoldServer'
 import { getRandomVoterToMask } from '@/utils/voters'
 import { handleGenericError } from '@/utils/handle-generic-error'
@@ -23,9 +23,50 @@ import { NUM_OPTIONS } from '@/utils/constants'
 import { ballotTypedData, getBallotDigest, getCrispProgramAddress, getCrispRoundConfig } from '@/utils/ballotDigest'
 import { getRandomRegistrant, getVotingPower, isRegisteredIn } from '@/utils/onchainCensus'
 import { submitVoteDirectly } from '@/utils/directVote'
-import { isDirectVoteEnabled, txExplorerUrl } from '@/utils/methods'
+import { txExplorerUrl } from '@/utils/methods'
 
 const INTERFOLD_API = import.meta.env.VITE_INTERFOLD_API
+
+interface PendingAvailabilityJob {
+  jobId: string
+  isMask: boolean
+}
+
+const availabilityJobKey = (chainId: number, roundId: string, address: string): string => {
+  return `crisp-availability-${chainId}-${roundId}-${address.toLowerCase()}`
+}
+
+const readAvailabilityJob = (key: string): PendingAvailabilityJob | undefined => {
+  try {
+    const stored = localStorage.getItem(key)
+    if (!stored) return undefined
+    const parsed: unknown = JSON.parse(stored)
+    if (typeof parsed !== 'object' || parsed === null || !('jobId' in parsed) || typeof parsed.jobId !== 'string') return undefined
+    return {
+      jobId: parsed.jobId,
+      isMask: 'isMask' in parsed && parsed.isMask === true,
+    }
+  } catch {
+    return undefined
+  }
+}
+
+const writeAvailabilityJob = (key: string, job: PendingAvailabilityJob): void => {
+  try {
+    localStorage.setItem(key, JSON.stringify(job))
+  } catch {
+    // The durable server job remains valid. A browser with disabled storage cannot resume it
+    // automatically after a reload.
+  }
+}
+
+const clearAvailabilityJob = (key: string): void => {
+  try {
+    localStorage.removeItem(key)
+  } catch {
+    // The item is already harmless after the server job reaches a terminal state.
+  }
+}
 
 /// The end of the slot's chain of usable entries, with the tree index the new input will name as
 /// its parent. Not simply the newest entry published: one whose bytes do not reproduce its
@@ -108,6 +149,7 @@ export const useVoteCasting = (customRoundState?: VoteStateLite | null, customVo
     setTxUrl,
     markVotedInRound,
     hasVotedInCurrentRound,
+    waitForVoteAvailability,
   } = useVoteManagementContext()
 
   const roundState = customRoundState ?? contextRoundState
@@ -353,11 +395,6 @@ export const useVoteCasting = (customRoundState?: VoteStateLite | null, customVo
 
   const castVoteWithProof = useCallback(
     async (pollSelected: Poll | null, isAMask: boolean = false, maskTarget: MaskTarget = 'random') => {
-      if (!isAMask && !pollSelected) {
-        console.log('Cannot cast vote: Poll option not selected.')
-        showToast({ type: 'danger', message: 'Please select a poll option first.' })
-        return
-      }
       if (!user || !roundState) {
         console.error('Cannot cast vote: Missing user or round state.')
         showToast({
@@ -368,7 +405,71 @@ export const useVoteCasting = (customRoundState?: VoteStateLite | null, customVo
         return
       }
 
+      const pendingJobKey = availabilityJobKey(chainId, roundState.id, user.address)
+
+      const finishPublication = async (response: BroadcastVoteResponse, operationIsMask: boolean): Promise<void> => {
+        if (response.status === 'failed_broadcast') {
+          throw new Error(extractCleanErrorMessage(response.message ?? undefined))
+        }
+        if (response.status === 'pending_availability') {
+          throw new Error('The data-availability job did not reach a terminal state.')
+        }
+
+        let txHash: string | undefined = response.tx_hash ?? undefined
+        if (response.status === 'ready_for_submission') {
+          if (!walletClient || !publicClient) {
+            throw new Error('No wallet available to submit the vote directly')
+          }
+
+          setStepMessage('Please confirm the transaction in your wallet...')
+
+          const e3Id = BigInt(roundState.id)
+          const crispProgram = await getCrispProgramAddress(publicClient, roundState.interfold_address as `0x${string}`, e3Id)
+          if (!response.encoded_proof) {
+            throw new Error('Availability job is missing the final proof payload')
+          }
+          txHash = await submitVoteDirectly(walletClient, publicClient, crispProgram, e3Id, response.encoded_proof as `0x${string}`)
+        }
+
+        setVotingStep('complete')
+        setStepMessage(`${operationIsMask ? 'Masking' : 'Vote'} submitted successfully!`)
+
+        const url = txHash ? txExplorerUrl(txHash) : undefined
+        setTxUrl(url)
+
+        if (!operationIsMask) markVotedInRound(roundState.id)
+
+        showToast({
+          type: 'success',
+          message: operationIsMask ? 'Slot masked successfully' : 'Vote submitted successfully!',
+          linkUrl: url,
+        })
+        navigate(`/result/${roundState.id}/confirmation`)
+      }
+
       try {
+        const pendingJob = readAvailabilityJob(pendingJobKey)
+        if (pendingJob) {
+          setIsMasking(pendingJob.isMask)
+          setIsVoting(!pendingJob.isMask)
+          setVotingStep('broadcasting')
+          setLastActiveStep('broadcasting')
+          setStepMessage('Resuming data-availability proof...')
+
+          const resumed = await waitForVoteAvailability(pendingJob.jobId)
+          if (!resumed) throw new Error('Could not read the pending data-availability job.')
+          if (resumed.status === 'failed_broadcast') clearAvailabilityJob(pendingJobKey)
+          await finishPublication(resumed, pendingJob.isMask)
+          clearAvailabilityJob(pendingJobKey)
+          return
+        }
+
+        if (!isAMask && !pollSelected) {
+          console.log('Cannot cast vote: Poll option not selected.')
+          showToast({ type: 'danger', message: 'Please select a poll option first.' })
+          return
+        }
+
         let voteData
 
         const isOnchain = roundState.census_mode === CensusMode.Onchain
@@ -434,56 +535,20 @@ export const useVoteCasting = (customRoundState?: VoteStateLite | null, customVo
         setVotingStep('broadcasting')
         setLastActiveStep('broadcasting')
 
-        let txHash: string | undefined
-
-        if (isDirectVoteEnabled()) {
-          if (!walletClient || !publicClient) {
-            throw new Error('No wallet available to submit the vote directly')
-          }
-
-          setStepMessage('Please confirm the transaction in your wallet...')
-
-          const e3Id = BigInt(roundState.id)
-          const crispProgram = await getCrispProgramAddress(publicClient, roundState.interfold_address as `0x${string}`, e3Id)
-          txHash = await submitVoteDirectly(walletClient, publicClient, crispProgram, e3Id, encodedProof as `0x${string}`)
-        } else {
-          const voteRequest: BroadcastVoteRequest = {
-            round_id: roundState.id,
-            encoded_proof: encodedProof,
-          }
-
-          const broadcastVoteResponse = await broadcastVote(voteRequest)
-
-          if (!broadcastVoteResponse) {
-            throw new Error('Received no response after broadcasting vote.')
-          }
-          if (broadcastVoteResponse.status !== 'success') {
-            setVotingStep('error')
-            showToast({
-              type: 'danger',
-              message: extractCleanErrorMessage(broadcastVoteResponse.message),
-              persistent: true,
-            })
-            return
-          }
-
-          txHash = broadcastVoteResponse.tx_hash
+        const voteRequest: BroadcastVoteRequest = {
+          round_id: roundState.id,
+          encoded_proof: encodedProof,
         }
-
-        setVotingStep('complete')
-        setStepMessage(`${isAMask ? 'Masking' : 'Vote'} submitted successfully!`)
-
-        const url = txHash ? txExplorerUrl(txHash) : undefined
-        setTxUrl(url)
-
-        if (!isAMask) markVotedInRound(roundState.id)
-
-        showToast({
-          type: 'success',
-          message: isAMask ? 'Slot masked successfully' : 'Vote submitted successfully!',
-          linkUrl: url,
+        const broadcastVoteResponse = await broadcastVote(voteRequest, (jobId) => {
+          writeAvailabilityJob(pendingJobKey, { jobId, isMask: isAMask })
         })
-        navigate(`/result/${roundState.id}/confirmation`)
+
+        if (!broadcastVoteResponse) {
+          throw new Error('Received no response after publishing vote data.')
+        }
+        if (broadcastVoteResponse.status === 'failed_broadcast') clearAvailabilityJob(pendingJobKey)
+        await finishPublication(broadcastVoteResponse, isAMask)
+        clearAvailabilityJob(pendingJobKey)
       } catch (error) {
         setVotingStep('error')
         console.error('Vote processing failed:', error)
@@ -511,6 +576,8 @@ export const useVoteCasting = (customRoundState?: VoteStateLite | null, customVo
       handleMask,
       handleVote,
       getMerkleLeaves,
+      waitForVoteAvailability,
+      chainId,
     ],
   )
 

@@ -39,6 +39,7 @@ risc0-zkp = { version = "=3.0.2", default-features = false }
 serde = { version = "1.0", features = ["derive", "std"] }
 serde_json = "=1.0.145"
 sha2 = "=0.10.9"
+sha3 = "=0.10.8"
 # The Interfold revision must match for all Interfold dependencies in this workspace.
 #
 # The Interfold crates below are pinned by revision rather than by path because this workspace is

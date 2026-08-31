@@ -28,6 +28,7 @@ import {
   encodeMockDkgProof,
   ethers,
   networkHelpers,
+  publishAvailableCiphertextOutput,
   signAndEncodeAttestation,
 } from "../fixtures";
 
@@ -928,7 +929,8 @@ describe("Committee Expulsion & Fault Tolerance", function () {
 
       const ciphertext = "0x" + "ab".repeat(100);
       await expect(
-        interfold.publishCiphertextOutput(
+        publishAvailableCiphertextOutput(
+          interfold,
           firstE3Id,
           ciphertext,
           ethers.keccak256(ciphertext),
@@ -953,7 +955,8 @@ describe("Committee Expulsion & Fault Tolerance", function () {
       );
 
       const ciphertext = "0x" + "ab".repeat(100);
-      await interfold.publishCiphertextOutput(
+      await publishAvailableCiphertextOutput(
+        interfold,
         firstE3Id,
         ciphertext,
         ethers.keccak256(ciphertext),

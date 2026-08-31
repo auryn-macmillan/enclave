@@ -75,6 +75,13 @@ sol! {
         event E3Requested(uint256 e3Id, E3 e3, bytes32 indexed cryptoConfigId);
         event InputPublished(uint256 indexed e3Id, bytes data, uint256 inputHash, uint256 index);
         event CiphertextOutputPublished(uint256 indexed e3Id, bytes ciphertextOutput, bytes32 ciphertextCommitment);
+        event CiphertextOutputReferencePublished(
+            uint256 indexed e3Id,
+            bytes32 contentHash,
+            bytes32 ciphertextCommitment,
+            uint32 availabilityBlock,
+            uint128 availabilityLeafIndex
+        );
         event PlaintextOutputPublished(uint256 indexed e3Id, bytes plaintextOutput, bytes proof);
         event RewardsDistributed(uint256 indexed e3Id, address[] nodes, uint256[] amounts);
         event RewardCredited(uint256 indexed e3Id, address indexed account, address indexed token, uint256 amount);
@@ -203,8 +210,6 @@ sol! {
             bytes calldata dkgAttestationBundle
         ) external;
 
-        function publishCommitteePublicKey(uint256 e3Id, bytes calldata publicKey) external;
-
         // ── View functions ──────────────────────────────────────────────────
         function isOpen(uint256 e3Id) external view returns (bool);
 
@@ -326,6 +331,18 @@ sol! {
             bytes publicKey,
             bytes32 pkCommitment,
             bytes proof
+        );
+
+        event CommitteePublicKeyChunkPublished(
+            uint256 indexed e3Id,
+            address indexed publisher,
+            bytes32 indexed candidateHash,
+            address[] nodes,
+            bytes32 pkCommitment,
+            uint16 chunkIndex,
+            uint16 chunkCount,
+            uint32 totalLength,
+            bytes chunk
         );
 
         event CommitteeActivationChanged(uint256 indexed e3Id, bool active);

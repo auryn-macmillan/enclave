@@ -7,10 +7,10 @@
 use actix_web::{middleware::Logger, web, App, HttpResponse, HttpServer, Result as ActixResult};
 use e3_compute_provider::FHEInputs;
 use e3_compute_provider::PublishedData;
-use std::sync::{Arc, OnceLock};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use e3_support_types::{ComputeDomain, ComputeRequest, WebhookPayload};
 use serde::Serialize;
+use std::sync::{Arc, OnceLock};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 #[derive(Serialize, Debug)]
 struct ProcessingResponse {
@@ -286,7 +286,9 @@ const MAX_PARENT: u64 = (1u64 << (8 * PARENT_BYTES as u64)) - 1;
 /// metadata the E3 program never published, and the only symptom is an input root the guest
 /// derives and the contract rejects.
 fn published_from(req: &ComputeRequest) -> ActixResult<Vec<PublishedData>> {
-    if req.input_commitments.is_empty() && req.input_slots.is_empty() && req.input_parents.is_empty()
+    if req.input_commitments.is_empty()
+        && req.input_slots.is_empty()
+        && req.input_parents.is_empty()
     {
         return Ok(Vec::new());
     }

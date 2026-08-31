@@ -119,6 +119,7 @@ export async function deployCRISPProgram(
   const onchainHonkVerifier = contracts.onchainHonkVerifier || honkVerifier
   const mockInterfold = contracts.mockInterfold || (await deployMockInterfold())
   const risc0Verifier = contracts.risc0Verifier ? await contracts.risc0Verifier.getAddress() : nonZeroAddress
+  const dataAvailabilityVerifier = await deployContract('MockCrispDataAvailabilityVerifier')
 
   const programFactory = await ethers.getContractFactory('CRISPProgram', {
     libraries: {
@@ -132,6 +133,7 @@ export async function deployCRISPProgram(
     risc0Verifier,
     await honkVerifier.getAddress(),
     await onchainHonkVerifier.getAddress(),
+    await dataAvailabilityVerifier.getAddress(),
     zeroHash,
   )
 

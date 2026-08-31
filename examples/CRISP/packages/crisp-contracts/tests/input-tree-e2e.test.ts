@@ -220,7 +220,7 @@ describe('CRISPProgram input tree (e2e)', function () {
       // prepared one so a divergence between them is visible rather than silent.
       contractLeaf: (
         await crispProgram.inputLeaf(
-          `0x${Buffer.from(ballot.encryptedVote).toString('hex')}`,
+          ethers.keccak256(`0x${Buffer.from(ballot.encryptedVote).toString('hex')}`),
           ballot.publicInputs[7],
           address,
           ballot.parentIndexPlusOne,
@@ -246,7 +246,7 @@ describe('CRISPProgram input tree (e2e)', function () {
     // The leaf the contract stored must be the one it computes from the published pair. This is
     // the value the Rust side has to match; the fixture carries it across the language boundary.
     const expectedLeaf = await crispProgram.inputLeaf(
-      record.inputs[0].encryptedVote,
+      ethers.keccak256(record.inputs[0].encryptedVote),
       record.inputs[0].commitment,
       record.inputs[0].slot,
       record.inputs[0].parentIndexPlusOne,
@@ -289,9 +289,14 @@ describe('CRISPProgram input tree (e2e)', function () {
 
       // The leaf reflects the forged bytes, so the Secure Process still reproduces the root while
       // being able to see that this input does not match its commitment.
-      const forgedLeaf = await crispProgram.inputLeaf('0xdeadbeef', ballot.publicInputs[7], address, ballot.parentIndexPlusOne)
+      const forgedLeaf = await crispProgram.inputLeaf(
+        ethers.keccak256('0xdeadbeef'),
+        ballot.publicInputs[7],
+        address,
+        ballot.parentIndexPlusOne,
+      )
       const honestLeaf = await crispProgram.inputLeaf(
-        `0x${Buffer.from(ballot.encryptedVote).toString('hex')}`,
+        ethers.keccak256(`0x${Buffer.from(ballot.encryptedVote).toString('hex')}`),
         ballot.publicInputs[7],
         address,
         ballot.parentIndexPlusOne,

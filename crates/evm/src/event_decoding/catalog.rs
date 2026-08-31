@@ -88,6 +88,11 @@ const INTERFOLD: &[EvmEventDefinition] = &[
         Some(1),
     ),
     EvmEventDefinition::new(
+        "CiphertextOutputReferencePublished",
+        "CiphertextOutputReferencePublished(uint256,bytes32,bytes32,uint32,uint128)",
+        Some(1),
+    ),
+    EvmEventDefinition::new(
         "CiphertextVerifierSet",
         "CiphertextVerifierSet(bytes32,address)",
         None,
@@ -403,6 +408,11 @@ const CIPHERNODE_REGISTRY: &[EvmEventDefinition] = &[
     EvmEventDefinition::new(
         "CommitteePublished",
         "CommitteePublished(uint256,address[],bytes,bytes32,bytes)",
+        Some(1),
+    ),
+    EvmEventDefinition::new(
+        "CommitteePublicKeyChunkPublished",
+        "CommitteePublicKeyChunkPublished(uint256,address,bytes32,address[],bytes32,uint16,uint16,uint32,bytes)",
         Some(1),
     ),
     EvmEventDefinition::new(

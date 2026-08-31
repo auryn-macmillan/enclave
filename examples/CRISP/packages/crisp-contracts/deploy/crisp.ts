@@ -4,7 +4,7 @@
 // without even the implied warranty of MERCHANTABILITY
 // or FITNESS FOR A PARTICULAR PURPOSE.
 
-import { getDeploymentChain, readDeploymentArgs, storeDeploymentArgs } from '@interfold/contracts/scripts'
+import { AVAIL_VECTORX, getDeploymentChain, readDeploymentArgs, storeDeploymentArgs } from '@interfold/contracts/scripts'
 import { Interfold__factory as InterfoldFactory } from '@interfold/contracts/types'
 import { readFileSync } from 'fs'
 
@@ -13,7 +13,12 @@ import hre from 'hardhat'
 import { CRISPProgram__factory as CRISPProgramFactory } from '../types'
 import { verifierNames } from '../scripts/verifiers'
 
-const imageIdContent = readFileSync('../../.interfold/generated/contracts/ImageID.sol', 'utf-8')
+// The production guest lives in crates/support. Read the Image ID generated from that exact
+// guest instead of the example project's cached copy, which can lag behind a guest change.
+const imageIdContent = readFileSync(
+  new URL('../../../../../crates/support/contracts/ImageID.sol', import.meta.url),
+  'utf-8',
+)
 const match = imageIdContent.match(/bytes32 public constant PROGRAM_ID = bytes32\((0x[a-fA-F0-9]+)\)/)
 const IMAGE_ID = match ? match[1] : null
 
@@ -129,6 +134,40 @@ export const deployCRISPContracts = async (): Promise<CRISPDeploymentResult> => 
     chain,
   )
 
+  const useMockDataAvailability = useMocks || chain === 'localhost'
+  const dataAvailabilityContract = useMockDataAvailability
+    ? 'MockCrispDataAvailabilityVerifier'
+    : 'AvailVectorXDataAvailabilityVerifier'
+  let dataAvailabilityVerifier
+  if (useMockDataAvailability) {
+    dataAvailabilityVerifier = await ethers.deployContract('MockCrispDataAvailabilityVerifier')
+  } else {
+    const addresses = AVAIL_VECTORX[chain as keyof typeof AVAIL_VECTORX]
+    if (!addresses) {
+      throw new Error(`Avail/VectorX data availability is not configured for ${chain}`)
+    }
+    dataAvailabilityVerifier = await ethers.deployContract('AvailVectorXDataAvailabilityVerifier', [
+      addresses.bridge,
+      addresses.vectorx,
+    ])
+  }
+  await dataAvailabilityVerifier.waitForDeployment()
+  const dataAvailabilityVerifierAddress = await dataAvailabilityVerifier.getAddress()
+  storeDeploymentArgs(
+    {
+      address: dataAvailabilityVerifierAddress,
+      blockNumber: await ethers.provider.getBlockNumber(),
+      constructorArgs: useMockDataAvailability
+        ? {}
+        : {
+            bridge: AVAIL_VECTORX[chain as keyof typeof AVAIL_VECTORX].bridge,
+            vectorx: AVAIL_VECTORX[chain as keyof typeof AVAIL_VECTORX].vectorx,
+          },
+    },
+    dataAvailabilityContract,
+    chain,
+  )
+
   const crispFactory = await ethers.getContractFactory(
     CRISPProgramFactory.abi,
     CRISPProgramFactory.linkBytecode({
@@ -137,7 +176,14 @@ export const deployCRISPContracts = async (): Promise<CRISPDeploymentResult> => 
     owner,
   )
 
-  const crisp = await crispFactory.deploy(initialOwner, verifier, honkVerifierAddress, onchainHonkVerifierAddress, IMAGE_ID)
+  const crisp = await crispFactory.deploy(
+    initialOwner,
+    verifier,
+    honkVerifierAddress,
+    onchainHonkVerifierAddress,
+    dataAvailabilityVerifierAddress,
+    IMAGE_ID,
+  )
   await crisp.waitForDeployment()
 
   const crispAddress = await crisp.getAddress()
@@ -150,6 +196,7 @@ export const deployCRISPContracts = async (): Promise<CRISPDeploymentResult> => 
         verifierAddress: verifier,
         honkVerifierAddress,
         onchainHonkVerifierAddress,
+        dataAvailabilityVerifierAddress,
         imageId: IMAGE_ID,
       },
     },
@@ -225,6 +272,7 @@ export const deployCRISPContracts = async (): Promise<CRISPDeploymentResult> => 
       Risc0BfvCiphertextVerifier: ${ciphertextVerifierAddress}
       HonkVerifier: ${honkVerifierAddress}
       OnchainHonkVerifier: ${onchainHonkVerifierAddress}
+      DataAvailabilityVerifier: ${dataAvailabilityVerifierAddress}
       CRISPProgram: ${crispAddress}
       TokenAddress: ${tokenAddress}
       SelfRegistry: ${selfRegistryAddress}

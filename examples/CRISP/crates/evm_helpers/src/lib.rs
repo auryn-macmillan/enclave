@@ -6,7 +6,7 @@
 
 use alloy::{
     network::{Ethereum, EthereumWallet},
-    primitives::{Address, Bytes, I256, U256},
+    primitives::{Address, Bytes, B256, I256, U256},
     providers::{
         fillers::{
             BlobGasFiller, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller,
@@ -29,12 +29,36 @@ sol! {
         function setMerkleRoot(uint256 e3_id, uint256 _root) external;
         function getSlotIndex(uint256 e3_id, address slot_address) external view returns (int256);
         function publishInput(uint256 e3_id, bytes data) external;
+        function validateInputProof(
+            uint256 e3Id,
+            bytes noirProof,
+            address slotAddress,
+            bytes32 encryptedVoteCommitment,
+            bytes32 encryptedVoteHash,
+            uint40 parentIndexPlusOne
+        ) external view returns (bool);
+        function isInputPublished(
+            uint256 e3Id,
+            bytes32 encryptedVoteHash,
+            bytes32 commitment,
+            address slotAddress,
+            uint40 parentIndexPlusOne
+        ) external view returns (bool);
         function getRoundData(uint256 e3_id) external view returns (uint256 merkleRoot, bytes32 paramsHash, uint256 numOptions, uint8 creditMode, uint256 inputRoot, uint40 numberOfVotes);
     }
 }
 
 sol! {
-    event InputPublished(uint256 indexed e3Id, address indexed slotAddress, bytes32 encryptedVoteCommitment, bytes encryptedVote, uint256 index, uint40 parentIndexPlusOne);
+    event InputPublished(
+        uint256 indexed e3Id,
+        address indexed slotAddress,
+        bytes32 encryptedVoteCommitment,
+        bytes32 encryptedVoteHash,
+        uint32 availabilityBlock,
+        uint128 availabilityLeafIndex,
+        uint256 index,
+        uint40 parentIndexPlusOne
+    );
 }
 
 /// Why a `publishInput` dry run failed.
@@ -158,6 +182,64 @@ impl CRISPContract<CRISPWriteProvider> {
             }
             Err(e) => Err(SimulateError::Provider(e.to_string())),
         }
+    }
+
+    /// Check a ballot before its ciphertext is published to the DA layer.
+    pub async fn validate_input_proof(
+        &self,
+        e3_id: U256,
+        noir_proof: Bytes,
+        slot_address: Address,
+        encrypted_vote_commitment: B256,
+        encrypted_vote_hash: B256,
+        parent_index_plus_one: u64,
+    ) -> Result<(), SimulateError> {
+        let contract = CRISPProgram::new(self.contract_address, self.provider.as_ref());
+        match contract
+            .validateInputProof(
+                e3_id,
+                noir_proof,
+                slot_address,
+                encrypted_vote_commitment,
+                encrypted_vote_hash,
+                alloy::primitives::Uint::<40, 1>::from(parent_index_plus_one),
+            )
+            .call()
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(alloy::contract::Error::TransportError(RpcError::ErrorResp(payload))) => {
+                let message = payload.to_string();
+                if payload.as_revert_data().is_some() || message.to_lowercase().contains("revert") {
+                    Err(SimulateError::Reverted(message))
+                } else {
+                    Err(SimulateError::Provider(message))
+                }
+            }
+            Err(error) => Err(SimulateError::Provider(error.to_string())),
+        }
+    }
+
+    /// Check whether an availability relay already submitted this exact input.
+    pub async fn is_input_published(
+        &self,
+        e3_id: U256,
+        encrypted_vote_hash: B256,
+        commitment: B256,
+        slot_address: Address,
+        parent_index_plus_one: u64,
+    ) -> Result<bool> {
+        let contract = CRISPProgram::new(self.contract_address, self.provider.as_ref());
+        Ok(contract
+            .isInputPublished(
+                e3_id,
+                encrypted_vote_hash,
+                commitment,
+                slot_address,
+                alloy::primitives::Uint::<40, 1>::from(parent_index_plus_one),
+            )
+            .call()
+            .await?)
     }
 
     // publish an input to the CRISPProgram contract

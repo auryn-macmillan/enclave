@@ -1,0 +1,442 @@
+// SPDX-License-Identifier: LGPL-3.0-only
+
+//! Recovery-safe assembly and retrieval for large protocol objects.
+
+use actix::{
+    Actor, ActorContext, ActorFutureExt, AsyncContext, Context, Handler, Message, WrapFuture,
+};
+use alloy::primitives::keccak256;
+use e3_config::chain_config::{DataAvailabilityConfig, DataAvailabilityMode};
+use e3_data_availability::{AvailReader, DataAvailabilityReader, DataReference, HttpObjectReader};
+use e3_events::{
+    prelude::*, BusHandle, CiphertextOutputPublished, CiphertextOutputReferencePublished,
+    CommitteePublicKeyChunkPublished, CommitteePublished, E3id, EventContext, EventPublisher,
+    EventType, InterfoldEvent, InterfoldEventData, Sequenced,
+};
+use e3_fhe_params::BfvPreset;
+use e3_utils::{ArcBytes, MAILBOX_LIMIT};
+use e3_zk_helpers::compute_dkg_pk_commitment_from_public_key_bytes;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Duration,
+};
+use tracing::{info, warn};
+
+const OUTPUT_RETRY_DELAY: Duration = Duration::from_secs(30);
+const MAX_PUBLIC_KEY_BYTES: usize = 512 * 1024;
+const PUBLIC_KEY_CHUNK_BYTES: usize = 90 * 1024;
+
+type CandidateKey = (E3id, String, [u8; 32]);
+
+#[derive(Clone)]
+struct OutputReference {
+    event: CiphertextOutputReferencePublished,
+    cause: EventContext<Sequenced>,
+}
+
+struct KeyAssembly {
+    nodes: Vec<String>,
+    pk_commitment: [u8; 32],
+    total_length: u32,
+    chunks: Vec<Option<ArcBytes>>,
+}
+
+impl KeyAssembly {
+    fn event_shape_is_valid(event: &CommitteePublicKeyChunkPublished) -> bool {
+        let total_length = event.total_length as usize;
+        if total_length == 0 || total_length > MAX_PUBLIC_KEY_BYTES {
+            return false;
+        }
+        let expected_count = total_length.div_ceil(PUBLIC_KEY_CHUNK_BYTES);
+        if expected_count != usize::from(event.chunk_count)
+            || usize::from(event.chunk_index) >= expected_count
+        {
+            return false;
+        }
+        let offset = usize::from(event.chunk_index) * PUBLIC_KEY_CHUNK_BYTES;
+        let expected_length = (total_length - offset).min(PUBLIC_KEY_CHUNK_BYTES);
+        event.chunk.len() == expected_length
+    }
+
+    fn new(event: &CommitteePublicKeyChunkPublished) -> Self {
+        Self {
+            nodes: event.nodes.clone(),
+            pk_commitment: event.pk_commitment,
+            total_length: event.total_length,
+            chunks: vec![None; usize::from(event.chunk_count)],
+        }
+    }
+
+    fn metadata_matches(&self, event: &CommitteePublicKeyChunkPublished) -> bool {
+        self.nodes == event.nodes
+            && self.pk_commitment == event.pk_commitment
+            && self.total_length == event.total_length
+            && self.chunks.len() == usize::from(event.chunk_count)
+    }
+
+    fn insert(&mut self, event: &CommitteePublicKeyChunkPublished) -> bool {
+        if !self.metadata_matches(event) {
+            return false;
+        }
+        let Some(slot) = self.chunks.get_mut(usize::from(event.chunk_index)) else {
+            return false;
+        };
+        if let Some(existing) = slot {
+            return existing[..] == event.chunk[..];
+        }
+        *slot = Some(event.chunk.clone());
+        true
+    }
+
+    fn bytes(&self) -> Option<Vec<u8>> {
+        let mut bytes = Vec::with_capacity(self.total_length as usize);
+        for chunk in &self.chunks {
+            bytes.extend_from_slice(chunk.as_ref()?.as_ref());
+        }
+        (bytes.len() == self.total_length as usize).then_some(bytes)
+    }
+}
+
+#[derive(Message)]
+#[rtype(result = "()")]
+struct RetrieveOutput(E3id);
+
+/// Converts durable transport facts into the existing in-memory protocol events.
+///
+/// Historical replay performs no network I/O and emits no derived events. Once
+/// `EffectsEnabled` arrives, complete key assemblies and unresolved DA references resume.
+pub struct DataAvailabilityCoordinator {
+    chain_id: u64,
+    bus: BusHandle,
+    reader: Option<Arc<dyn DataAvailabilityReader>>,
+    effects_enabled: bool,
+    presets: HashMap<E3id, BfvPreset>,
+    assemblies: HashMap<CandidateKey, KeyAssembly>,
+    selected_candidates: HashMap<(E3id, String), [u8; 32]>,
+    invalid_candidates: HashSet<CandidateKey>,
+    published_keys: HashSet<E3id>,
+    pending_outputs: HashMap<E3id, OutputReference>,
+    resolved_outputs: HashSet<E3id>,
+    retrieving_outputs: HashSet<E3id>,
+}
+
+impl DataAvailabilityCoordinator {
+    pub fn attach(
+        bus: &BusHandle,
+        chain_id: u64,
+        config: Option<&DataAvailabilityConfig>,
+    ) -> anyhow::Result<()> {
+        let reader: Option<Arc<dyn DataAvailabilityReader>> = match config {
+            Some(config) => Some(match config.mode {
+                DataAvailabilityMode::Avail => Arc::new(AvailReader::new(&config.rpc_url)?),
+                DataAvailabilityMode::MockHttp => Arc::new(HttpObjectReader::new(&config.rpc_url)?),
+            }),
+            None => None,
+        };
+        let addr = Self {
+            chain_id,
+            bus: bus.clone(),
+            reader,
+            effects_enabled: false,
+            presets: HashMap::new(),
+            assemblies: HashMap::new(),
+            selected_candidates: HashMap::new(),
+            invalid_candidates: HashSet::new(),
+            published_keys: HashSet::new(),
+            pending_outputs: HashMap::new(),
+            resolved_outputs: HashSet::new(),
+            retrieving_outputs: HashSet::new(),
+        }
+        .start();
+        bus.subscribe_all(
+            &[
+                EventType::E3Requested,
+                EventType::CommitteePublicKeyChunkPublished,
+                EventType::CommitteePublished,
+                EventType::CiphertextOutputReferencePublished,
+                EventType::CiphertextOutputPublished,
+                EventType::EffectsEnabled,
+                EventType::E3RequestComplete,
+                EventType::E3Failed,
+                EventType::Shutdown,
+            ],
+            addr.into(),
+        );
+        Ok(())
+    }
+
+    fn try_publish_keys(&mut self) {
+        if !self.effects_enabled {
+            return;
+        }
+        let keys: Vec<CandidateKey> = self.assemblies.keys().cloned().collect();
+        for key in keys {
+            if self.invalid_candidates.contains(&key) || self.published_keys.contains(&key.0) {
+                continue;
+            }
+            let Some(preset) = self.presets.get(&key.0).copied() else {
+                continue;
+            };
+            let Some(assembly) = self.assemblies.get(&key) else {
+                continue;
+            };
+            let Some(bytes) = assembly.bytes() else {
+                continue;
+            };
+            if keccak256(&bytes).0 != key.2 {
+                warn!(e3_id = %key.0, publisher = %key.1, "Rejecting public-key chunks with a mismatched candidate hash");
+                self.invalid_candidates.insert(key);
+                continue;
+            }
+            let commitment = match compute_dkg_pk_commitment_from_public_key_bytes(&bytes, preset) {
+                Ok(commitment) => commitment,
+                Err(error) => {
+                    warn!(e3_id = %key.0, publisher = %key.1, %error, "Rejecting an invalid serialized committee public key");
+                    self.invalid_candidates.insert(key);
+                    continue;
+                }
+            };
+            if commitment != assembly.pk_commitment {
+                warn!(e3_id = %key.0, publisher = %key.1, "Rejecting a committee public key that does not match the proven DKG commitment");
+                self.invalid_candidates.insert(key);
+                continue;
+            }
+
+            let event = CommitteePublished {
+                e3_id: key.0.clone(),
+                nodes: assembly.nodes.clone(),
+                public_key: ArcBytes::from_bytes(&bytes),
+                proof: ArcBytes::from_bytes(&[]),
+            };
+            self.published_keys.insert(key.0.clone());
+            if let Err(error) = self.bus.publish_without_context(event) {
+                warn!(e3_id = %key.0, %error, "Could not publish the assembled committee public key");
+                self.published_keys.remove(&key.0);
+            } else {
+                info!(e3_id = %key.0, bytes = bytes.len(), "Verified and assembled the chunked committee public key");
+            }
+        }
+    }
+
+    fn start_output(&mut self, e3_id: &E3id, ctx: &mut Context<Self>) {
+        if !self.effects_enabled
+            || self.reader.is_none()
+            || self.resolved_outputs.contains(e3_id)
+            || !self.pending_outputs.contains_key(e3_id)
+            || !self.retrieving_outputs.insert(e3_id.clone())
+        {
+            return;
+        }
+        ctx.notify(RetrieveOutput(e3_id.clone()));
+    }
+
+    fn cleanup(&mut self, e3_id: &E3id) {
+        self.presets.remove(e3_id);
+        self.pending_outputs.remove(e3_id);
+        self.retrieving_outputs.remove(e3_id);
+        self.published_keys.remove(e3_id);
+        self.resolved_outputs.remove(e3_id);
+        self.assemblies.retain(|key, _| &key.0 != e3_id);
+        self.selected_candidates.retain(|key, _| &key.0 != e3_id);
+        self.invalid_candidates.retain(|key| &key.0 != e3_id);
+    }
+}
+
+impl Actor for DataAvailabilityCoordinator {
+    type Context = Context<Self>;
+
+    fn started(&mut self, ctx: &mut Self::Context) {
+        ctx.set_mailbox_capacity(MAILBOX_LIMIT);
+    }
+}
+
+impl Handler<InterfoldEvent> for DataAvailabilityCoordinator {
+    type Result = ();
+
+    fn handle(&mut self, message: InterfoldEvent, ctx: &mut Self::Context) {
+        let (event, cause) = message.into_components();
+        if event
+            .get_e3_id()
+            .is_some_and(|e3_id| e3_id.chain_id() != self.chain_id)
+        {
+            return;
+        }
+        match event {
+            InterfoldEventData::E3Requested(event) => {
+                self.presets.insert(event.e3_id, event.params_preset);
+                self.try_publish_keys();
+            }
+            InterfoldEventData::CommitteePublicKeyChunkPublished(event) => {
+                if !KeyAssembly::event_shape_is_valid(&event) {
+                    warn!(e3_id = %event.e3_id, publisher = %event.publisher, "Ignoring a malformed public-key chunk");
+                    return;
+                }
+                let publisher_key = (event.e3_id.clone(), event.publisher.clone());
+                let selected = self
+                    .selected_candidates
+                    .entry(publisher_key)
+                    .or_insert(event.candidate_hash);
+                if *selected != event.candidate_hash {
+                    warn!(e3_id = %event.e3_id, publisher = %event.publisher, "Ignoring a second public-key candidate from one committee member");
+                    return;
+                }
+                let key = (
+                    event.e3_id.clone(),
+                    event.publisher.clone(),
+                    event.candidate_hash,
+                );
+                if self.invalid_candidates.contains(&key) {
+                    return;
+                }
+                let assembly = self
+                    .assemblies
+                    .entry(key.clone())
+                    .or_insert_with(|| KeyAssembly::new(&event));
+                if !assembly.insert(&event) {
+                    warn!(e3_id = %event.e3_id, publisher = %event.publisher, "Rejecting inconsistent public-key chunks");
+                    self.invalid_candidates.insert(key);
+                }
+                self.try_publish_keys();
+            }
+            // A locally derived publication is durable. Replaying it prevents the coordinator
+            // from appending the same derived event on every restart.
+            InterfoldEventData::CommitteePublished(event) => {
+                self.published_keys.insert(event.e3_id);
+            }
+            InterfoldEventData::CiphertextOutputReferencePublished(event) => {
+                let e3_id = event.e3_id.clone();
+                self.pending_outputs
+                    .insert(e3_id.clone(), OutputReference { event, cause });
+                if self.reader.is_none() && self.effects_enabled {
+                    warn!(%e3_id, "Cannot retrieve a ciphertext output because data availability is not configured");
+                }
+                self.start_output(&e3_id, ctx);
+            }
+            InterfoldEventData::CiphertextOutputPublished(event) => {
+                self.resolved_outputs.insert(event.e3_id.clone());
+                self.pending_outputs.remove(&event.e3_id);
+                self.retrieving_outputs.remove(&event.e3_id);
+            }
+            InterfoldEventData::EffectsEnabled(_) => {
+                self.effects_enabled = true;
+                self.try_publish_keys();
+                for e3_id in self.pending_outputs.keys().cloned().collect::<Vec<_>>() {
+                    self.start_output(&e3_id, ctx);
+                }
+            }
+            InterfoldEventData::E3RequestComplete(event) => self.cleanup(&event.e3_id),
+            InterfoldEventData::E3Failed(event) => self.cleanup(&event.e3_id),
+            InterfoldEventData::Shutdown(_) => ctx.stop(),
+            _ => {}
+        }
+    }
+}
+
+impl Handler<RetrieveOutput> for DataAvailabilityCoordinator {
+    type Result = actix::ResponseActFuture<Self, ()>;
+
+    fn handle(&mut self, message: RetrieveOutput, _: &mut Self::Context) -> Self::Result {
+        let e3_id = message.0;
+        let Some(reader) = self.reader.clone() else {
+            self.retrieving_outputs.remove(&e3_id);
+            return Box::pin(async {}.into_actor(self));
+        };
+        let Some(pending) = self.pending_outputs.get(&e3_id).cloned() else {
+            self.retrieving_outputs.remove(&e3_id);
+            return Box::pin(async {}.into_actor(self));
+        };
+        let reference = DataReference {
+            content_hash: pending.event.content_hash,
+            block_number: pending.event.availability_block,
+            leaf_index: pending.event.availability_leaf_index,
+        };
+
+        Box::pin(
+            async move { reader.retrieve(reference).await }
+                .into_actor(self)
+                .map(move |result, actor, ctx| match result {
+                    Ok(bytes) => {
+                        let event = CiphertextOutputPublished {
+                            e3_id: e3_id.clone(),
+                            ciphertext_output: vec![ArcBytes::from_bytes(&bytes)],
+                            ciphertext_commitment: pending.event.ciphertext_commitment,
+                        };
+                        actor.resolved_outputs.insert(e3_id.clone());
+                        actor.pending_outputs.remove(&e3_id);
+                        actor.retrieving_outputs.remove(&e3_id);
+                        if let Err(error) = actor.bus.publish(event, pending.cause) {
+                            actor.resolved_outputs.remove(&e3_id);
+                            warn!(%e3_id, %error, "Could not publish the retrieved ciphertext output");
+                            ctx.run_later(OUTPUT_RETRY_DELAY, move |actor, ctx| {
+                                actor.start_output(&e3_id, ctx);
+                            });
+                        }
+                    }
+                    Err(error) => {
+                        warn!(%e3_id, %error, "Ciphertext output is not retrievable yet; retrying");
+                        actor.retrieving_outputs.remove(&e3_id);
+                        ctx.run_later(OUTPUT_RETRY_DELAY, move |actor, ctx| {
+                            actor.start_output(&e3_id, ctx);
+                        });
+                    }
+                }),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chunk_event(bytes: &[u8], chunk_index: u16) -> CommitteePublicKeyChunkPublished {
+        let chunk_count = bytes.len().div_ceil(PUBLIC_KEY_CHUNK_BYTES) as u16;
+        let offset = usize::from(chunk_index) * PUBLIC_KEY_CHUNK_BYTES;
+        let end = (offset + PUBLIC_KEY_CHUNK_BYTES).min(bytes.len());
+        CommitteePublicKeyChunkPublished {
+            e3_id: E3id::new("7", 1),
+            publisher: "0x0000000000000000000000000000000000000001".to_owned(),
+            candidate_hash: keccak256(bytes).0,
+            nodes: vec!["0x0000000000000000000000000000000000000001".to_owned()],
+            pk_commitment: [9; 32],
+            chunk_index,
+            chunk_count,
+            total_length: bytes.len() as u32,
+            chunk: ArcBytes::from_bytes(&bytes[offset..end]),
+        }
+    }
+
+    #[test]
+    fn deterministic_chunks_reassemble_in_index_order() {
+        let bytes = (0..(3 * PUBLIC_KEY_CHUNK_BYTES + 17))
+            .map(|index| (index % 251) as u8)
+            .collect::<Vec<_>>();
+        let mut events = (0..bytes.len().div_ceil(PUBLIC_KEY_CHUNK_BYTES) as u16)
+            .map(|index| chunk_event(&bytes, index))
+            .collect::<Vec<_>>();
+        let mut assembly = KeyAssembly::new(&events[0]);
+
+        events.reverse();
+        for event in &events {
+            assert!(KeyAssembly::event_shape_is_valid(event));
+            assert!(assembly.insert(event));
+        }
+
+        assert_eq!(assembly.bytes().as_deref(), Some(bytes.as_slice()));
+    }
+
+    #[test]
+    fn malformed_or_conflicting_chunks_are_rejected() {
+        let bytes = vec![3; PUBLIC_KEY_CHUNK_BYTES + 1];
+        let first = chunk_event(&bytes, 0);
+        let mut malformed = first.clone();
+        malformed.chunk = ArcBytes::from_bytes(&[3; 16]);
+        assert!(!KeyAssembly::event_shape_is_valid(&malformed));
+
+        let mut assembly = KeyAssembly::new(&first);
+        assert!(assembly.insert(&first));
+        let mut conflicting = first;
+        conflicting.chunk = ArcBytes::from_bytes(&vec![4; PUBLIC_KEY_CHUNK_BYTES]);
+        assert!(!assembly.insert(&conflicting));
+    }
+}

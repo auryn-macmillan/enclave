@@ -7,6 +7,7 @@ pragma solidity 0.8.28;
 
 import { IE3Program } from "../interfaces/IE3Program.sol";
 import { IInterfold } from "../interfaces/IInterfold.sol";
+import { IDataAvailabilityVerifier } from "../interfaces/IDataAvailabilityVerifier.sol";
 
 /// @dev Test-only E3 program with controls used to exercise failure and reentrancy paths.
 contract MockE3ProgramHarness is IE3Program {
@@ -83,9 +84,14 @@ contract MockE3ProgramHarness is IE3Program {
         if (address(interfold) != address(0)) {
             interfold.publishCiphertextOutput(
                 e3Id,
-                data,
-                ciphertextCommitment,
-                data
+                abi.encode(
+                    IInterfold.CiphertextOutputReference({
+                        contentHash: keccak256(data),
+                        ciphertextCommitment: ciphertextCommitment,
+                        computeProof: data,
+                        availabilityProof: data
+                    })
+                )
             );
         }
     }
@@ -108,5 +114,22 @@ contract MockE3ProgramHarness is IE3Program {
             );
         }
         return data.length > 0;
+    }
+
+    function verifyDataAvailability(
+        bytes32 expectedContentHash,
+        bytes calldata proof
+    )
+        external
+        pure
+        returns (IDataAvailabilityVerifier.DataReference memory receipt)
+    {
+        require(keccak256(proof) == expectedContentHash, InvalidInput());
+        return
+            IDataAvailabilityVerifier.DataReference({
+                contentHash: expectedContentHash,
+                blockNumber: 1,
+                leafIndex: 1
+            });
     }
 }

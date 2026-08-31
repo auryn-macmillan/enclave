@@ -196,11 +196,25 @@ impl<S: DataStore> CrispE3Repository<S> {
         Ok(e3_crisp)
     }
 
-    pub async fn start_round(&mut self) -> Result<()> {
-        let mut e3_crisp = self.get_crisp().await?;
-        e3_crisp.start_time = chrono::Utc::now().timestamp() as u64;
-        e3_crisp.status = "Active".to_string();
-        self.set_crisp(e3_crisp).await
+    /// Activate a round exactly once after its verified committee key is stored.
+    pub async fn try_start_round(&mut self) -> Result<bool> {
+        let key = self.crisp_key();
+        let mut started = false;
+        let now = chrono::Utc::now().timestamp() as u64;
+        self.store
+            .modify(&key, |current: Option<E3Crisp>| {
+                current.map(|mut round| {
+                    if round.status == "Requested" {
+                        round.start_time = now;
+                        round.status = "Active".to_owned();
+                        started = true;
+                    }
+                    round
+                })
+            })
+            .await
+            .map_err(|error| eyre::eyre!("Could not start CRISP round at '{key}': {error}"))?;
+        Ok(started)
     }
 
     pub async fn insert_ciphertext_input(
@@ -346,6 +360,28 @@ impl<S: DataStore> CrispE3Repository<S> {
         Ok(e3_crisp.status)
     }
 
+    /// Marks a round expired only while it is still waiting for computation.
+    ///
+    /// Deadline callbacks can overlap. A blind status write can move a round from
+    /// `PublishingCiphertext` back to `Expired`, which permits a second compute request.
+    pub async fn try_mark_expired(&mut self) -> Result<bool> {
+        let key = self.crisp_key();
+        let mut marked = false;
+        self.store
+            .modify(&key, |e3_obj: Option<E3Crisp>| {
+                e3_obj.map(|mut e| {
+                    if e.status == "Requested" || e.status == "Active" || e.status == "Expired" {
+                        e.status = "Expired".to_owned();
+                        marked = true;
+                    }
+                    e
+                })
+            })
+            .await
+            .map_err(|_| eyre::eyre!("Could not expire round at '{key}'"))?;
+        Ok(marked)
+    }
+
     /// Moves the round to "Computing", but only if nothing has claimed it yet.
     ///
     /// Returns whether this caller made the transition. One store operation, because `modify` is a
@@ -359,7 +395,7 @@ impl<S: DataStore> CrispE3Repository<S> {
         self.store
             .modify(&key, |e3_obj: Option<E3Crisp>| {
                 e3_obj.map(|mut e| {
-                    if e.status != "Computing" && e.status != "Finished" {
+                    if e.status == "Expired" {
                         e.status = "Computing".to_string();
                         claimed = true;
                     }

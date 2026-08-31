@@ -99,8 +99,55 @@ export const setupAndPublishCommittee = async (
     committeeProof,
     dkgAttestationBundle,
   );
-  await registry.publishCommitteePublicKey(e3Id, publicKey);
+  const publicKeyBytes = ethers.getBytes(publicKey);
+  await registry
+    .connect(operators[0])
+    .publishCommitteePublicKey(
+      e3Id,
+      ethers.keccak256(publicKey),
+      0,
+      1,
+      publicKeyBytes.length,
+      publicKeyBytes,
+    );
 };
+
+/** Build the reference payload accepted by the protocol's DA-only output path. */
+export const ciphertextOutputReference = (
+  ciphertextOutput: string,
+  ciphertextCommitment: string,
+  computeProof: string,
+) => ({
+  contentHash: ethers.keccak256(ciphertextOutput),
+  ciphertextCommitment,
+  computeProof,
+  // MockE3ProgramHarness treats the raw object as its deterministic local receipt.
+  availabilityProof: ciphertextOutput,
+});
+
+/** Publish a test ciphertext through the deterministic local DA verifier. */
+export const publishAvailableCiphertextOutput = (
+  interfold: Interfold,
+  e3Id: number | bigint,
+  ciphertextOutput: string,
+  ciphertextCommitment: string,
+  computeProof: string,
+) =>
+  interfold.publishCiphertextOutput(
+    e3Id,
+    abiCoder.encode(
+      [
+        "tuple(bytes32 contentHash,bytes32 ciphertextCommitment,bytes computeProof,bytes availabilityProof)",
+      ],
+      [
+        ciphertextOutputReference(
+          ciphertextOutput,
+          ciphertextCommitment,
+          computeProof,
+        ),
+      ],
+    ),
+  );
 
 /**
  * Approve USDC for the quoted fee and submit an E3 request.

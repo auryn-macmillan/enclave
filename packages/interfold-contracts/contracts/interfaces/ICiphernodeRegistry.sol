@@ -17,6 +17,7 @@ import { IRandomnessProvider } from "./IRandomnessProvider.sol";
  * and coordinates committee selection for E3 computations
  */
 interface ICiphernodeRegistry {
+    error InvalidPublicKeyChunk();
     function unreleasedCommitteeCount() external view returns (uint256);
     /// @notice Current number of registered ciphernodes.
     function numCiphernodes() external view returns (uint256);
@@ -172,6 +173,22 @@ interface ICiphernodeRegistry {
         bytes proof
     );
 
+    /// @notice Emitted for one deterministic chunk of a serialized committee public key.
+    /// @dev Consumers group chunks by `(e3Id, publisher, candidateHash)`, require a complete
+    ///      sequence, then verify both `keccak256(publicKey) == candidateHash` and the DKG
+    ///      `pkCommitment` before they use the key.
+    event CommitteePublicKeyChunkPublished(
+        uint256 indexed e3Id,
+        address indexed publisher,
+        bytes32 indexed candidateHash,
+        address[] nodes,
+        bytes32 pkCommitment,
+        uint16 chunkIndex,
+        uint16 chunkCount,
+        uint32 totalLength,
+        bytes chunk
+    );
+
     /// @notice This event MUST be emitted when a committee's active status changes.
     /// @param e3Id ID of the E3 for which the committee status changed.
     /// @param active True if committee is now active, false if completed.
@@ -298,6 +315,9 @@ interface ICiphernodeRegistry {
 
     /// @notice Committee has not been published yet for this E3
     error CommitteeNotPublished();
+
+    /// @notice The caller is not one of the selected committee members for this E3.
+    error PublicKeyPublisherNotCommitteeMember();
 
     /// @notice Committee has not been requested yet for this E3
     error CommitteeNotRequested();
@@ -524,14 +544,23 @@ interface ICiphernodeRegistry {
         bytes calldata dkgAttestationBundle
     ) external;
 
-    /// @notice Publishes a serialized public-key candidate for a proven committee.
-    /// @dev Permissionless and repeatable. Consumers MUST validate the candidate
-    ///      against the event's proven `pkCommitment`.
+    /// @notice Publishes one deterministic chunk of a large serialized public-key candidate.
+    /// @dev Repeatable by selected committee members. The registry does not assemble or store the
+    ///      key. Consumers accept at most one candidate per member and verify it against the proven
+    ///      DKG commitment.
     /// @param e3Id ID of the E3 whose committee proof has been published.
-    /// @param publicKey Non-empty serialized public-key candidate.
+    /// @param candidateHash Keccak-256 of the complete serialized public key.
+    /// @param chunkIndex Zero-based index of this chunk.
+    /// @param chunkCount Total number of chunks in the candidate.
+    /// @param totalLength Total byte length of the complete candidate.
+    /// @param chunk Exact bytes for this chunk.
     function publishCommitteePublicKey(
         uint256 e3Id,
-        bytes calldata publicKey
+        bytes32 candidateHash,
+        uint16 chunkIndex,
+        uint16 chunkCount,
+        uint32 totalLength,
+        bytes calldata chunk
     ) external;
 
     /// @notice Release committee collateral after the E3 completes or fails.

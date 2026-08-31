@@ -58,6 +58,8 @@ pub struct JsonResponse {
 #[serde(rename_all = "snake_case")]
 pub enum VoteResponseStatus {
     Success,
+    PendingAvailability,
+    ReadyForSubmission,
     FailedBroadcast,
 }
 
@@ -65,6 +67,8 @@ pub enum VoteResponseStatus {
 pub struct VoteResponse {
     pub status: VoteResponseStatus,
     pub tx_hash: Option<String>,
+    pub job_id: Option<String>,
+    pub encoded_proof: Option<String>,
     pub message: Option<String>,
 }
 

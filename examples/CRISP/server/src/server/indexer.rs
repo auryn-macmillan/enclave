@@ -10,6 +10,7 @@ use crate::server::token_holders::{
     get_mock_token_holders, try_fetch_requester_census, EtherscanClient,
 };
 use crate::server::{
+    data_availability::{AvailabilityService, AvailableInputReference},
     models::{CensusMode, CreditMode, CurrentRound, CustomParams, TokenHolder},
     program_server_request::{run_compute, RoundInputs},
     repo::{CrispE3Repository, CurrentRoundRepository, InputSnapshot},
@@ -26,18 +27,20 @@ use e3_sdk::{
     evm_helpers::{
         contracts::{InterfoldRead, ReadWrite},
         events::{
-            CiphertextOutputPublished, CommitteePublished, E3Requested, PlaintextOutputPublished,
+            CiphertextOutputPublished, CiphertextOutputReferencePublished,
+            CommitteePublicKeyChunkPublished, CommitteePublished, E3Requested,
+            PlaintextOutputPublished,
         },
         retry::call_with_retry,
     },
-    indexer::{DataStore, InterfoldIndexer, SharedStore},
+    indexer::{DataStore, IndexerContext, InterfoldIndexer, SharedStore},
 };
 use evm_helpers::{CRISPContractFactory, InputPublished};
 use eyre::Context;
 use log::{error, info, warn};
 use num_bigint::BigUint;
-use std::error::Error;
 use std::time::Duration;
+use std::{error::Error, sync::Arc};
 use tokio::time::sleep;
 
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
@@ -488,14 +491,11 @@ async fn handle_e3_input_deadline_expiration(
     let mut repo = CrispE3Repository::new(store.clone(), &e3_id);
     let e3: e3_sdk::indexer::models::E3 = repo.get_e3().await?;
 
-    // A cheap skip for a retry pass over a round that already moved on, so it does not sit through
-    // the indexer wait below. Not the safety barrier — `try_claim_computing` is, further down.
-    let status = repo.get_status().await?;
-    if status == "Computing" || status == "Finished" {
+    // This transition is atomic. A delayed callback must not move a round from
+    // `PublishingCiphertext` or `CiphertextPublished` back to `Expired` and compute it twice.
+    if !repo.try_mark_expired().await? {
         return Ok(());
     }
-
-    repo.update_status("Expired").await?;
 
     let voter_count = repo.get_vote_count().await?;
 
@@ -633,6 +633,27 @@ pub async fn register_ciphertext_output_published(
     Ok(indexer)
 }
 
+pub async fn register_ciphertext_output_reference_published(
+    indexer: InterfoldIndexer<impl DataStore, ReadWrite>,
+) -> Result<InterfoldIndexer<impl DataStore, ReadWrite>> {
+    indexer
+        .add_event_handler(move |event: CiphertextOutputReferencePublished, ctx| {
+            let store = ctx.store();
+            let e3_id = event.e3Id.to_string();
+            let mut repo = CrispE3Repository::new(store, &e3_id);
+            async move {
+                info!(
+                    "[e3_id={}] Handling CiphertextOutputReferencePublished",
+                    e3_id
+                );
+                repo.update_status("CiphertextPublished").await?;
+                Ok(())
+            }
+        })
+        .await;
+    Ok(indexer)
+}
+
 pub async fn register_plaintext_output_published(
     indexer: InterfoldIndexer<impl DataStore, ReadWrite>,
 ) -> Result<InterfoldIndexer<impl DataStore, ReadWrite>> {
@@ -667,48 +688,72 @@ pub async fn register_plaintext_output_published(
 pub async fn register_committee_published(
     indexer: InterfoldIndexer<impl DataStore, ReadWrite>,
 ) -> Result<InterfoldIndexer<impl DataStore, ReadWrite>> {
-    // CommitteePublished
     indexer
-        .add_event_handler(move |event: CommitteePublished, ctx| {
-            async move {
-                let store = ctx.store();
-                let e3_id = event.e3Id.to_string();
-                let mut repo = CrispE3Repository::new(store.clone(), &e3_id);
-                let mut current_round_repo = CurrentRoundRepository::new(store);
-                info!("[e3_id={}] Handling CommitteePublished", e3_id);
-                // Get current time
-                let now = get_current_timestamp_rpc().await?;
-                info!("[e3_id={}] Current time: {}", event.e3Id, now);
-
-                repo.start_round().await?;
-
-                current_round_repo
-                    .set_current_round(CurrentRound { id: e3_id.clone() })
-                    .await?;
-
-                let expiration = repo.get_input_deadline().await?;
-
-                info!("[e3_id={}] Registering hook for {}", e3_id, expiration);
-                // Registered once per offset, up front. A pass that finds the indexer behind
-                // returns without computing, and `do_later` has already dropped that callback, so
-                // the round would otherwise stay "Expired" for good. Every pass after the first
-                // returns immediately once the round is computing or finished.
-                for at in std::iter::once(expiration).chain(
-                    DEADLINE_RETRY_OFFSETS
-                        .iter()
-                        .map(|offset| expiration + offset),
-                ) {
-                    let e3_id = e3_id.clone();
-                    ctx.do_later(at, move |_, ctx| {
-                        handle_e3_input_deadline_expiration(e3_id.clone(), ctx.store())
-                    });
-                }
-
-                Ok(())
-            }
+        .add_event_handler(move |event: CommitteePublished, ctx| async move {
+            activate_round_when_key_is_stored(event.e3Id.to_string(), ctx).await
         })
         .await;
     Ok(indexer)
+}
+
+pub async fn register_committee_public_key_chunks(
+    indexer: InterfoldIndexer<impl DataStore, ReadWrite>,
+) -> Result<InterfoldIndexer<impl DataStore, ReadWrite>> {
+    indexer
+        .add_event_handler(
+            move |event: CommitteePublicKeyChunkPublished, ctx| async move {
+                // Do not assume chunks arrive in index order. The normal writer sends them in
+                // order, but the contract deliberately permits a committee member to repair any
+                // missing chunk. Whichever event completes the generic indexer's assembly must be
+                // able to activate the round.
+                activate_round_when_key_is_stored(event.e3Id.to_string(), ctx).await
+            },
+        )
+        .await;
+    Ok(indexer)
+}
+
+async fn activate_round_when_key_is_stored<S: DataStore>(
+    e3_id: String,
+    ctx: Arc<IndexerContext<S, ReadWrite>>,
+) -> eyre::Result<()> {
+    // The generic indexer's key validator handles the same log concurrently on the live path.
+    // Wait only for local storage; no RPC call runs in this loop.
+    for _ in 0..120 {
+        let store = ctx.store();
+        let mut repo = CrispE3Repository::new(store.clone(), &e3_id);
+        if repo.get_e3().await.is_ok() {
+            let started = repo.try_start_round().await?;
+            if !started {
+                return Ok(());
+            }
+
+            CurrentRoundRepository::new(store)
+                .set_current_round(CurrentRound { id: e3_id.clone() })
+                .await?;
+            info!("[e3_id={}] Verified committee key is ready", e3_id);
+
+            let expiration = repo.get_input_deadline().await?;
+            for at in std::iter::once(expiration).chain(
+                DEADLINE_RETRY_OFFSETS
+                    .iter()
+                    .map(|offset| expiration + offset),
+            ) {
+                let scheduled_e3_id = e3_id.clone();
+                ctx.do_later(at, move |_, ctx| {
+                    handle_e3_input_deadline_expiration(scheduled_e3_id.clone(), ctx.store())
+                });
+            }
+            return Ok(());
+        }
+        sleep(Duration::from_millis(250)).await;
+    }
+
+    warn!(
+        "[e3_id={}] Ignoring public-key transport that did not produce a verified key",
+        e3_id
+    );
+    Ok(())
 }
 
 pub async fn get_current_timestamp_rpc() -> eyre::Result<u64> {
@@ -723,39 +768,167 @@ pub async fn get_current_timestamp_rpc() -> eyre::Result<u64> {
 
 pub async fn register_input_published(
     indexer: InterfoldIndexer<impl DataStore, ReadWrite>,
+    availability: Arc<AvailabilityService>,
 ) -> Result<InterfoldIndexer<impl DataStore, ReadWrite>> {
     indexer
         .add_event_handler(move |event: InputPublished, ctx| {
+            let availability = Arc::clone(&availability);
             let e3_id = event.e3Id.to_string();
             let store = ctx.store();
-            let mut repo = CrispE3Repository::new(store.clone(), &e3_id);
             async move {
-                println!(
-                    "InputPublished: e3_id={}, index={}, data=0x{}...",
-                    event.e3Id,
-                    event.index,
-                    hex::encode(&event.encryptedVote[..8.min(event.encryptedVote.len())])
-                );
-
-                // Read here so the usability of these bytes is decided once, on the write path,
-                // instead of on every `state/previous-ciphertext` call.
-                let e3 = repo.get_e3().await?;
-                let params = decode_bfv_params_arc(&e3.e3_params)?;
-
-                repo.insert_ciphertext_input(
-                    event.encryptedVote.to_vec(),
-                    event.index.to::<u64>(),
-                    event.encryptedVoteCommitment.into(),
-                    event.slotAddress.into(),
-                    event.parentIndexPlusOne.to::<u64>(),
-                    &params,
+                let reference = AvailableInputReference {
+                    e3_id,
+                    content_hash: event.encryptedVoteHash.0,
+                    availability_block: event.availabilityBlock,
+                    availability_leaf_index: event.availabilityLeafIndex,
+                    index: event.index.to::<u64>(),
+                    commitment: event.encryptedVoteCommitment.0,
+                    slot: event.slotAddress.into(),
+                    parent_index_plus_one: event.parentIndexPlusOne.to::<u64>(),
+                };
+                availability
+                    .record_input_reference(&reference)
+                    .map_err(|error| eyre::eyre!(error.to_string()))?;
+                match store_available_input(
+                    store.clone(),
+                    Arc::clone(&availability),
+                    reference.clone(),
                 )
-                .await?;
+                .await
+                {
+                    Ok(()) => {
+                        let e3_id = reference.e3_id.clone();
+                        tokio::spawn(resume_expired_round(e3_id, store));
+                    }
+                    Err(error) => {
+                        warn!(
+                            "[e3_id={}] Input {} is committed but not retrievable yet: {}",
+                            reference.e3_id, reference.index, error
+                        );
+                    }
+                }
                 Ok(())
             }
         })
         .await;
     Ok(indexer)
+}
+
+async fn store_available_input<S: DataStore>(
+    store: SharedStore<S>,
+    availability: Arc<AvailabilityService>,
+    reference: AvailableInputReference,
+) -> Result<()> {
+    let ciphertext = availability.retrieve(reference.data_reference()).await?;
+    let mut repo = CrispE3Repository::new(store, &reference.e3_id);
+    let e3 = repo.get_e3().await?;
+    let params = decode_bfv_params_arc(&e3.e3_params)?;
+    repo.insert_ciphertext_input(
+        ciphertext,
+        reference.index,
+        reference.commitment,
+        reference.slot,
+        reference.parent_index_plus_one,
+        &params,
+    )
+    .await?;
+    availability.complete_input_reference(&reference)?;
+    info!(
+        "[e3_id={}] Retrieved input {} from data availability",
+        reference.e3_id, reference.index
+    );
+    Ok(())
+}
+
+async fn resume_expired_round<S: DataStore>(e3_id: String, store: SharedStore<S>) {
+    let repo = CrispE3Repository::new(store.clone(), &e3_id);
+    let Ok(e3) = repo.get_e3().await else {
+        return;
+    };
+    let Ok(now) = get_current_timestamp_rpc().await else {
+        return;
+    };
+    if now >= e3.input_window[1] {
+        if let Err(error) = handle_e3_input_deadline_expiration(e3_id.clone(), store).await {
+            warn!(
+                "[e3_id={}] Could not resume computation after retrieving an input: {}",
+                e3_id, error
+            );
+        }
+    }
+}
+
+async fn recover_round_deadlines<S: DataStore>(store: SharedStore<S>) {
+    let ids = match CurrentRoundRepository::new(store.clone())
+        .get_round_ids()
+        .await
+    {
+        Ok(ids) => ids,
+        Err(error) => {
+            warn!("Could not recover CRISP round deadlines: {error}");
+            return;
+        }
+    };
+
+    for e3_id in ids {
+        let round_store = store.clone();
+        tokio::spawn(async move {
+            let repo = CrispE3Repository::new(round_store.clone(), &e3_id);
+            let Ok(status) = repo.get_status().await else {
+                return;
+            };
+            if status != "Requested" && status != "Active" && status != "Expired" {
+                return;
+            }
+            let Ok(e3) = repo.get_e3().await else {
+                return;
+            };
+            loop {
+                match get_current_timestamp_rpc().await {
+                    Ok(now) if now >= e3.input_window[1] => {
+                        if let Err(error) =
+                            handle_e3_input_deadline_expiration(e3_id.clone(), round_store.clone())
+                                .await
+                        {
+                            warn!(
+                                "[e3_id={}] Recovered deadline handler could not start computation: {}",
+                                e3_id, error
+                            );
+                        }
+                        break;
+                    }
+                    Ok(_) | Err(_) => sleep(Duration::from_secs(30)).await,
+                }
+            }
+        });
+    }
+}
+
+async fn recover_available_inputs<S: DataStore>(
+    store: SharedStore<S>,
+    availability: Arc<AvailabilityService>,
+) {
+    loop {
+        for reference in availability.pending_input_references() {
+            match store_available_input(store.clone(), Arc::clone(&availability), reference.clone())
+                .await
+            {
+                Ok(()) => {
+                    // The scheduled deadline retries are finite. If Avail or its RPC was down
+                    // through all of them, successful background retrieval must wake computation
+                    // instead of leaving an otherwise complete round stranded forever.
+                    tokio::spawn(resume_expired_round(reference.e3_id.clone(), store.clone()));
+                }
+                Err(error) => {
+                    warn!(
+                        "[e3_id={}] Input {} retrieval will retry: {}",
+                        reference.e3_id, reference.index, error
+                    );
+                }
+            }
+        }
+        sleep(Duration::from_secs(30)).await;
+    }
 }
 
 /// Persist every log from a watched contract, so `/chain/logs` can answer from the store.
@@ -829,6 +1002,7 @@ pub async fn start_indexer(
     registry_address: &str,
     crisp_address: &str,
     store: SharedStore<impl DataStore>,
+    availability: Arc<AvailabilityService>,
     private_key: &str,
     index_start_block: Option<u64>,
     index_chunk_size: Option<u64>,
@@ -854,16 +1028,24 @@ pub async fn start_indexer(
         }
     }
 
+    let recovery_store = store.clone();
+    tokio::spawn(recover_available_inputs(
+        recovery_store,
+        Arc::clone(&availability),
+    ));
     let crisp_indexer =
         InterfoldIndexer::new_with_write_contract(url, &watched, store, private_key).await?;
     info!("CRISP: Indexer registering handlers...");
 
     let crisp_indexer = register_e3_requested(crisp_indexer).await?;
     let crisp_indexer = register_ciphertext_output_published(crisp_indexer).await?;
+    let crisp_indexer = register_ciphertext_output_reference_published(crisp_indexer).await?;
     let crisp_indexer = register_plaintext_output_published(crisp_indexer).await?;
     let crisp_indexer = register_committee_published(crisp_indexer).await?;
-    let crisp_indexer = register_input_published(crisp_indexer).await?;
+    let crisp_indexer = register_committee_public_key_chunks(crisp_indexer).await?;
+    let crisp_indexer = register_input_published(crisp_indexer, availability).await?;
     let crisp_indexer = register_log_index(crisp_indexer, index_log_contracts).await?;
+    tokio::spawn(recover_round_deadlines(crisp_indexer.get_store()));
     info!("CRISP: Indexer finished registering handlers!");
 
     // Resolve where indexing will ACTUALLY begin, ONCE, and drive both the backfill configuration

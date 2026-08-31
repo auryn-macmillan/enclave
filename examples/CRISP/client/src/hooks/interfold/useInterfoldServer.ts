@@ -28,17 +28,39 @@ const InterfoldEndpoints = {
   GetWebResult: `${INTERFOLD_API}/state/result`,
   GetWebAllResult: `${INTERFOLD_API}/state/all`,
   BroadcastVote: `${INTERFOLD_API}/voting/broadcast`,
+  GetVoteAvailability: `${INTERFOLD_API}/voting/availability`,
   GetVoteStatus: `${INTERFOLD_API}/voting/status`,
   GetEligibleVoters: `${INTERFOLD_API}/state/eligible-addresses`,
   GetMerkleLeaves: `${INTERFOLD_API}/state/token-holders`,
 } as const
 
 export const useInterfoldServer = () => {
-  const { GetCurrentRound, GetWebAllResult, BroadcastVote, GetRoundStateLite, GetWebResult, GetVoteStatus } = InterfoldEndpoints
+  const { GetCurrentRound, GetWebAllResult, BroadcastVote, GetVoteAvailability, GetRoundStateLite, GetWebResult, GetVoteStatus } =
+    InterfoldEndpoints
   const { fetchData, isLoading } = useApi()
   const getCurrentRound = () => fetchData<CurrentRound, { requesters: string[] }>(GetCurrentRound, 'post', { requesters: ROUND_REQUESTERS })
   const getRoundStateLite = (round_id: string) => fetchData<VoteStateLite, { round_id: string }>(GetRoundStateLite, 'post', { round_id })
-  const broadcastVote = (vote: BroadcastVoteRequest) => fetchData<BroadcastVoteResponse, BroadcastVoteRequest>(BroadcastVote, 'post', vote)
+  const waitForVoteAvailability = async (jobId: string): Promise<BroadcastVoteResponse | undefined> => {
+    for (;;) {
+      const status = await fetchData<BroadcastVoteResponse>(`${GetVoteAvailability}/${encodeURIComponent(jobId)}`)
+      if (status && status.status !== 'pending_availability') return status
+      await new Promise((resolve) => setTimeout(resolve, 15_000))
+    }
+  }
+  const broadcastVote = async (
+    vote: BroadcastVoteRequest,
+    onJobCreated?: (jobId: string) => void,
+  ): Promise<BroadcastVoteResponse | undefined> => {
+    const initial = await fetchData<BroadcastVoteResponse, BroadcastVoteRequest>(BroadcastVote, 'post', vote)
+    if (!initial) return undefined
+    if (initial.job_id) onJobCreated?.(initial.job_id)
+    if (initial.status !== 'pending_availability') return initial
+    if (!initial.job_id) throw new Error('Availability job response is missing job_id')
+
+    // VectorX proves a range of Avail blocks rather than one transaction. Keep the browser on the
+    // durable server job until the receipt is ready; local mock mode normally returns immediately.
+    return waitForVoteAvailability(initial.job_id)
+  }
   const getWebResult = () =>
     fetchData<PollRequestResult[], { requesters: string[] }>(GetWebAllResult, 'post', { requesters: ROUND_REQUESTERS })
   const getWebResultByRound = (round_id: string) => fetchData<PollRequestResult, { round_id: string }>(GetWebResult, 'post', { round_id })
@@ -55,6 +77,7 @@ export const useInterfoldServer = () => {
     getCurrentRound,
     getRoundStateLite,
     broadcastVote,
+    waitForVoteAvailability,
     getVoteStatus,
     getEligibleVoters,
     getMerkleLeaves,

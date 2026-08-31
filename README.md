@@ -297,8 +297,10 @@ sequenceDiagram
     Interfold->>Interfold: Store input
     Interfold-->>Users: success
 
-    Users->>Interfold: publishCiphertextOutput(e3Id, data)
-    Interfold->>DecryptionVerifier: verify(e3Id, data)
+    Users->>Avail: submit_data(aggregateCiphertext)
+    Users->>Interfold: publishCiphertextOutput(e3Id, reference + VectorX receipt)
+    Interfold->>E3Program: verifyDataAvailability(contentHash, receipt)
+    Interfold->>DecryptionVerifier: verify(e3Id, contentHash + proof)
     DecryptionVerifier-->>Interfold: output, success
     Interfold->>Interfold: Store ciphertextOutput
     Interfold-->>Users: success

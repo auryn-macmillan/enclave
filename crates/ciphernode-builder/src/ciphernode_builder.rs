@@ -32,9 +32,9 @@ use e3_events::{
 use e3_evm::{
     ensure_node_release, fetch_accusation_vote_validity, fetch_randomness_providers,
     BondingRegistrySolReader, CiphernodeRegistrySol, CiphernodeRegistrySolReader,
-    EvmChainGatewayHandle, InterfoldSolReader, InterfoldSolWriter, ProviderConfig,
-    RandomnessProviderSolReader, SlashingManagerSolReader, SlashingManagerSolWriter,
-    SlashingWriterRepositoryFactory,
+    DataAvailabilityCoordinator, EvmChainGatewayHandle, InterfoldSolReader, InterfoldSolWriter,
+    ProviderConfig, RandomnessProviderSolReader, SlashingManagerSolReader,
+    SlashingManagerSolWriter, SlashingWriterRepositoryFactory,
 };
 use e3_fhe::ext::FheExtension;
 use e3_keyshare::ext::ThresholdKeyshareExtension;
@@ -1232,6 +1232,13 @@ async fn setup_evm_system(
     for chain in chains.iter().filter(|chain| chain.enabled.unwrap_or(true)) {
         let provider = provider_cache.ensure_read_provider(chain).await?;
         let chain_id = provider.chain_id();
+        if contract_components.interfold && chain.data_availability.is_none() {
+            anyhow::bail!(
+                "chain '{}' has Interfold enabled but no data_availability reader; protocol v3 nodes must be able to retrieve proof-backed ciphertext outputs",
+                chain.name
+            );
+        }
+        DataAvailabilityCoordinator::attach(bus, chain_id, chain.data_availability.as_ref())?;
         if contract_components.ciphernode_registry {
             validate_vrf_chain_id(chain_id)?;
         }
@@ -1462,6 +1469,7 @@ mod tests {
             },
             finalization_ms,
             chain_id: Some(1),
+            data_availability: None,
         }
     }
 

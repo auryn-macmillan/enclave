@@ -449,7 +449,7 @@ design citation alone does not establish current runtime behavior.
   `policy()` beside `fhe_processor`. — `flow-trace/04`
 - **CRISP binds bytes, commitment, slot and parent into its leaf, and selects the end of each slot's
   chain.** `CRISPProgram.inputLeaf` is
-  `sha256(sha256(bytes) || commitment || slot || parentIndexPlusOne) mod SNARK_SCALAR_FIELD` and
+  `sha256(keccak256(bytes) || commitment || slot || parentIndexPlusOne) mod SNARK_SCALAR_FIELD` and
   `e3_user_program::policy` rebuilds it byte for byte; a divergence makes every root mismatch and
   nothing else would catch it, so both sides pin the same vector (`program/tests/input_leaf.rs`,
   `tests/input-leaf.test.ts`) and `onchain_root_agreement.rs` asserts Rust reproduces a root a real

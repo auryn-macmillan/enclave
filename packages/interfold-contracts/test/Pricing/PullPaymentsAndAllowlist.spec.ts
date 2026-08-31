@@ -15,6 +15,7 @@ import {
   encodeMockDkgProof,
   ethers,
   networkHelpers,
+  publishAvailableCiphertextOutput,
   PROOF as proof,
   setPricingConfig,
 } from "../fixtures";
@@ -154,7 +155,8 @@ describe("Interfold — pull payments + fee-token allow-list", function () {
       operator3,
     ]);
     await time.increase(inputWindowDuration + 200);
-    await interfold.publishCiphertextOutput(
+    await publishAvailableCiphertextOutput(
+      interfold,
       e3Id,
       data,
       ethers.keccak256(data),
@@ -209,7 +211,8 @@ describe("Interfold — pull payments + fee-token allow-list", function () {
         [ctx.operator1, ctx.operator2, ctx.operator3],
       );
       await time.increase(inputWindowDuration + 200);
-      await interfold.publishCiphertextOutput(
+      await publishAvailableCiphertextOutput(
+        interfold,
         e3Id2,
         data,
         ethers.keccak256(data),

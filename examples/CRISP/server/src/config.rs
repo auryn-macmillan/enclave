@@ -26,6 +26,24 @@ pub struct Config {
     #[serde(default)]
     pub crisp_voting_token: Option<String>,
     pub chain_id: u64,
+    /// `mock` for deterministic local tests or `avail` for VectorX-backed publication.
+    #[serde(default)]
+    pub data_availability_mode: Option<String>,
+    #[serde(default)]
+    pub avail_rpc_url: Option<String>,
+    #[serde(default)]
+    pub avail_bridge_api_url: Option<String>,
+    #[serde(default)]
+    pub avail_app_id: Option<u32>,
+    /// Minimum time that must remain before the Ethereum input deadline when an Avail
+    /// publication starts. VectorX range proofs are asynchronous and commonly take about two
+    /// hours, so production defaults to three hours of headroom.
+    #[serde(default)]
+    pub avail_proof_lead_seconds: Option<u64>,
+    /// Avail signer URI. This field is intentionally excluded from debug output with the rest of
+    /// this configuration.
+    #[serde(default)]
+    pub avail_seed: Option<String>,
     pub cron_api_key: String,
     // E3 parameters
     pub e3_param_set: u8,      // 0=InsecureThreshold512, 1=SecureThreshold8192
@@ -78,6 +96,16 @@ pub struct Config {
 }
 
 impl Config {
+    pub fn data_availability_mode(&self) -> String {
+        self.data_availability_mode.clone().unwrap_or_else(|| {
+            if matches!(self.chain_id, 1_337 | 31_337) {
+                "mock".to_owned()
+            } else {
+                "avail".to_owned()
+            }
+        })
+    }
+
     /// Base URL for outbound HTTP clients (program-server webhooks, CLI, cron).
     ///
     /// `0.0.0.0` / `::` are bind addresses only; connecting to them fails (e.g. macOS `EADDRNOTAVAIL`).
@@ -101,7 +129,34 @@ impl Config {
             .build()?
             .try_deserialize()?;
         Self::validate_e3_param_set(config.chain_id, config.e3_param_set)?;
+        Self::validate_data_availability(
+            &config.data_availability_mode(),
+            config.e3_duration,
+            config.avail_proof_lead_seconds.unwrap_or(10_800),
+        )?;
         Ok(config)
+    }
+
+    fn validate_data_availability(
+        mode: &str,
+        input_duration: u64,
+        proof_lead: u64,
+    ) -> Result<(), ConfigError> {
+        if mode != "avail" {
+            return Ok(());
+        }
+        if proof_lead < 7_200 {
+            return Err(ConfigError::Message(
+                "AVAIL_PROOF_LEAD_SECONDS must be at least 7200".to_owned(),
+            ));
+        }
+        if input_duration < proof_lead.saturating_add(3_600) {
+            return Err(ConfigError::Message(format!(
+                "E3_DURATION must leave one hour for voting before the Avail proof lead; expected at least {}, got {input_duration}",
+                proof_lead.saturating_add(3_600)
+            )));
+        }
+        Ok(())
     }
 
     fn validate_e3_param_set(chain_id: u64, param_set: u8) -> Result<(), ConfigError> {
@@ -141,5 +196,12 @@ mod tests {
     #[test]
     fn rejects_unknown_parameter_sets() {
         assert!(Config::validate_e3_param_set(31_337, 2).is_err());
+    }
+
+    #[test]
+    fn avail_requires_a_window_long_enough_for_vectorx() {
+        assert!(Config::validate_data_availability("mock", 300, 10_800).is_ok());
+        assert!(Config::validate_data_availability("avail", 14_400, 10_800).is_ok());
+        assert!(Config::validate_data_availability("avail", 10_800, 10_800).is_err());
     }
 }

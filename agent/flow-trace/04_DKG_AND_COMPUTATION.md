@@ -691,8 +691,9 @@ phase.
   │  └─ If that transaction is mined with a failed receipt, the writer reads the
   │     commitment again. An equal commitment from another aggregator completes
   │     the step; a different commitment stays an error
-  └─ Calls contract.publishCommitteePublicKey(e3_id, publicKey) after the
-     commitment is available, including after restart
+  └─ Splits the serialized key into deterministic 90 KiB chunks and calls
+     contract.publishCommitteePublicKey(e3_id, candidateHash, index, count,
+     totalLength, chunk) for every chunk after the commitment is available
      → A terminal result clears the intent; a retryable failure keeps it and retries after 30s
      → A restart replays the intent, so an unfinished publication still reaches the chain.
        E3RequestComplete that arrives before EffectsEnabled comes from that same replay and
@@ -742,12 +743,11 @@ phase.
         │  │    8. Emit CommitteeProofPublished(                │
         │  │         e3Id, c.topNodes, pkCommitment, proof)     │
         │  │                                                     │
-        │  │  publishCommitteePublicKey(e3Id, publicKey) {      │
+        │  │  publishCommitteePublicKey(e3Id, hash, i, n, len, chunk) { │
         │  │    1. require the proven commitment                │
-        │  │    2. require 0 < publicKey.length <= 256 KiB      │
-        │  │    3. Emit CommitteePublished with the candidate,  │
-        │  │       stored commitment, and empty compatibility   │
-        │  │       proof field                                  │
+        │  │    2. require caller is a selected committee member│
+        │  │    3. require len <= 512 KiB and canonical 90 KiB chunks │
+        │  │    4. Emit CommitteePublicKeyChunkPublished        │
         │  │  }                                                  │
         │  └─────────────────────────────────────────────────────┘
 ```
@@ -763,17 +763,15 @@ an attestation. The registry uses the same frozen verifier when the committee pu
 attestation from another registry or verifier therefore fails even when both registries use the same
 E3 ID and committee.
 
-The serialized `publicKey` event field is a transport hint, not on-chain authority. Proof-backed
-committee publication does not accept it. A separate permissionless function emits bounded key
-candidates and remains usable after an invalid candidate, so a front-run transaction cannot consume
-the only transport slot. Before `e3-indexer` stores it in `E3.committee_public_key`, it decodes the
-BFV key, recomputes the circuit's public-key commitment using the request's parameter set, and
-requires equality with the event's on-chain `pkCommitment`. TypeScript event consumers receive the
-same `pkCommitment` and use `InterfoldSDK.validatePublicKeyCommitment()` before accepting the bytes;
-the default application does this before advancing to encryption. Malformed bytes or bytes for a
-different key fail closed and never reach first-party encryption clients. Production verifies the
-C5-backed final DKG proof on-chain; the explicit test/CI skip mode works only with mock verifiers
-that trust its placeholder.
+The serialized key is transported in Ethereum event chunks; it is not on-chain authority. Only a
+selected committee member can emit chunks, and consumers accept the first candidate hash from each
+member. The ciphernode coordinator and `e3-indexer` group the canonical chunks by E3, publisher, and
+candidate hash. They require a complete sequence, check `keccak256(serializedKey) == candidateHash`,
+decode the BFV key, recompute the circuit's public-key commitment with the request-time parameter
+set, and require equality with the proven on-chain `pkCommitment`. Only then do they produce the
+existing `CommitteePublished` runtime event or store the key for encryption. Invalid candidates do
+not consume another committee member's candidate. Production also verifies the C5-backed final DKG
+proof on-chain; the explicit test/CI skip mode works only with mock verifiers.
 
 > **C-08 (BfvPkVerifier domain binding) — implemented** The wrapper exposes a
 > `verify(e3Id, committeeRoot, sortedNodes, pkCommitment, committeeHash, proof)` signature.
@@ -806,9 +804,13 @@ comparison.
 ```
 Data providers submit encrypted inputs:
 │
-└─ e3Program.publishInput(e3Id, encryptedData)
+├─ Publish the exact encrypted bytes to Avail with submit_data
+├─ Wait for VectorX to anchor that Avail block on Ethereum
+└─ e3Program.publishInput(e3Id, encodedReference)
    → Must be within inputWindow [start, end]
    → Encrypted under the committee's aggregate public key
+   → Verifies the Avail receipt for keccak256(encryptedData)
+   → Verifies the Noir proof against the same hash and SAFE commitment
    → Only M+1 committee members can collectively decrypt
 ```
 
@@ -869,11 +871,13 @@ are unaffected: `TryConvertFrom` expands the seed into `c[1]` before the convert
 ```
 Compute provider runs computation on encrypted data:
 │
-└─ Interfold.publishCiphertextOutput(e3Id, ciphertextOutput, ciphertextCommitment, proof)
+├─ Publish the aggregate ciphertext bytes to Avail
+├─ Wait for the VectorX proof
+└─ Interfold.publishCiphertextOutput(e3Id, encodedOutputReference)
     │
     │  ┌─── ON-CHAIN (Interfold.sol) ─────────────────────────────┐
     │  │                                                         │
-│  │  publishCiphertextOutput(e3Id, output, commitment, proof) { │
+│  │  publishCiphertextOutput(e3Id, encodedReference) {        │
     │  │    0. enter the shared publication reentrancy guard      │
     │  │    1. require(stage == KeyPublished)                    │
     │  │    2. require(block.timestamp <= computeDeadline)       │
@@ -883,9 +887,8 @@ Compute provider runs computation on encrypted data:
     │  │       → Can only publish once                           │
     │  │    5. require(activeCount >= threshold[0])              │
     │  │       → The request-time committee is still viable      │
-│  │    6. Save output hash and SAFE commitment               │
-│  │       Set stage and decryption deadline                  │
-│  │       → A later revert restores all prior state          │
+│  │    6. E3 program verifies the VectorX/Avail receipt      │
+│  │       and requires receipt.contentHash == output hash    │
 │  │    7. schemeVerifier.verify(...)                         │
 │  │       → Checks the protocol fields in the compute receipt│
 │  │       → Must return true                                 │
@@ -893,12 +896,18 @@ Compute provider runs computation on encrypted data:
 │  │       → Checks the application fields in the same receipt│
 │  │       → Must return true                                 │
 │  │       → Cannot re-enter ciphertext or plaintext publication│
-│  │    9. Confirm the stage is still CiphertextReady          │
-│  │   10. Emit CiphertextOutputPublished(...)                 │
+│  │    9. Save output hash and SAFE commitment               │
+│  │       Set stage and decryption deadline                  │
+│  │   10. Emit CiphertextOutputReferencePublished(...)       │
 │  │   11. Emit E3StageChanged(CiphertextReady)                │
     │  │  }                                                      │
     │  └─────────────────────────────────────────────────────────┘
 ```
+
+The accepted event records the content hash and stable Avail coordinates, not the ciphertext bytes.
+Ciphernodes replay that durable reference without network access. After recovery enables effects,
+they fetch the named Avail block, find bytes with the exact Keccak hash, and emit the existing
+runtime `CiphertextOutputPublished` event. Failed retrieval is retried and never substitutes bytes.
 
 `onCommitteePublished` stores the committee key and starts the compute clock. The compute deadline
 is `max(block.timestamp, inputWindow[1]) + requestTimeComputeWindow`. A late key publication does
@@ -1388,7 +1397,7 @@ serialization. The guest is the first place both representations exist at once.
 `CRISPProgram.inputLeaf` therefore binds four values:
 
 ```text
-leaf = sha256(sha256(encryptedVote) || encryptedVoteCommitment || slotAddress || parentIndexPlusOne)
+leaf = sha256(keccak256(encryptedVote) || encryptedVoteCommitment || slotAddress || parentIndexPlusOne)
        mod SNARK_SCALAR_FIELD
 ```
 
@@ -1405,10 +1414,9 @@ vector (`program/tests/input_leaf.rs` and `tests/input-leaf.test.ts`), and
 contract produced, from a fixture generated by `tests/input-tree-e2e.test.ts`. A one-byte divergence
 would make every root mismatch and nothing else would detect it.
 
-SHA-256 rather than Keccak: the zkVM accelerates SHA-256 inline, while its Keccak accelerator emits
-a proof assumption the host must prove separately and compose. The extra on-chain cost is about 67k
-gas on a transaction that already carries the ciphertext — a secure-preset ciphertext is about 348
-KB, so calldata and log data dominate by orders of magnitude.
+Keccak is used for the serialized ciphertext so the digest can match a content hash exposed by an
+external data-availability receipt. SHA-256 remains the outer hash because the zkVM accelerates it
+inline. The guest recomputes both hashes from the ciphertext bytes that it consumes.
 
 **The input tree is append-only.** `_processVote` always inserts and never updates in place. That is
 a security property, not a storage choice: the mask path requires no signature, so anyone can write

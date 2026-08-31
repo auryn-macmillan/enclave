@@ -4,7 +4,23 @@
 
 use super::*;
 
+alloy::sol! {
+    #[sol(rpc)]
+    interface IChunkedPublicKeyPublisher {
+        function publishCommitteePublicKey(
+            uint256 e3Id,
+            bytes32 candidateHash,
+            uint16 chunkIndex,
+            uint16 chunkCount,
+            uint32 totalLength,
+            bytes calldata chunk
+        ) external;
+    }
+}
+
 const TICKET_GAS_SAFETY_MULTIPLIER: u64 = 2;
+const MAX_PUBLIC_KEY_BYTES: usize = 512 * 1024;
+const PUBLIC_KEY_CHUNK_BYTES: usize = 90 * 1024;
 
 fn ticket_gas_limit(estimate: u64) -> u64 {
     estimate.saturating_mul(TICKET_GAS_SAFETY_MULTIPLIER)
@@ -293,35 +309,78 @@ pub async fn publish_committee_public_key_to_registry<
 ) -> Result<TransactionReceipt> {
     let e3_id_u256: U256 = e3_id.try_into()?;
     let public_key_bytes = Bytes::from(public_key.extract_bytes());
+    anyhow::ensure!(
+        !public_key_bytes.is_empty(),
+        "committee public key is empty"
+    );
+    anyhow::ensure!(
+        public_key_bytes.len() <= MAX_PUBLIC_KEY_BYTES,
+        "committee public key is {} bytes; maximum is {MAX_PUBLIC_KEY_BYTES}",
+        public_key_bytes.len()
+    );
 
-    send_tx_with_retry(
-        "publishCommitteePublicKey",
-        &["CommitteeNotPublished"],
-        || {
-            let provider = provider.clone();
-            let public_key_bytes = public_key_bytes.clone();
-            async move {
-                info!("Calling: contract.publishCommitteePublicKey(..)");
-                let _nonce_guard = transaction_nonce_guard(&provider).await;
-                let from_address = provider.provider().default_signer_address();
-                let current_nonce = provider
-                    .provider()
-                    .get_transaction_count(from_address)
-                    .pending()
-                    .await?;
-                let contract = ICiphernodeRegistry::new(contract_address, provider.provider());
-                let builder = contract
-                    .publishCommitteePublicKey(e3_id_u256, public_key_bytes)
-                    .nonce(current_nonce);
-                let pending = builder.send().await?;
-                drop(_nonce_guard);
-                let receipt = pending.get_receipt().await?;
-                require_successful_receipt("publish committee public key", &receipt)?;
-                Ok(receipt)
-            }
-        },
-    )
-    .await
+    let total_length: u32 = public_key_bytes
+        .len()
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("committee public key exceeds uint32 length"))?;
+    let chunk_count: u16 = public_key_bytes
+        .len()
+        .div_ceil(PUBLIC_KEY_CHUNK_BYTES)
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("committee public key has too many chunks"))?;
+    let candidate_hash = alloy::primitives::keccak256(&public_key_bytes);
+    let mut last_receipt = None;
+
+    for (chunk_index, chunk) in public_key_bytes.chunks(PUBLIC_KEY_CHUNK_BYTES).enumerate() {
+        let chunk_index: u16 = chunk_index
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("public-key chunk index exceeds uint16"))?;
+        let chunk = Bytes::copy_from_slice(chunk);
+        let receipt = send_tx_with_retry(
+            "publishCommitteePublicKey chunk",
+            &["CommitteeNotPublished"],
+            || {
+                let provider = provider.clone();
+                let chunk = chunk.clone();
+                async move {
+                    info!(
+                        chunk = chunk_index + 1,
+                        total = chunk_count,
+                        "Calling: contract.publishCommitteePublicKey(chunk)"
+                    );
+                    let _nonce_guard = transaction_nonce_guard(&provider).await;
+                    let from_address = provider.provider().default_signer_address();
+                    let current_nonce = provider
+                        .provider()
+                        .get_transaction_count(from_address)
+                        .pending()
+                        .await?;
+                    let contract =
+                        IChunkedPublicKeyPublisher::new(contract_address, provider.provider());
+                    let pending = contract
+                        .publishCommitteePublicKey(
+                            e3_id_u256,
+                            candidate_hash,
+                            chunk_index,
+                            chunk_count,
+                            total_length,
+                            chunk,
+                        )
+                        .nonce(current_nonce)
+                        .send()
+                        .await?;
+                    drop(_nonce_guard);
+                    let receipt = pending.get_receipt().await?;
+                    require_successful_receipt("publish committee public-key chunk", &receipt)?;
+                    Ok(receipt)
+                }
+            },
+        )
+        .await?;
+        last_receipt = Some(receipt);
+    }
+
+    last_receipt.ok_or_else(|| anyhow::anyhow!("committee public key is empty"))
 }
 
 /// Read `CiphernodeRegistry.dkgFoldAttestationVerifier()` (EIP-712 verifying contract for fold attestations).

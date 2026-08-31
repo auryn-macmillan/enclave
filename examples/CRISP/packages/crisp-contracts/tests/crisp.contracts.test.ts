@@ -187,7 +187,26 @@ describe('CRISP Contracts', function () {
       expect(pi[6], 'num_options').to.eq(BigInt(numOptionsOnChain))
       expect(pi[8], 'committee_public_key').to.eq(BigInt(e3.committeePublicKey))
 
-      await crispProgram.publishInput(publishE3Id, encodeSolidityProof(voteProof))
+      const encoded = encodeSolidityProof(voteProof)
+      const inputTypes = ['bytes', 'address', 'bytes32', 'bytes32', 'uint40', 'bytes']
+      const envelope = ethers.AbiCoder.defaultAbiCoder().decode(inputTypes, encoded)
+      const mismatched = ethers.AbiCoder.defaultAbiCoder().encode(
+        inputTypes,
+        [envelope[0], envelope[1], envelope[2], envelope[3], envelope[4], '0xdeadbeef'],
+      )
+      await expect(crispProgram.publishInput(publishE3Id, mismatched)).to.be.revert(ethers)
+      expect((await crispProgram.getRoundData(publishE3Id)).numberOfVotes).to.equal(0n)
+
+      await crispProgram.publishInput(publishE3Id, encoded)
+      expect(
+        await crispProgram.isInputPublished(
+          publishE3Id,
+          envelope[3],
+          envelope[2],
+          envelope[1],
+          envelope[4],
+        ),
+      ).to.equal(true)
     })
 
     /// The regression test for the ballot binding.

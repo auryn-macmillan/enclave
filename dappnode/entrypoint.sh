@@ -78,6 +78,18 @@ export QUIC_PORT="${QUIC_PORT:-37173}"
 export NODE_ADDRESS="${NODE_ADDRESS:-}"
 export LOG_LEVEL="${LOG_LEVEL:-info}"
 
+# Protocol v3 stores large ciphertexts on Avail. Operators may override the public endpoint, but
+# an enabled Ethereum chain must always render a reader into the ciphernode configuration.
+if [ -z "${AVAIL_RPC_URL:-}" ]; then
+    case "${CHAIN_ID:-}" in
+        1) AVAIL_RPC_URL="wss://avail-rpc.publicnode.com/" ;;
+        11155111) AVAIL_RPC_URL="wss://turing-rpc.avail.so/ws" ;;
+        *) fail "AVAIL_RPC_URL is required for chain ${CHAIN_ID:-unknown}" ;;
+    esac
+fi
+export AVAIL_RPC_URL
+[[ "$AVAIL_RPC_URL" =~ ^wss?:// ]] || fail "AVAIL_RPC_URL must be a WebSocket URL (ws:// or wss://)"
+
 case "$LOG_LEVEL" in
     info|debug|trace) ;;
     *) fail "LOG_LEVEL must be one of: info, debug, trace" ;;

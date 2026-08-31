@@ -17,6 +17,7 @@ import { EIP712 } from "@openzeppelin/contracts/utils/cryptography/EIP712.sol";
 import { IHonkVerifier } from "./interfaces/IHonkVerifier.sol";
 import { IVotesToken } from "./interfaces/IVotesToken.sol";
 import { IERC6372Clock } from "./interfaces/IERC6372Clock.sol";
+import { IDataAvailabilityVerifier } from "@interfold/contracts/contracts/interfaces/IDataAvailabilityVerifier.sol";
 
 interface IInterfoldProgramRegistry {
   function e3Programs(IE3Program e3Program) external view returns (bool);
@@ -133,6 +134,8 @@ contract CRISPProgram is IE3Program, Ownable, EIP712 {
   /// @notice Verifies ballots for `CensusMode.ONCHAIN`, whose circuit has no Merkle inputs and
   /// takes voting power as a public input instead.
   IHonkVerifier private immutable onchainHonkVerifier;
+  /// @notice Frozen receipt verifier for every large object accepted by this program.
+  IDataAvailabilityVerifier public immutable dataAvailabilityVerifier;
 
   /// @notice The EIP-712 type of the message a voter signs to authorise one ballot.
   /// @dev The digest binds the signature to the round, the slot, and this exact ciphertext. The
@@ -196,6 +199,8 @@ contract CRISPProgram is IE3Program, Ownable, EIP712 {
   error KeyNotPublished(uint256 e3Id);
   error E3NotAcceptingInputs(uint256 e3Id);
   error InvalidComputeContext();
+  error InvalidDataAvailabilityVerifier();
+  error DataAvailabilityHashMismatch(bytes32 expected, bytes32 actual);
 
   // Events
   event InterfoldBound(address indexed interfold);
@@ -209,7 +214,9 @@ contract CRISPProgram is IE3Program, Ownable, EIP712 {
     uint256 indexed e3Id,
     address indexed slotAddress,
     bytes32 encryptedVoteCommitment,
-    bytes encryptedVote,
+    bytes32 encryptedVoteHash,
+    uint32 availabilityBlock,
+    uint128 availabilityLeafIndex,
     uint256 index,
     uint40 parentIndexPlusOne
   );
@@ -225,15 +232,18 @@ contract CRISPProgram is IE3Program, Ownable, EIP712 {
     IRiscZeroVerifier _risc0Verifier,
     IHonkVerifier _honkVerifier,
     IHonkVerifier _onchainHonkVerifier,
+    IDataAvailabilityVerifier _dataAvailabilityVerifier,
     bytes32 _imageId
   ) Ownable(_initialOwner) EIP712("CRISP", "1") {
     if (address(_risc0Verifier) == address(0)) revert Risc0VerifierAddressZero();
     if (address(_honkVerifier) == address(0)) revert InvalidHonkVerifier();
     if (address(_onchainHonkVerifier) == address(0)) revert InvalidHonkVerifier();
+    if (address(_dataAvailabilityVerifier).code.length == 0) revert InvalidDataAvailabilityVerifier();
 
     risc0Verifier = _risc0Verifier;
     honkVerifier = _honkVerifier;
     onchainHonkVerifier = _onchainHonkVerifier;
+    dataAvailabilityVerifier = _dataAvailabilityVerifier;
     imageId = _imageId;
   }
 
@@ -491,23 +501,7 @@ contract CRISPProgram is IE3Program, Ownable, EIP712 {
 
   /// @inheritdoc IE3Program
   function publishInput(uint256 e3Id, bytes memory data) external {
-    E3 memory e3 = interfold.getE3(e3Id);
-
-    // check that we are in the correct stage
-    IInterfold.E3Stage stage = interfold.getE3Stage(e3Id);
-    if (stage != IInterfold.E3Stage.KeyPublished) {
-      revert KeyNotPublished(e3Id);
-    }
-
-    // check that we are not past the input deadline
-    if (block.timestamp > e3.inputWindow[1]) {
-      revert InputDeadlinePassed(e3Id, e3.inputWindow[1]);
-    }
-
-    // check that we are within the input window
-    if (block.timestamp < e3.inputWindow[0]) {
-      revert E3NotAcceptingInputs(e3Id);
-    }
+    E3 memory e3 = _inputE3(e3Id);
 
     if (data.length == 0) revert EmptyInputData();
 
@@ -515,20 +509,93 @@ contract CRISPProgram is IE3Program, Ownable, EIP712 {
       bytes memory noirProof,
       address slotAddress,
       bytes32 encryptedVoteCommitment,
-      bytes memory encryptedVote,
-      uint40 parentIndexPlusOne
-    ) = abi.decode(data, (bytes, address, bytes32, bytes, uint40));
+      bytes32 encryptedVoteHash,
+      uint40 parentIndexPlusOne,
+      bytes memory availabilityProof
+    ) = abi.decode(data, (bytes, address, bytes32, bytes32, uint40, bytes));
 
-    // The two census families differ here and nowhere else. A Merkle round proves membership
-    // inside the circuit against a posted root. An ONCHAIN round reads the power from the token
-    // and gives it to the circuit, so the eligibility check has to happen here instead.
+    IDataAvailabilityVerifier.DataReference memory availabilityReceipt = dataAvailabilityVerifier
+      .verifyDataAvailability(encryptedVoteHash, availabilityProof);
+    if (availabilityReceipt.contentHash != encryptedVoteHash) {
+      revert DataAvailabilityHashMismatch(encryptedVoteHash, availabilityReceipt.contentHash);
+    }
+
+    _verifyInputProof(
+      e3Id,
+      e3,
+      noirProof,
+      slotAddress,
+      encryptedVoteCommitment,
+      encryptedVoteHash,
+      parentIndexPlusOne
+    );
+
+    uint40 voteIndex =
+      _processVote(e3Id, slotAddress, encryptedVoteCommitment, encryptedVoteHash, parentIndexPlusOne);
+
+    emit InputPublished(
+      e3Id,
+      slotAddress,
+      encryptedVoteCommitment,
+      encryptedVoteHash,
+      availabilityReceipt.blockNumber,
+      availabilityReceipt.leafIndex,
+      voteIndex,
+      parentIndexPlusOne
+    );
+  }
+
+  /// @notice Checks a ballot before an availability service pays to publish its ciphertext.
+  /// @dev This checks every input condition except the external DA receipt and does not modify
+  /// state. The final `publishInput` call repeats the checks against current chain state.
+  function validateInputProof(
+    uint256 e3Id,
+    bytes calldata noirProof,
+    address slotAddress,
+    bytes32 encryptedVoteCommitment,
+    bytes32 encryptedVoteHash,
+    uint40 parentIndexPlusOne
+  ) external view returns (bool) {
+    E3 memory e3 = _inputE3(e3Id);
+    _verifyInputProof(
+      e3Id,
+      e3,
+      noirProof,
+      slotAddress,
+      encryptedVoteCommitment,
+      encryptedVoteHash,
+      parentIndexPlusOne
+    );
+    return true;
+  }
+
+  function _inputE3(uint256 e3Id) internal view returns (E3 memory e3) {
+    e3 = interfold.getE3(e3Id);
+    if (interfold.getE3Stage(e3Id) != IInterfold.E3Stage.KeyPublished) {
+      revert KeyNotPublished(e3Id);
+    }
+    if (block.timestamp > e3.inputWindow[1]) {
+      revert InputDeadlinePassed(e3Id, e3.inputWindow[1]);
+    }
+    if (block.timestamp < e3.inputWindow[0]) {
+      revert E3NotAcceptingInputs(e3Id);
+    }
+  }
+
+  function _verifyInputProof(
+    uint256 e3Id,
+    E3 memory e3,
+    bytes memory noirProof,
+    address slotAddress,
+    bytes32 encryptedVoteCommitment,
+    bytes32 encryptedVoteHash,
+    uint40 parentIndexPlusOne
+  ) internal view {
+    uint256 leaf = inputLeaf(encryptedVoteHash, encryptedVoteCommitment, slotAddress, parentIndexPlusOne);
+    if (e3Data[e3Id].appendedLeaf[leaf]) revert InputAlreadyPublished(leaf);
+
     (bytes32 eligibility, IHonkVerifier verifier) = _eligibility(e3Id, slotAddress);
-
     bytes32 parentCommitment = _parentCommitment(e3Id, slotAddress, parentIndexPlusOne);
-
-    uint40 voteIndex = _processVote(e3Id, slotAddress, encryptedVoteCommitment, encryptedVote, parentIndexPlusOne);
-
-    // Set the public inputs for the proof. Order must match Noir circuit.
     bytes32[] memory noirPublicInputs = new bytes32[](9);
     noirPublicInputs[0] = parentCommitment;
     // A Keccak digest does not fit in one field element, so it enters the circuit as its two
@@ -549,8 +616,6 @@ contract CRISPProgram is IE3Program, Ownable, EIP712 {
     if (!verifier.verify(noirProof, noirPublicInputs)) {
       revert InvalidNoirProof();
     }
-
-    emit InputPublished(e3Id, slotAddress, encryptedVoteCommitment, encryptedVote, voteIndex, parentIndexPlusOne);
   }
 
   /// @notice The commitment of the entry an input names as its parent.
@@ -746,12 +811,25 @@ contract CRISPProgram is IE3Program, Ownable, EIP712 {
     return true;
   }
 
+  /// @notice Verify availability of an aggregate ciphertext for Interfold.
+  /// @dev The same immutable verifier is used for inputs and outputs so one E3 cannot mix trust
+  /// roots. Interfold independently checks the returned content hash before recording it.
+  function verifyDataAvailability(
+    bytes32 expectedContentHash,
+    bytes calldata proof
+  ) external view returns (IDataAvailabilityVerifier.DataReference memory receipt) {
+    receipt = dataAvailabilityVerifier.verifyDataAvailability(expectedContentHash, proof);
+    if (receipt.contentHash != expectedContentHash) {
+      revert DataAvailabilityHashMismatch(expectedContentHash, receipt.contentHash);
+    }
+  }
+
   /// @notice Record one input: append its leaf and remember its commitment for later parents.
   function _processVote(
     uint256 e3Id,
     address slotAddress,
     bytes32 encryptedVoteCommitment,
-    bytes memory encryptedVote,
+    bytes32 encryptedVoteHash,
     uint40 parentIndexPlusOne
   ) internal returns (uint40 voteIndex) {
     RoundData storage round = e3Data[e3Id];
@@ -760,7 +838,7 @@ contract CRISPProgram is IE3Program, Ownable, EIP712 {
     // the mask path needs no signature — replace the bytes of a vote that was already counted,
     // erasing it. Appending leaves the earlier entry in the tree, so the Secure Process can fall
     // back to it when a later entry is unusable, and nothing is lost.
-    uint256 leaf = inputLeaf(encryptedVote, encryptedVoteCommitment, slotAddress, parentIndexPlusOne);
+    uint256 leaf = inputLeaf(encryptedVoteHash, encryptedVoteCommitment, slotAddress, parentIndexPlusOne);
 
     // Refuse a byte-identical resubmission. Without this the tree is a free growth surface for
     // anyone replaying a published input, and the round dies at tree capacity rather than at the
@@ -786,16 +864,29 @@ contract CRISPProgram is IE3Program, Ownable, EIP712 {
   /// - the **parent**, because that is what the guest walks the slot's chain by. An unbound parent
   ///   would let a prover re-point entries and select a different one.
   ///
-  /// SHA-256 rather than Keccak: the zkVM accelerates SHA-256 inline, while its Keccak accelerator
-  /// emits a proof assumption the host must prove separately and compose. The extra on-chain cost
-  /// is about 67k gas on a transaction that already carries the ciphertext.
+  /// Keccak hashes the serialized ciphertext into the same content digest that an external data
+  /// availability receipt can expose. SHA-256 remains the outer hash because the zkVM accelerates
+  /// it inline.
   function inputLeaf(
-    bytes memory encryptedVote,
+    bytes32 encryptedVoteHash,
     bytes32 commitment,
     address slotAddress,
     uint40 parentIndexPlusOne
   ) public pure returns (uint256) {
-    return uint256(sha256(abi.encodePacked(sha256(encryptedVote), commitment, slotAddress, parentIndexPlusOne))) % SNARK_SCALAR_FIELD;
+    return uint256(sha256(abi.encodePacked(encryptedVoteHash, commitment, slotAddress, parentIndexPlusOne))) % SNARK_SCALAR_FIELD;
+  }
+
+  /// @notice Whether this exact input leaf has already been accepted.
+  /// @dev Availability relays use this after a restart to distinguish a transaction that landed
+  /// from one that still needs submission. It exposes only the same public fact as InputPublished.
+  function isInputPublished(
+    uint256 e3Id,
+    bytes32 encryptedVoteHash,
+    bytes32 commitment,
+    address slotAddress,
+    uint40 parentIndexPlusOne
+  ) external view returns (bool) {
+    return e3Data[e3Id].appendedLeaf[inputLeaf(encryptedVoteHash, commitment, slotAddress, parentIndexPlusOne)];
   }
 
   /// @notice Decode bytes to uint64 array

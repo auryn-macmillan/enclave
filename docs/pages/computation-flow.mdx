@@ -69,10 +69,11 @@ During this phase, Data Providers — who may include individual users, applicat
 2. **Input Validation**: Data Providers generate several Zero-Knowledge Proofs about their inputs to
    ensure they are valid for the requested E3. Some of these proofs are generic (e.g., proof of
    valid encryption) while others will be specific to your application.
-3. **Submit Inputs**: Both encrypted data and ZKPs are submitted to your E3 Program contract's
-   `publishInput` function. The E3 Program validates the input and may add its hash to a Merkle
-   tree, the root of which can later be used to anchor proofs of correct execution of your E3
-   Program.
+3. **Publish Data**: CRISP publishes the encrypted bytes to Avail and waits for VectorX to anchor the
+   Avail block on Ethereum.
+4. **Submit Inputs**: The E3 Program receives the content hash, the ZK proof, and the VectorX receipt.
+   It accepts the input only when the receipt proves availability of the exact bytes named by the
+   hash and the proof binds the same hash to the ciphertext commitment.
 
    ```solidity
    function publishInput(uint256 e3Id, bytes memory data) external;
@@ -86,16 +87,15 @@ deadline expires.
 
 1. **Execution**: The CP retrieves encrypted inputs and executes the Secure Process defined in your
    E3 program.
-2. **Publish Output**: The ciphertext output and accompanying proof are submitted to the Interfold
-   contract via `publishCiphertextOutput`. The Interfold contract calls your E3 Program's `verify`
-   function to validate the proof before accepting the output.
+2. **Publish Output**: The ciphertext bytes are published to Avail. A content hash, VectorX receipt,
+   and compute proof are submitted to Interfold through `publishCiphertextOutput`. Interfold accepts
+   the reference only when the availability and compute proofs bind the same output hash.
 
    ```solidity
    function publishCiphertextOutput(
      uint256 e3Id,
-     bytes memory ciphertextOutput,
-     bytes memory proof
-   ) external returns (bool success);
+     bytes calldata encodedOutputReference
+   ) external;
    ```
 
 ### Phase 5: Decryption

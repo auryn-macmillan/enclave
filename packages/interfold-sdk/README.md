@@ -355,7 +355,12 @@ await sdk.requestE3({
 });
 
 // Publish ciphertext output
-await sdk.publishCiphertextOutput(e3Id: bigint, ciphertextOutput: `0x${string}`, ciphertextCommitment: `0x${string}`, proof: `0x${string}`, gasLimit?: bigint);
+await sdk.publishCiphertextOutput(e3Id, {
+  contentHash,
+  ciphertextCommitment,
+  computeProof,
+  availabilityProof,
+}, gasLimit);
 
 // Read operations
 const e3Data = await sdk.getE3(e3Id: bigint);
@@ -394,21 +399,25 @@ await sdk.startEventPolling();
 sdk.stopEventPolling();
 ```
 
-`CommitteePublished.publicKey` is an untrusted transport value. Validate it against the event's
-on-chain commitment before using it for encryption:
+Committee public keys are emitted as `CommitteePublicKeyChunkPublished` events. Reassemble the
+canonical chunk sequence, check its Keccak hash, and validate the decoded key against the event's
+proven `pkCommitment` before using it for encryption:
 
 ```typescript
 import { hexToBytes } from 'viem'
+import { CommitteePublicKeyAssembler, RegistryEventType } from '@interfold/sdk'
 
-await sdk.onInterfoldEvent(RegistryEventType.COMMITTEE_PUBLISHED, async (event) => {
-  const publicKey = hexToBytes(event.data.publicKey)
-  const expectedCommitment = hexToBytes(event.data.pkCommitment)
+const assembler = new CommitteePublicKeyAssembler()
 
-  if (!(await sdk.validatePublicKeyCommitment(publicKey, expectedCommitment))) {
+await sdk.onInterfoldEvent(RegistryEventType.COMMITTEE_PUBLIC_KEY_CHUNK_PUBLISHED, async (event) => {
+  const assembled = assembler.add(event.data)
+  if (!assembled) return
+
+  if (!(await sdk.validatePublicKeyCommitment(assembled.publicKey, hexToBytes(assembled.pkCommitment)))) {
     throw new Error('Committee public-key commitment mismatch')
   }
 
-  // The key is now safe to pass to the encryption methods.
+  // assembled.publicKey is now safe to pass to the encryption methods.
 })
 ```
 

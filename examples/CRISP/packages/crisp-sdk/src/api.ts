@@ -15,6 +15,7 @@ import {
   CRISP_SERVER_STATE_RESULT_ENDPOINT,
   CRISP_SERVER_TOKEN_TREE_ENDPOINT,
   CRISP_SERVER_VOTING_BROADCAST_ENDPOINT,
+  CRISP_SERVER_VOTING_AVAILABILITY_ENDPOINT,
   CRISP_SERVER_VOTING_STATUS_ENDPOINT,
   CRISP_SERVER_CHAIN_HEAD_ENDPOINT,
   CRISP_SERVER_CHAIN_READ_ENDPOINT,
@@ -160,7 +161,22 @@ export const broadcastVote = async (serverUrl: string, request: BroadcastVoteReq
     throw new Error(`Failed to broadcast vote (${response.status}): ${data}`)
   }
 
-  return data
+  if (data.status !== 'pending_availability') return data
+  if (!data.job_id) throw new Error('Availability job response is missing job_id')
+
+  // VectorX proves a range of Avail blocks, so this can take substantially longer than an
+  // Ethereum transaction. The server owns the durable job; closing this page does not cancel it.
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, 15_000))
+    const statusResponse = await fetch(
+      `${serverUrl}/${CRISP_SERVER_VOTING_AVAILABILITY_ENDPOINT}/${encodeURIComponent(data.job_id)}`,
+    )
+    if (!statusResponse.ok) {
+      throw new Error(`Failed to read availability job (${statusResponse.status})`)
+    }
+    const status = (await statusResponse.json()) as BroadcastVoteResponse
+    if (status.status !== 'pending_availability') return status
+  }
 }
 
 /**

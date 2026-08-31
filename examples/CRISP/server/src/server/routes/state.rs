@@ -8,17 +8,14 @@ use std::str::FromStr;
 
 use crate::server::{
     app_data::AppData,
+    data_availability::AvailabilityService,
     models::{
         canonical_e3_id, e3_id_to_u256, GetRoundRequest, JsonResponse, PreviousCiphertextRequest,
         PreviousCiphertextResponse, RoundRequestWithRequester, WebhookPayload,
     },
-    CONFIG,
 };
 use actix_web::{web, HttpResponse, Responder};
-use alloy::primitives::{Address, Bytes, B256};
-use e3_sdk::evm_helpers::contracts::{
-    E3Stage, InterfoldContract, InterfoldContractFactory, InterfoldRead, InterfoldWrite, ReadWrite,
-};
+use alloy::primitives::Address;
 use log::{error, info};
 
 pub fn setup_routes(config: &mut web::ServiceConfig) {
@@ -138,7 +135,10 @@ async fn handle_get_previous_ciphertext(
 ///
 /// # Returns
 /// * A JSON response indicating the success of the operation
-async fn handle_program_server_result(data: web::Json<WebhookPayload>) -> impl Responder {
+async fn handle_program_server_result(
+    data: web::Json<WebhookPayload>,
+    availability: web::Data<AvailabilityService>,
+) -> impl Responder {
     let incoming = data.into_inner();
 
     match incoming {
@@ -182,74 +182,19 @@ async fn handle_program_server_result(data: web::Json<WebhookPayload>) -> impl R
                     .body("ciphertext_commitment must be exactly 32 bytes");
             }
 
-            // Create the contract
-            let contract: InterfoldContract<ReadWrite> =
-                match InterfoldContractFactory::create_write(
-                    &CONFIG.http_rpc_url,
-                    &CONFIG.interfold_address,
-                    &CONFIG.private_key,
-                )
+            let mut commitment = [0u8; 32];
+            commitment.copy_from_slice(&ciphertext_commitment);
+            match availability
+                .stage_output(&e3_id, ciphertext, commitment, proof)
                 .await
-                {
-                    Ok(contract) => contract,
-                    Err(e) => {
-                        error!("Failed to create contract: {:?}", e);
-                        return HttpResponse::InternalServerError()
-                            .json(format!("Failed to create contract: {}", e));
-                    }
-                };
-
-            let e3_id_u256 = match e3_id_to_u256(&e3_id) {
-                Ok(e3_id) => e3_id,
-                Err(e) => return HttpResponse::BadRequest().body(e.to_string()),
-            };
-
-            // Try the direct call
-            let tx_result = contract
-                .publish_ciphertext_output(
-                    e3_id_u256,
-                    Bytes::from(ciphertext.clone()),
-                    B256::from_slice(&ciphertext_commitment),
-                    Bytes::from(proof.clone()),
-                )
-                .await;
-
-            let pending_tx = match tx_result {
-                Ok(tx) => tx,
-                Err(e) => {
-                    // A revert can mean the output already landed on chain — a retry of this
-                    // webhook, or our own earlier transaction confirming first. Publication is
-                    // this handler's goal, so an E3 already past KeyPublished is a success.
-                    match contract.get_e3_stage(e3_id_u256).await {
-                        Ok(stage)
-                            if stage == E3Stage::CiphertextReady || stage == E3Stage::Complete =>
-                        {
-                            info!(
-                                "Ciphertext output already published for E3 ID: {} (stage: {:?})",
-                                e3_id, stage
-                            );
-                            return HttpResponse::Ok().json(format!(
-                                "Ciphertext output already published for E3 ID: {}",
-                                e3_id
-                            ));
-                        }
-                        _ => {}
-                    }
-                    error!("Failed to send transaction: {:?}", e);
-                    return HttpResponse::InternalServerError()
-                        .json(format!("Failed to send transaction: {}", e));
+            {
+                Ok(job) if job.status == "success" => HttpResponse::Ok().json(job),
+                Ok(job) => HttpResponse::Accepted().json(job),
+                Err(error) => {
+                    error!("Failed to stage aggregate ciphertext: {error}");
+                    HttpResponse::InternalServerError().body(error.to_string())
                 }
-            };
-
-            info!(
-                "Ciphertext output published successfully for E3 ID: {} with tx: {}",
-                e3_id, pending_tx.transaction_hash
-            );
-
-            HttpResponse::Ok().json(format!(
-                "Ciphertext output published successfully for E3 ID: {}",
-                e3_id
-            ))
+            }
         }
     }
 }

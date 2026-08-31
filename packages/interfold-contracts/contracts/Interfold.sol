@@ -419,22 +419,17 @@ contract Interfold is
     /// @inheritdoc IInterfold
     function publishCiphertextOutput(
         uint256 e3Id,
-        bytes calldata ciphertextOutput,
-        bytes32 ciphertextCommitment,
-        bytes calldata proof
-    ) external nonReentrant returns (bool success) {
-        return
-            InterfoldLifecycle.publishCiphertext(
-                e3s,
-                _e3Stages,
-                _e3Deadlines,
-                address(_registryFor(e3Id)),
-                e3Id,
-                _e3TimeoutConfigs[e3Id].decryptionWindow,
-                ciphertextOutput,
-                ciphertextCommitment,
-                proof
-            );
+        bytes calldata encodedOutputReference
+    ) external nonReentrant {
+        InterfoldLifecycle.publishCiphertext(
+            e3s,
+            _e3Stages,
+            _e3Deadlines,
+            address(_registryFor(e3Id)),
+            e3Id,
+            _e3TimeoutConfigs[e3Id].decryptionWindow,
+            encodedOutputReference
+        );
     }
 
     /// @inheritdoc IInterfold

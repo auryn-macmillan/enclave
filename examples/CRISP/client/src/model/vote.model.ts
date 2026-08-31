@@ -32,11 +32,13 @@ export interface BroadcastVoteRequest {
   encoded_proof: string
 }
 
-export type VoteResponseStatus = 'success' | 'failed_broadcast'
+export type VoteResponseStatus = 'success' | 'pending_availability' | 'ready_for_submission' | 'failed_broadcast'
 export interface BroadcastVoteResponse {
   status: VoteResponseStatus
-  tx_hash?: string
-  message?: string
+  tx_hash: string | null
+  job_id: string | null
+  encoded_proof: string | null
+  message: string | null
 }
 
 export interface VoteStatusRequest {

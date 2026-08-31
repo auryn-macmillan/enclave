@@ -17,6 +17,10 @@ import {
 import { IDecryptionVerifier } from "../interfaces/IDecryptionVerifier.sol";
 import { IPkVerifier } from "../interfaces/IPkVerifier.sol";
 import { ICiphertextVerifier } from "../interfaces/ICiphertextVerifier.sol";
+import {
+    IDataAvailabilityVerifier,
+    IE3ProgramDataAvailability
+} from "../interfaces/IDataAvailabilityVerifier.sol";
 import { E3 } from "../interfaces/IE3.sol";
 import {
     CiphertextVerifierStorage
@@ -259,7 +263,10 @@ library InterfoldLifecycle {
             revert IInterfold.DKGDeadlinePassed(e3Id, dkgDeadline);
     }
 
-    /// @notice Validates, verifies, and records one ciphertext output.
+    /// @notice Validates, verifies, and records a content-addressed ciphertext output.
+    /// @dev The availability adapter proves that the exact bytes named by
+    ///      `ciphertextOutputHash` were published. The existing compute proof binds that same
+    ///      hash and the ciphertext commitment to this E3.
     function publishCiphertext(
         mapping(uint256 e3Id => E3 e3) storage e3s,
         mapping(uint256 e3Id => IInterfold.E3Stage stage) storage stages,
@@ -268,63 +275,95 @@ library InterfoldLifecycle {
         address registryAddress,
         uint256 e3Id,
         uint256 decryptionWindow,
-        bytes calldata ciphertextOutput,
-        bytes32 ciphertextCommitment,
-        bytes calldata proof
-    ) external returns (bool) {
-        E3 storage e3 = e3s[e3Id];
-        if (address(e3.e3Program) == address(0))
-            revert IInterfold.E3DoesNotExist(e3Id);
-        IInterfold.E3Stage stage = stages[e3Id];
-        if (stage != IInterfold.E3Stage.KeyPublished)
-            revert IInterfold.InvalidStage(
-                e3Id,
-                IInterfold.E3Stage.KeyPublished,
-                stage
+        bytes calldata encodedOutputReference
+    ) external {
+        IInterfold.CiphertextOutputReference memory outputReference = abi
+            .decode(
+                encodedOutputReference,
+                (IInterfold.CiphertextOutputReference)
             );
-        uint256 computeDeadline = deadlines[e3Id].computeDeadline;
-        if (computeDeadline < block.timestamp)
-            revert IInterfold.CommitteeDutiesCompleted(e3Id, computeDeadline);
-        if (block.timestamp < e3.inputWindow[1])
-            revert IInterfold.InputDeadlineNotReached(e3Id, e3.inputWindow[1]);
-        if (e3.ciphertextOutput != bytes32(0))
-            revert IInterfold.CiphertextOutputAlreadyPublished(e3Id);
+        bytes32 contentHash = outputReference.contentHash;
+        bytes32 ciphertextCommitment = outputReference.ciphertextCommitment;
+        E3 storage e3 = e3s[e3Id];
+        _validateCiphertextReference(
+            e3,
+            stages[e3Id],
+            deadlines[e3Id].computeDeadline,
+            e3Id,
+            contentHash
+        );
         _requireViableCommittee(registryAddress, e3Id);
 
-        bytes32 ciphertextOutputHash = keccak256(ciphertextOutput);
-        e3.ciphertextOutput = ciphertextOutputHash;
+        IDataAvailabilityVerifier.DataReference memory availabilityReceipt =
+            _verifyDataAvailability(
+                address(e3.e3Program),
+                contentHash,
+                outputReference.availabilityProof
+            );
+
+        if (
+            !_isValidCiphertextHash(
+                e3,
+                e3Id,
+                contentHash,
+                ciphertextCommitment,
+                outputReference.computeProof
+            )
+        ) revert IInterfold.InvalidOutput(bytes(""));
+
+        e3.ciphertextOutput = contentHash;
         e3.ciphertextCommitment = ciphertextCommitment;
         stages[e3Id] = IInterfold.E3Stage.CiphertextReady;
         deadlines[e3Id].decryptionDeadline = block.timestamp + decryptionWindow;
 
-        _verifyCiphertext(
-            e3,
+        emit IInterfold.CiphertextOutputReferencePublished(
             e3Id,
-            ciphertextOutputHash,
+            contentHash,
             ciphertextCommitment,
-            ciphertextOutput,
-            proof
-        );
-
-        stage = stages[e3Id];
-        if (stage != IInterfold.E3Stage.CiphertextReady)
-            revert IInterfold.InvalidStage(
-                e3Id,
-                IInterfold.E3Stage.CiphertextReady,
-                stage
-            );
-
-        emit IInterfold.CiphertextOutputPublished(
-            e3Id,
-            ciphertextOutput,
-            ciphertextCommitment
+            availabilityReceipt.blockNumber,
+            availabilityReceipt.leafIndex
         );
         emit IInterfold.E3StageChanged(
             e3Id,
             IInterfold.E3Stage.KeyPublished,
             IInterfold.E3Stage.CiphertextReady
         );
-        return true;
+    }
+
+    function _validateCiphertextReference(
+        E3 storage e3,
+        IInterfold.E3Stage stage,
+        uint256 computeDeadline,
+        uint256 e3Id,
+        bytes32 ciphertextOutputHash
+    ) private view {
+        if (address(e3.e3Program) == address(0))
+            revert IInterfold.E3DoesNotExist(e3Id);
+        if (stage != IInterfold.E3Stage.KeyPublished)
+            revert IInterfold.InvalidStage(
+                e3Id,
+                IInterfold.E3Stage.KeyPublished,
+                stage
+            );
+        if (computeDeadline < block.timestamp)
+            revert IInterfold.CommitteeDutiesCompleted(e3Id, computeDeadline);
+        if (block.timestamp < e3.inputWindow[1])
+            revert IInterfold.InputDeadlineNotReached(e3Id, e3.inputWindow[1]);
+        if (e3.ciphertextOutput != bytes32(0))
+            revert IInterfold.CiphertextOutputAlreadyPublished(e3Id);
+        if (ciphertextOutputHash == bytes32(0))
+            revert IInterfold.InvalidOutput(bytes(""));
+    }
+
+    function _verifyDataAvailability(
+        address e3Program,
+        bytes32 ciphertextOutputHash,
+        bytes memory availabilityProof
+    ) private view returns (IDataAvailabilityVerifier.DataReference memory receipt) {
+        receipt = IE3ProgramDataAvailability(e3Program)
+            .verifyDataAvailability(ciphertextOutputHash, availabilityProof);
+        if (receipt.contentHash != ciphertextOutputHash)
+            revert IInterfold.InvalidOutput(bytes(""));
     }
 
     /// @notice Sets the verifier used by future requests for one scheme.
@@ -347,16 +386,15 @@ library InterfoldLifecycle {
     }
 
     /// @notice Freezes the configured verifier for an E3 request.
-    function _verifyCiphertext(
+    function _isValidCiphertextHash(
         E3 storage e3,
         uint256 e3Id,
         bytes32 ciphertextOutputHash,
         bytes32 ciphertextCommitment,
-        bytes calldata ciphertextOutput,
-        bytes calldata proof
-    ) private {
-        CiphertextVerifierStorage.RequestConfig
-            storage config = _ciphertextVerifierLayout().requests[e3Id];
+        bytes memory proof
+    ) private returns (bool) {
+        CiphertextVerifierStorage.RequestConfig storage config =
+            _ciphertextVerifierLayout().requests[e3Id];
         if (
             address(config.verifier) == address(0) ||
             !config.verifier.verify(
@@ -368,15 +406,14 @@ library InterfoldLifecycle {
                 ciphertextCommitment,
                 proof
             )
-        ) revert IInterfold.InvalidOutput(ciphertextOutput);
-        if (
-            !e3.e3Program.verify(
+        ) return false;
+        return
+            e3.e3Program.verify(
                 e3Id,
                 ciphertextOutputHash,
                 ciphertextCommitment,
                 proof
-            )
-        ) revert IInterfold.InvalidOutput(ciphertextOutput);
+            );
     }
 
     function _requireViableCommittee(

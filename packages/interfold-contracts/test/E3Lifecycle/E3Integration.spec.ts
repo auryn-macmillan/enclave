@@ -28,6 +28,7 @@ import {
   ignition,
   makeRequest,
   networkHelpers,
+  publishAvailableCiphertextOutput,
   setPricingConfig,
   signAndEncodeAttestation,
 } from "../fixtures";
@@ -2118,7 +2119,8 @@ describe("E3 Integration - Refund/Timeout Mechanism", function () {
       const e3 = await interfold.getE3(firstE3Id);
       await time.increaseTo(Number(e3.inputWindow[1]));
       const ciphertext = "0x" + "ab".repeat(100);
-      await interfold.publishCiphertextOutput(
+      await publishAvailableCiphertextOutput(
+        interfold,
         firstE3Id,
         ciphertext,
         ethers.keccak256(ciphertext),
@@ -2699,7 +2701,8 @@ describe("E3 Integration - Refund/Timeout Mechanism", function () {
 
       const ciphertextOutput = "0x" + "ab".repeat(100);
       const proof = "0x1337";
-      await interfold.publishCiphertextOutput(
+      await publishAvailableCiphertextOutput(
+        interfold,
         firstE3Id,
         ciphertextOutput,
         ethers.keccak256(ciphertextOutput),
@@ -2996,7 +2999,8 @@ describe("E3 Integration - Refund/Timeout Mechanism", function () {
 
       const ciphertextOutput = "0x" + "ab".repeat(100);
       const proofBytes = "0x1337";
-      await interfold.publishCiphertextOutput(
+      await publishAvailableCiphertextOutput(
+        interfold,
         firstE3Id,
         ciphertextOutput,
         ethers.keccak256(ciphertextOutput),
@@ -3112,7 +3116,8 @@ describe("E3 Integration - Refund/Timeout Mechanism", function () {
 
       const ciphertextOutput = "0x" + "ab".repeat(100);
       const proof = "0x1337";
-      await interfold.publishCiphertextOutput(
+      await publishAvailableCiphertextOutput(
+        interfold,
         firstE3Id,
         ciphertextOutput,
         ethers.keccak256(ciphertextOutput),
@@ -3173,7 +3178,8 @@ describe("E3 Integration - Refund/Timeout Mechanism", function () {
 
       const ciphertextOutput = "0x" + "ab".repeat(100);
       const proof = "0x1337";
-      await interfold.publishCiphertextOutput(
+      await publishAvailableCiphertextOutput(
+        interfold,
         firstE3Id,
         ciphertextOutput,
         ethers.keccak256(ciphertextOutput),

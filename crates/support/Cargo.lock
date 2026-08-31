@@ -3143,6 +3143,7 @@ dependencies = [
  "fhe",
  "fhe-traits",
  "sha2",
+ "sha3",
 ]
 
 [[package]]

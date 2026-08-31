@@ -39,10 +39,17 @@ pub fn setup_routes(config: &mut web::ServiceConfig) {
 }
 
 sol! {
-    /// The E3 PROGRAM's input event — three arguments. Not to be confused with `Interfold`'s
-    /// four-argument `InputPublished`, which carries an extra `inputHash`; they are different
-    /// events from different contracts and only one of them is what the activity feed renders.
-    event InputPublished(uint256 indexed e3Id, bytes data, uint256 index);
+    /// The CRISP program's content-addressed input event.
+    event InputPublished(
+        uint256 indexed e3Id,
+        address indexed slotAddress,
+        bytes32 encryptedVoteCommitment,
+        bytes32 encryptedVoteHash,
+        uint32 availabilityBlock,
+        uint128 availabilityLeafIndex,
+        uint256 index,
+        uint40 parentIndexPlusOne
+    );
 }
 
 /// Cost charged to the caller's read window.
@@ -81,10 +88,9 @@ pub struct RoundInputsResponse {
 /// `/state/lite` already reports how MANY inputs a round holds, but not when each arrived or in
 /// which transaction, which is what the feed links to — so this is not the same question.
 ///
-/// The event's `data` is the ciphertext and is deliberately dropped: the feed renders an index, a
-/// block and a link, and returning the payload would make the response orders of magnitude larger
-/// for a field nothing reads. Ballots stay indistinguishable either way — a mask and a vote look
-/// the same here, as they do on chain.
+/// The event holds only the content hash and Avail coordinates. The feed needs only the index,
+/// Ethereum block, and transaction link. Ballots stay indistinguishable: a mask and a vote have
+/// the same event shape.
 async fn round_inputs(
     http_request: HttpRequest,
     data: web::Json<RoundInputsRequest>,
@@ -205,12 +211,11 @@ mod tests {
 
     #[test]
     fn the_input_published_signature_is_the_program_event_not_interfold_s() {
-        // `InputPublished(uint256,bytes,uint256)` from the E3 PROGRAM, cross-checked against
-        // viem's `toEventSelector`. Interfold emits a four-argument event of the same name; using
-        // that one here would return an empty feed with nothing to indicate why.
+        // Cross-checked against viem's `toEventSelector`. Interfold has a different event with the
+        // same name; using that one here would return an empty feed.
         assert_eq!(
             format!("{:#x}", InputPublished::SIGNATURE_HASH),
-            "0xa8b9f2de7b39faeef44659f323cd6d14cfa11fbf8c4eaccfb1d6c954194656fd"
+            "0xbeebd5a7c46bb399523934784209bdeb6e68a004964282d7555fcc286169377c"
         );
     }
 }

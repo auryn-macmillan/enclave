@@ -7,7 +7,10 @@
 import express, { Request, Response } from 'express'
 import { InterfoldSDK } from '@interfold/sdk'
 import { RegistryEventType, type CommitteePublishedData } from '@interfold/sdk/events'
+import { keccak256 } from 'viem'
 import { hardhat } from 'viem/chains'
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { join } from 'node:path'
 import { handleTestInteraction } from './testHandler'
 import { getCheckedEnvVars } from './utils'
 import { callFheRunner } from './runner'
@@ -51,6 +54,15 @@ async function createPrivateSDK(): Promise<InterfoldSDK> {
 const scheduled = new Set<string>()
 const inFlight = new Set<string>()
 const CHAIN_TIME_POLL_INTERVAL_MS = 500
+const DATA_AVAILABILITY_DIRECTORY = process.env.DATA_AVAILABILITY_DIRECTORY ?? '.interfold/data-availability'
+
+async function storeAvailabilityObject(contentHash: `0x${string}`, bytes: Buffer): Promise<void> {
+  await mkdir(DATA_AVAILABILITY_DIRECTORY, { recursive: true })
+  const path = join(DATA_AVAILABILITY_DIRECTORY, contentHash.slice(2).toLowerCase())
+  const temporaryPath = `${path}.${process.pid}.tmp`
+  await writeFile(temporaryPath, bytes)
+  await rename(temporaryPath, path)
+}
 
 async function waitForChainTimestamp(sdk: InterfoldSDK, target: bigint): Promise<void> {
   const publicClient = sdk.getPublicClient()
@@ -209,8 +221,18 @@ async function handleWebhookRequest(req: Request, res: Response) {
 
     console.log(`🔄 Publishing output for E3 ${e3_id}...`)
 
+    const ciphertextBytes = Buffer.from(ciphertext.slice(2), 'hex')
+    const contentHash = keccak256(ciphertext)
+    await storeAvailabilityObject(contentHash, ciphertextBytes)
+
     const sdk = await createPrivateSDK()
-    await sdk.publishCiphertextOutput(BigInt(e3_id), ciphertext, ciphertext_commitment, proof)
+    await sdk.publishCiphertextOutput(BigInt(e3_id), {
+      contentHash,
+      ciphertextCommitment: ciphertext_commitment,
+      computeProof: proof,
+      // The local program verifies raw bytes as a deterministic mock receipt.
+      availabilityProof: ciphertext,
+    })
 
     inFlight.delete(e3_id.toString())
     console.log(`✅ Successfully completed E3 ${e3_id}`)
@@ -226,6 +248,19 @@ const app = express()
 app.use(express.json({ limit: '50mb' }))
 
 app.post('/', handleWebhookRequest)
+app.get('/availability/objects/:contentHash', async (req, res) => {
+  const contentHash = req.params.contentHash
+  if (!/^0x[a-fA-F0-9]{64}$/.test(contentHash)) {
+    res.status(400).json({ error: 'contentHash must be a 32-byte hex value' })
+    return
+  }
+  try {
+    const bytes = await readFile(join(DATA_AVAILABILITY_DIRECTORY, contentHash.slice(2).toLowerCase()))
+    res.type('application/octet-stream').send(bytes)
+  } catch {
+    res.status(404).json({ error: 'Object not found' })
+  }
+})
 
 // This allows us to test interaction between server and program
 // TEST_MODE=1 pnpm dev:server

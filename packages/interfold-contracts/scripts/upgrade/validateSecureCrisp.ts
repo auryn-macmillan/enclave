@@ -3,6 +3,7 @@ import { ethers as ethersLib } from "ethers";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { availVectorXForChain } from "../dataAvailability";
 import { connect } from "../protocol/cli";
 import { BFV_PARAMS } from "../protocol/constants";
 import {
@@ -26,8 +27,9 @@ import {
   requireContract,
 } from "../protocol/values";
 import {
-  MAINNET_BFV_CONFIGS,
   PRODUCTION_BFV_CONFIG,
+  activeBfvConfigForChain,
+  bfvConfigsForChain,
   getBfvDecryptionSubCircuitVkHashPaths,
   getBfvPkSubCircuitVkHashPaths,
   readVkRecursiveHash,
@@ -40,10 +42,18 @@ const crispInterface = new ethersLib.Interface([
   "function interfold() view returns (address)",
   "function imageId() view returns (bytes32)",
   "function risc0Verifier() view returns (address)",
+  "function dataAvailabilityVerifier() view returns (address)",
 ]);
 const ciphertextInterface = new ethersLib.Interface([
   "function imageId() view returns (bytes32)",
   "function risc0Verifier() view returns (address)",
+]);
+const dataAvailabilityInterface = new ethersLib.Interface([
+  "function bridge() view returns (address)",
+  "function vectorx() view returns (address)",
+]);
+const availBridgeInterface = new ethersLib.Interface([
+  "function vectorx() view returns (address)",
 ]);
 
 function planPath(config: ProtocolConfigFile): string {
@@ -80,14 +90,20 @@ export async function validateSecureCrispUpgrade(): Promise<void> {
   const deployment = readJson<ProtocolDeployment>(deploymentFile);
   const plan = readJson<SecureCrispUpgradePlan>(planPath(config));
   const network = await ethers.provider.getNetwork();
+  const chainId = Number(network.chainId);
   if (
-    Number(network.chainId) !== 1 ||
-    config.chainId !== 1 ||
-    deployment.chainId !== 1 ||
-    plan.chainId !== 1
+    ![1, 11155111].includes(chainId) ||
+    config.chainId !== chainId ||
+    deployment.chainId !== chainId ||
+    plan.chainId !== chainId
   ) {
-    throw new Error("Secure CRISP validation is Ethereum-only");
+    throw new Error(
+      "Secure CRISP validation supports matching Ethereum mainnet or Sepolia deployments",
+    );
   }
+  const avail = availVectorXForChain(chainId);
+  const verifierDefault = activeBfvConfigForChain(chainId);
+  const verifierConfigs = bfvConfigsForChain(chainId);
   if (plan.name !== config.name) {
     throw new Error(
       `Upgrade plan name mismatch: expected ${config.name}, got ${plan.name}`,
@@ -115,6 +131,13 @@ export async function validateSecureCrispUpgrade(): Promise<void> {
     deployment.ciphernodeRegistry,
     "CiphernodeRegistry proxy",
   );
+  equalAddress(
+    plan.registryProxyAdmin,
+    deployment.ciphernodeRegistryProxyAdmin,
+    "CiphernodeRegistry ProxyAdmin",
+  );
+  equalAddress(plan.availBridge, avail.bridge, "Avail bridge");
+  equalAddress(plan.vectorx, avail.vectorx, "VectorX verifier");
   equalAddress(
     plan.nodeReleaseRegistry,
     deployment.nodeReleaseRegistry,
@@ -149,12 +172,17 @@ export async function validateSecureCrispUpgrade(): Promise<void> {
 
   const codeAddresses = [
     [plan.interfoldImplementation, "Interfold implementation"],
+    [plan.registryImplementation, "CiphernodeRegistry implementation"],
+    [plan.sortitionLibrary, "RegistrySortitionLib"],
     [plan.lifecycleLibrary, "InterfoldLifecycle"],
     [plan.pricingLibrary, "InterfoldPricing"],
     [plan.pkVerifier, "BFV PK router"],
     [plan.decryptionVerifier, "BFV decryption router"],
     [plan.ciphertextVerifier, "CRISP ciphertext verifier"],
     [plan.crispProgram, "CRISP program"],
+    [plan.dataAvailabilityVerifier, "CRISP data-availability verifier"],
+    [plan.availBridge, "Avail bridge"],
+    [plan.vectorx, "VectorX verifier"],
     [plan.nodeReleaseRegistry, "NodeReleaseRegistry"],
     ...plan.bfvVerifierRoutes.flatMap((route) => [
       [route.pkVerifier, `${route.preset}/${route.committee} PK verifier`],
@@ -193,6 +221,11 @@ export async function validateSecureCrispUpgrade(): Promise<void> {
     await proxyImplementation(ethers, deployment.interfold),
     plan.interfoldImplementation,
     "live Interfold implementation",
+  );
+  equalAddress(
+    await proxyImplementation(ethers, deployment.ciphernodeRegistry),
+    plan.registryImplementation,
+    "live CiphernodeRegistry implementation",
   );
 
   const interfold = await ethers.getContractAt(
@@ -304,6 +337,54 @@ export async function validateSecureCrispUpgrade(): Promise<void> {
     deployment.interfold,
     "CRISP Interfold binding",
   );
+  equalAddress(
+    String(
+      await readContract(
+        ethers.provider,
+        plan.crispProgram,
+        crispInterface,
+        "dataAvailabilityVerifier",
+      ),
+    ),
+    plan.dataAvailabilityVerifier,
+    "CRISP data-availability verifier",
+  );
+  equalAddress(
+    String(
+      await readContract(
+        ethers.provider,
+        plan.dataAvailabilityVerifier,
+        dataAvailabilityInterface,
+        "bridge",
+      ),
+    ),
+    plan.availBridge,
+    "adapter Avail bridge",
+  );
+  equalAddress(
+    String(
+      await readContract(
+        ethers.provider,
+        plan.dataAvailabilityVerifier,
+        dataAvailabilityInterface,
+        "vectorx",
+      ),
+    ),
+    plan.vectorx,
+    "adapter VectorX verifier",
+  );
+  equalAddress(
+    String(
+      await readContract(
+        ethers.provider,
+        plan.availBridge,
+        availBridgeInterface,
+        "vectorx",
+      ),
+    ),
+    plan.vectorx,
+    "live bridge VectorX verifier",
+  );
 
   const crispImage = await readContract(
     ethers.provider,
@@ -342,9 +423,9 @@ export async function validateSecureCrispUpgrade(): Promise<void> {
     "CRISP RISC Zero verifier",
   );
 
-  if (plan.bfvVerifierRoutes.length !== MAINNET_BFV_CONFIGS.length) {
+  if (plan.bfvVerifierRoutes.length !== verifierConfigs.length) {
     throw new Error(
-      `Expected ${MAINNET_BFV_CONFIGS.length} secure BFV routes, got ${plan.bfvVerifierRoutes.length}`,
+      `Expected ${verifierConfigs.length} BFV routes, got ${plan.bfvVerifierRoutes.length}`,
     );
   }
   const pkRouter = await ethers.getContractAt(
@@ -355,17 +436,13 @@ export async function validateSecureCrispUpgrade(): Promise<void> {
     "BfvDecryptionVerifierRouter",
     plan.decryptionVerifier,
   );
-  equalValue(
-    await pkRouter.h(),
-    PRODUCTION_BFV_CONFIG.h,
-    "PK router default h",
-  );
+  equalValue(await pkRouter.h(), verifierDefault.h, "PK router default h");
   equalValue(
     await decryptionRouter.threshold(),
-    PRODUCTION_BFV_CONFIG.t,
+    verifierDefault.t,
     "decryption router default threshold",
   );
-  const expectedRouteCount = BigInt(MAINNET_BFV_CONFIGS.length);
+  const expectedRouteCount = BigInt(verifierConfigs.length);
   equalValue(await pkRouter.routeCount(), expectedRouteCount, "PK route count");
   equalValue(
     await decryptionRouter.routeCount(),
@@ -373,8 +450,8 @@ export async function validateSecureCrispUpgrade(): Promise<void> {
     "decryption route count",
   );
 
-  for (let index = 0; index < MAINNET_BFV_CONFIGS.length; index += 1) {
-    const expected = MAINNET_BFV_CONFIGS[index];
+  for (let index = 0; index < verifierConfigs.length; index += 1) {
+    const expected = verifierConfigs[index];
     const recorded = plan.bfvVerifierRoutes[index];
     if (
       recorded.preset !== expected.preset ||
@@ -462,10 +539,13 @@ export async function validateSecureCrispUpgrade(): Promise<void> {
   deployment.interfoldImplementation = plan.interfoldImplementation;
   deployment.interfoldLifecycle = plan.lifecycleLibrary;
   deployment.interfoldPricing = plan.pricingLibrary;
+  deployment.ciphernodeRegistryImplementation = plan.registryImplementation;
+  deployment.registrySortitionLib = plan.sortitionLibrary;
   deployment.pkVerifier = plan.pkVerifier;
   deployment.decryptionVerifier = plan.decryptionVerifier;
   deployment.ciphertextVerifier = plan.ciphertextVerifier;
   deployment.crispProgram = plan.crispProgram;
+  deployment.dataAvailabilityVerifier = plan.dataAvailabilityVerifier;
   deployment.bfvVerifierRoutes = plan.bfvVerifierRoutes;
   const first = plan.bfvVerifierRoutes[0];
   deployment.dkgAggregatorVerifier = first.dkgAggregatorVerifier;
@@ -481,6 +561,7 @@ Secure CRISP activation validated
   crypto config:       ${PRODUCTION_BFV_CONFIG.configId}
   secure BFV routes:   ${plan.bfvVerifierRoutes.length}
   CRISP program:       ${plan.crispProgram}
+  DA verifier:         ${plan.dataAvailabilityVerifier}
   node protocol:       ${plan.nodeRelease.protocolVersion}
   requests paused:     true
 
