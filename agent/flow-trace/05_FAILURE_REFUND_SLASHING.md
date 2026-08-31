@@ -26,12 +26,14 @@ actually slashed and does not require an oracle or relabel one ERC-20 as another
 Anyone can call `markE3Failed()` when a deadline is missed. A ready committee remains finalizable
 through its absolute DKG deadline. It can fail if it remains unfinalized after that deadline.
 
-For the aggregator-owned DKG and decryption stages, each selected ciphernode reconstructs a
-canonical deadline watch from `CiphernodeSelected` and `E3StageChanged` during replay. After
-`EffectsEnabled`, it reads the deadline from `Interfold`, staggers its attempt by canonical party
-ID, confirms that the stage and failure condition still match, and calls `markE3Failed`. A canonical
-stage change cancels the old watch. If a node restarts after the deadline, the party-ID stagger is
-applied from restart time so all committee wallets do not submit at once.
+The Interfold writer watches every stage that `failureCondition` supports: `Requested`,
+`CommitteeFinalized`, `KeyPublished`, and `CiphertextReady`. Startup restores the stage from the
+durable lifecycle map and restores the request-time registry from the DKG context. A selected
+committee member staggers its attempt by canonical party ID. A node without a party ID waits until
+the failure grace period is over, then uses the permissionless path. Before submission, the writer
+confirms that the stage and failure condition still match. A canonical stage change cancels the old
+watch. After a restart, selected members keep their party-ID stagger and non-members remain outside
+the protected grace window.
 
 If an honest-node allocation is smaller than the node count, the refund manager credits it to the
 request-time treasury instead of creating zero-value claims.

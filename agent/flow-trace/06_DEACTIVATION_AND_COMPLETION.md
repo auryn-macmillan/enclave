@@ -490,8 +490,9 @@ publish that exclusion leaves the intent retryable.
 The registry writer rebuilds ticket, committee-finalization, and public-key submission gates from
 durable local events. It does not submit during replay. After `EffectsEnabled`, it retries temporary
 RPC or contract-ordering failures, treats already-landed transactions as success, and stops retrying
-a ticket after a permanent eligibility or deadline result. The Interfold writer applies the same
-pattern to plaintext publication.
+a ticket after a permanent eligibility or deadline result. It also stops a public-key submission
+after an RPC request-size rejection or a permanent payload or contract error. The Interfold writer
+applies the same pattern to plaintext publication.
 
 The request router uses one checkpoint at `//router/recovery_checkpoint` for its active contexts,
 completed set, and all aggregate cursors. Per-E3 context snapshots remain below their own router

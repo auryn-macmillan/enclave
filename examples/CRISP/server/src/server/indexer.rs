@@ -16,7 +16,6 @@ use crate::server::{
     token_holders::{build_tree, compute_token_holder_hashes},
     CONFIG,
 };
-use alloy::providers::{Provider, ProviderBuilder};
 use alloy::sol_types::{sol_data, SolType};
 use alloy_primitives::{Address, U256};
 use crisp_utils::decode_tally;
@@ -30,13 +29,14 @@ use e3_sdk::{
         },
         retry::call_with_retry,
     },
-    indexer::{DataStore, InterfoldIndexer, SharedStore},
+    indexer::{DataStore, IndexerContext, InterfoldIndexer, SharedStore},
 };
 use evm_helpers::{CRISPContractFactory, InputPublished};
 use eyre::Context;
 use log::{error, info, warn};
 use num_bigint::BigUint;
 use std::error::Error;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
 
@@ -378,7 +378,7 @@ pub async fn register_e3_requested(
                         .with_context(|| format!("[e3_id={}] Invalid E3 ID", e3_id))?;
 
                     info!(
-                        "[e3_id={}] Calling setMerkleRoot with root: {}",
+                        "[e3_id={}] Ensuring CRISPProgram Merkle root: {}",
                         e3_id, merkle_root_u256
                     );
 
@@ -392,18 +392,53 @@ pub async fn register_e3_requested(
                         format!("[e3_id={}] Failed to create CRISP contract", e3_id)
                     })?;
 
-                    let receipt = contract
-                        .set_merkle_root(e3_id_u256, merkle_root_u256)
-                        .await
-                        .with_context(|| {
-                            format!("[e3_id={}] Failed to call setMerkleRoot", e3_id)
-                        })?;
-
-                    info!(
-                        "[e3_id={}] setMerkleRoot successful. TxHash: {:?}",
-                        e3_id, receipt.transaction_hash
-                    );
+                    let stored_root = contract.get_merkle_root(e3_id_u256).await?;
+                    if stored_root == merkle_root_u256 {
+                        info!(
+                            "[e3_id={}] Merkle root is already set to the expected value",
+                            e3_id
+                        );
+                    } else if stored_root.is_zero() {
+                        match contract
+                            .set_merkle_root(e3_id_u256, merkle_root_u256)
+                            .await
+                        {
+                            Ok(receipt) => info!(
+                                "[e3_id={}] setMerkleRoot successful. TxHash: {:?}",
+                                e3_id, receipt.transaction_hash
+                            ),
+                            Err(error) => {
+                                // A live subscription and its overlap replay can race here. Accept
+                                // the losing transaction only when the desired root landed.
+                                let root_after_error =
+                                    contract.get_merkle_root(e3_id_u256).await?;
+                                if root_after_error != merkle_root_u256 {
+                                    return Err(error).with_context(|| {
+                                        format!(
+                                            "[e3_id={}] Failed to call setMerkleRoot",
+                                            e3_id
+                                        )
+                                    });
+                                }
+                                info!(
+                                    "[e3_id={}] Merkle root was set by a concurrent handler",
+                                    e3_id
+                                );
+                            }
+                        }
+                    } else {
+                        return Err(eyre::eyre!(
+                            "[e3_id={}] CRISPProgram has a different Merkle root: expected {}, got {}",
+                            e3_id,
+                            merkle_root_u256,
+                            stored_root
+                        ));
+                    }
                 }
+
+                // Committee and request handlers run concurrently for live logs. If the key was
+                // indexed while census preparation was still running, this closes that race.
+                activate_round_if_ready(e3_id.clone(), ctx).await?;
 
                 Ok(())
             }
@@ -473,6 +508,146 @@ async fn wait_for_indexed_inputs<S: DataStore>(
 /// handler, so two passes do not overlap.
 const DEADLINE_RETRY_OFFSETS: [u64; 3] = [60, 180, 420];
 
+const ROUND_ACTIVATION_RETRY_OFFSETS: [u64; 5] = [1, 5, 30, 120, 600];
+
+fn deadline_attempt_times(expiration: u64, now: u64) -> [u64; 4] {
+    let first = expiration.max(now);
+    [
+        first,
+        first.saturating_add(DEADLINE_RETRY_OFFSETS[0]),
+        first.saturating_add(DEADLINE_RETRY_OFFSETS[1]),
+        first.saturating_add(DEADLINE_RETRY_OFFSETS[2]),
+    ]
+}
+
+async fn handle_e3_input_deadline_expiration_logged<S: DataStore>(
+    e3_id: String,
+    store: SharedStore<S>,
+) -> eyre::Result<()> {
+    if let Err(error) = handle_e3_input_deadline_expiration(e3_id.clone(), store).await {
+        error!("[e3_id={}] CRISP deadline pass failed: {}", e3_id, error);
+    }
+    Ok(())
+}
+
+async fn activate_round_if_ready<S: DataStore>(
+    e3_id: String,
+    ctx: Arc<IndexerContext<S, ReadWrite>>,
+) -> eyre::Result<bool> {
+    let store = ctx.store();
+    let mut repo = CrispE3Repository::new(store.clone(), &e3_id);
+    if !repo.has_crisp_record().await? || !repo.has_indexed_public_key().await? {
+        return Ok(false);
+    }
+
+    let expiration = repo.get_input_deadline().await?;
+    if !repo.try_start_round().await? {
+        return Ok(true);
+    }
+
+    let now = chrono::Utc::now().timestamp().max(0) as u64;
+    for at in deadline_attempt_times(expiration, now) {
+        let e3_id = e3_id.clone();
+        ctx.do_later(at, move |_, ctx| {
+            handle_e3_input_deadline_expiration_logged(e3_id.clone(), ctx.store())
+        });
+    }
+
+    let mut current_round_repo = CurrentRoundRepository::new(store);
+    current_round_repo
+        .set_current_round(CurrentRound { id: e3_id.clone() })
+        .await?;
+    info!(
+        "[e3_id={}] Activated CRISP round and registered deadline callbacks",
+        e3_id
+    );
+    Ok(true)
+}
+
+fn schedule_round_activation_retries<S: DataStore>(
+    e3_id: &str,
+    ctx: &Arc<IndexerContext<S, ReadWrite>>,
+) {
+    let now = chrono::Utc::now().timestamp().max(0) as u64;
+    for offset in ROUND_ACTIVATION_RETRY_OFFSETS {
+        let e3_id = e3_id.to_string();
+        ctx.do_later(now.saturating_add(offset), move |_, ctx| {
+            let e3_id = e3_id.clone();
+            async move {
+                if let Err(error) = activate_round_if_ready(e3_id.clone(), ctx).await {
+                    error!(
+                        "[e3_id={}] Deferred CRISP round activation failed: {}",
+                        e3_id, error
+                    );
+                }
+                Ok(())
+            }
+        });
+    }
+}
+
+async fn restore_round_deadline_callbacks<S: DataStore>(
+    indexer: &InterfoldIndexer<S, ReadWrite>,
+) -> Result<()> {
+    let store = indexer.get_store();
+    let round_ids = CurrentRoundRepository::new(store.clone())
+        .get_round_ids()
+        .await?;
+    let now = chrono::Utc::now().timestamp().max(0) as u64;
+
+    for e3_id in round_ids {
+        let mut repo = CrispE3Repository::new(store.clone(), &e3_id);
+        let mut status = repo.get_status().await?;
+        let has_indexed_public_key = repo.has_indexed_public_key().await?;
+        if status == "Active" && !has_indexed_public_key {
+            repo.update_status("Requested").await?;
+            status = "Requested".to_string();
+            warn!(
+                "[e3_id={}] Reset an active round to pending because no verified public key is indexed",
+                e3_id
+            );
+        }
+        if status == "Requested" && has_indexed_public_key {
+            if repo.try_start_round().await? {
+                let mut current_round_repo = CurrentRoundRepository::new(store.clone());
+                current_round_repo
+                    .set_current_round(CurrentRound { id: e3_id.clone() })
+                    .await?;
+                status = "Active".to_string();
+                info!(
+                    "[e3_id={}] Activated a requested round whose verified key was indexed before restart",
+                    e3_id
+                );
+            }
+        }
+        if status == "Computing" || status == "PublishingCiphertext" {
+            repo.update_status("Expired").await?;
+            status = "Expired".to_string();
+            warn!(
+                "[e3_id={}] Reset an interrupted compute submission so it can be retried",
+                e3_id
+            );
+        }
+        if status != "Active" && status != "Expired" {
+            continue;
+        }
+
+        let expiration = repo.get_input_deadline().await?;
+        for at in deadline_attempt_times(expiration, now) {
+            let e3_id = e3_id.clone();
+            indexer.schedule_at(at, move |_, ctx| {
+                handle_e3_input_deadline_expiration_logged(e3_id.clone(), ctx.store())
+            });
+        }
+        info!(
+            "[e3_id={}] Restored deadline callbacks for CRISP round in status {}",
+            e3_id, status
+        );
+    }
+
+    Ok(())
+}
+
 /// Store key holding the `INDEX_LOG_CONTRACTS` set as of the previous run.
 ///
 /// Coverage records outlive the configuration that created them, and the store has no delete. This
@@ -488,14 +663,9 @@ async fn handle_e3_input_deadline_expiration(
     let mut repo = CrispE3Repository::new(store.clone(), &e3_id);
     let e3: e3_sdk::indexer::models::E3 = repo.get_e3().await?;
 
-    // A cheap skip for a retry pass over a round that already moved on, so it does not sit through
-    // the indexer wait below. Not the safety barrier — `try_claim_computing` is, further down.
-    let status = repo.get_status().await?;
-    if status == "Computing" || status == "Finished" {
+    if !repo.try_mark_expired().await? {
         return Ok(());
     }
-
-    repo.update_status("Expired").await?;
 
     let voter_count = repo.get_vote_count().await?;
 
@@ -563,45 +733,65 @@ async fn handle_e3_input_deadline_expiration(
             return Ok(());
         }
 
-        let (id, status) = run_compute(
-            &e3_id,
-            e3.chain_id,
-            e3.interfold_address,
-            e3.encryption_scheme_id,
-            e3.committee_public_key_hash,
-            e3.e3_params,
-            RoundInputs {
-                ciphertexts: snapshot.ciphertexts,
-                commitments: snapshot.commitments,
-                slots: snapshot.slots,
-                parents: snapshot.parents,
-            },
-            format!(
-                "{}/state/add-result",
-                CONFIG.interfold_server_url_for_clients()
-            ),
-        )
-        .await
-        .map_err(|e| eyre::eyre!("Error sending run compute request: {e}"))?;
+        let submission = async {
+            let (id, status) = run_compute(
+                &e3_id,
+                e3.chain_id,
+                e3.interfold_address,
+                e3.encryption_scheme_id,
+                e3.committee_public_key_hash,
+                e3.e3_params,
+                RoundInputs {
+                    ciphertexts: snapshot.ciphertexts,
+                    commitments: snapshot.commitments,
+                    slots: snapshot.slots,
+                    parents: snapshot.parents,
+                },
+                format!(
+                    "{}/state/add-result",
+                    CONFIG.interfold_server_url_for_clients()
+                ),
+            )
+            .await
+            .map_err(|e| eyre::eyre!("Error sending run compute request: {e}"))?;
 
-        if id != e3_id {
-            return Err(eyre::eyre!(
-                "Computation request returned unexpected E3 ID: expected {}, got {}",
-                e3_id,
-                id
-            ));
+            if id != e3_id {
+                return Err(eyre::eyre!(
+                    "Computation request returned unexpected E3 ID: expected {}, got {}",
+                    e3_id,
+                    id
+                ));
+            }
+
+            if status != "processing" {
+                return Err(eyre::eyre!(
+                    "Computation request failed with status: {}",
+                    status
+                ));
+            }
+
+            Ok::<(), eyre::Report>(())
         }
+        .await;
 
-        if status != "processing" {
-            return Err(eyre::eyre!(
-                "Computation request failed with status: {}",
-                status
-            ));
+        if let Err(submission_error) = submission {
+            if let Err(release_error) = repo.release_compute_submission().await {
+                error!(
+                    "[e3_id={}] Failed to release compute claim after submission error: {}",
+                    e3_id, release_error
+                );
+            }
+            return Err(submission_error.into());
         }
 
         info!("[e3_id={}] Request Computation for E3", e3_id);
 
-        repo.update_status("PublishingCiphertext").await?;
+        if !repo.mark_compute_submitted().await? {
+            warn!(
+                "[e3_id={}] Compute response arrived after the claim was released; a later deadline pass will retry",
+                e3_id
+            );
+        }
     } else {
         info!(
             "[e3_id={}] E3 has no votes to decrypt. Setting status to Finished.",
@@ -671,37 +861,15 @@ pub async fn register_committee_published(
     indexer
         .add_event_handler(move |event: CommitteePublished, ctx| {
             async move {
-                let store = ctx.store();
                 let e3_id = event.e3Id.to_string();
-                let mut repo = CrispE3Repository::new(store.clone(), &e3_id);
-                let mut current_round_repo = CurrentRoundRepository::new(store);
                 info!("[e3_id={}] Handling CommitteePublished", e3_id);
-                // Get current time
-                let now = get_current_timestamp_rpc().await?;
-                info!("[e3_id={}] Current time: {}", event.e3Id, now);
 
-                repo.start_round().await?;
-
-                current_round_repo
-                    .set_current_round(CurrentRound { id: e3_id.clone() })
-                    .await?;
-
-                let expiration = repo.get_input_deadline().await?;
-
-                info!("[e3_id={}] Registering hook for {}", e3_id, expiration);
-                // Registered once per offset, up front. A pass that finds the indexer behind
-                // returns without computing, and `do_later` has already dropped that callback, so
-                // the round would otherwise stay "Expired" for good. Every pass after the first
-                // returns immediately once the round is computing or finished.
-                for at in std::iter::once(expiration).chain(
-                    DEADLINE_RETRY_OFFSETS
-                        .iter()
-                        .map(|offset| expiration + offset),
-                ) {
-                    let e3_id = e3_id.clone();
-                    ctx.do_later(at, move |_, ctx| {
-                        handle_e3_input_deadline_expiration(e3_id.clone(), ctx.store())
-                    });
+                if !activate_round_if_ready(e3_id.clone(), ctx.clone()).await? {
+                    warn!(
+                        "[e3_id={}] Committee event arrived, but the verified public key or CRISP request record is unavailable; round remains pending",
+                        e3_id
+                    );
+                    schedule_round_activation_retries(&e3_id, &ctx);
                 }
 
                 Ok(())
@@ -709,16 +877,6 @@ pub async fn register_committee_published(
         })
         .await;
     Ok(indexer)
-}
-
-pub async fn get_current_timestamp_rpc() -> eyre::Result<u64> {
-    let provider = ProviderBuilder::new().connect(&CONFIG.http_rpc_url).await?;
-    let block = provider
-        .get_block_by_number(alloy::eips::BlockNumberOrTag::Latest)
-        .await?
-        .ok_or_else(|| eyre::eyre!("Latest block not found"))?;
-
-    Ok(block.header.timestamp)
 }
 
 pub async fn register_input_published(
@@ -989,6 +1147,7 @@ pub async fn start_indexer(
         }
     }
 
+    restore_round_deadline_callbacks(&crisp_indexer).await?;
     crisp_indexer.listen().await?;
     info!("CRISP: Indexer listen loop has finished!");
     Ok(())
@@ -996,6 +1155,7 @@ pub async fn start_indexer(
 
 #[cfg(test)]
 mod custom_params_decoding_tests {
+    use super::deadline_attempt_times;
     use crate::server::models::CensusMode;
     use alloy::dyn_abi::SolType;
     use alloy::primitives::{Address, U256};
@@ -1080,5 +1240,11 @@ mod custom_params_decoding_tests {
         // keeps testing an unknown mode rather than silently becoming a valid one.
         let decoded = <CustomParamsTuple as SolType>::abi_decode(&encode(3)).unwrap();
         assert!(CensusMode::try_from(decoded.5.to::<u64>()).is_err());
+    }
+
+    #[test]
+    fn restart_spreads_overdue_deadline_attempts_from_now() {
+        assert_eq!(deadline_attempt_times(100, 200), [200, 260, 380, 620]);
+        assert_eq!(deadline_attempt_times(300, 200), [300, 360, 480, 720]);
     }
 }

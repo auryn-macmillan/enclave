@@ -61,14 +61,25 @@ pub(crate) fn validate_plaintext_output(
 pub(crate) fn failure_watch_delay(
     now_unix_secs: u64,
     deadline_unix_secs: u64,
-    party_id: u64,
+    party_id: Option<u64>,
+    permissionless_grace_secs: u64,
     party_stagger_secs: u64,
 ) -> Duration {
-    let deadline_wait = deadline_unix_secs
-        .saturating_sub(now_unix_secs)
-        .saturating_add(1);
-    let stagger = party_id.saturating_mul(party_stagger_secs);
-    Duration::from_secs(deadline_wait.saturating_add(stagger))
+    let delay = match party_id {
+        Some(party_id) => deadline_unix_secs
+            .saturating_sub(now_unix_secs)
+            .saturating_add(1)
+            .saturating_add(party_id.saturating_mul(party_stagger_secs)),
+        None => {
+            let permissionless_at = if permissionless_grace_secs == 0 {
+                deadline_unix_secs.saturating_add(1)
+            } else {
+                deadline_unix_secs.saturating_add(permissionless_grace_secs)
+            };
+            permissionless_at.saturating_sub(now_unix_secs)
+        }
+    };
+    Duration::from_secs(delay)
 }
 
 #[cfg(test)]
@@ -124,9 +135,17 @@ mod tests {
 
     #[test]
     fn failure_watch_stagger_survives_restart() {
-        assert_eq!(failure_watch_delay(100, 160, 0, 15).as_secs(), 61);
-        assert_eq!(failure_watch_delay(100, 160, 2, 15).as_secs(), 91);
-        assert_eq!(failure_watch_delay(200, 160, 0, 15).as_secs(), 1);
-        assert_eq!(failure_watch_delay(200, 160, 2, 15).as_secs(), 31);
+        assert_eq!(failure_watch_delay(100, 160, Some(0), 90, 15).as_secs(), 61);
+        assert_eq!(failure_watch_delay(100, 160, Some(2), 90, 15).as_secs(), 91);
+        assert_eq!(failure_watch_delay(200, 160, Some(0), 90, 15).as_secs(), 1);
+        assert_eq!(failure_watch_delay(200, 160, Some(2), 90, 15).as_secs(), 31);
+    }
+
+    #[test]
+    fn requested_stage_failure_without_party_waits_for_permissionless_grace() {
+        assert_eq!(failure_watch_delay(100, 160, None, 90, 15).as_secs(), 150);
+        assert_eq!(failure_watch_delay(200, 160, None, 90, 15).as_secs(), 50);
+        assert_eq!(failure_watch_delay(250, 160, None, 90, 15).as_secs(), 0);
+        assert_eq!(failure_watch_delay(160, 160, None, 0, 15).as_secs(), 1);
     }
 }

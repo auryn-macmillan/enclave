@@ -261,7 +261,7 @@ pub struct E3 {
     pub requester: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct E3Crisp {
     pub emojis: [String; 2],
     pub start_time: u64,

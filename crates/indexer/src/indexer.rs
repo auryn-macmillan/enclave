@@ -327,6 +327,95 @@ impl<S: DataStore> InterfoldIndexer<S, ReadWrite> {
     }
 }
 
+async fn store_committee_public_key<S: DataStore, R: ProviderType>(
+    event: CommitteePublished,
+    ctx: Arc<IndexerContext<S, R>>,
+) -> Result<bool> {
+    let contract = ctx.contract();
+    let db = ctx.store();
+    let interfold_address = ctx.interfold_address();
+    let e3_id = event.e3Id.to_string();
+
+    info!(
+        "CommitteePublished: id={}, public_key_len={}, proof_len={}",
+        event.e3Id,
+        event.publicKey.len(),
+        event.proof.len()
+    );
+
+    let e3 = contract.get_e3(event.e3Id).await?;
+    let params_preset = BfvPreset::from_on_chain_param_set(e3.paramSet).ok_or_else(|| {
+        eyre!(
+            "unsupported BFV parameter set {} for E3 {e3_id}",
+            e3.paramSet
+        )
+    })?;
+    let e3_params = encode_bfv_params(&BfvParamSet::from(params_preset).build_arc());
+    let crypto_config_id = keccak256(
+        (
+            keccak256(b"fhe.rs:BFV"),
+            keccak256(&e3_params),
+            keccak256(b"interfold-bfv-v1"),
+        )
+            .abi_encode(),
+    );
+    let request_crypto_config_id = contract.get_e3_crypto_config_id(event.e3Id).await?;
+    if request_crypto_config_id != crypto_config_id {
+        return Err(eyre!(
+            "local circuit configuration does not match request-time config for E3 {e3_id}"
+        ));
+    }
+    if e3.encryptionSchemeId == keccak256("fhe.rs:BFV") {
+        let decoded_params = decode_bfv_params(&e3_params)
+            .map_err(|error| eyre!("invalid BFV parameters for E3 {e3_id}: {error}"))?;
+        if let Err(error) = validate_pk_commitment(
+            &event.publicKey,
+            event.pkCommitment.0,
+            decoded_params.degree(),
+            decoded_params.plaintext(),
+            decoded_params.moduli().to_vec(),
+        ) {
+            warn!("Ignoring an unbound committee public-key candidate for E3 {e3_id}: {error}");
+            return Ok(false);
+        }
+    }
+    let seed = e3.seed.to_be_bytes();
+    let request_block = u64_try_from(e3.requestBlock)?;
+    let input_window = [
+        u64_try_from(e3.inputWindow[0])?,
+        u64_try_from(e3.inputWindow[1])?,
+    ];
+
+    let e3_obj = E3 {
+        chain_id: ctx.chain_id(),
+        ciphertext_inputs: vec![],
+        ciphertext_output: vec![],
+        ciphertext_commitment: vec![],
+        committee_public_key: event.publicKey.to_vec(),
+        committee_public_key_hash: event.pkCommitment.to_vec(),
+        custom_params: e3.customParams.to_vec(),
+        e3_params: e3_params.to_vec(),
+        interfold_address,
+        encryption_scheme_id: e3.encryptionSchemeId.to_vec(),
+        crypto_config_id: crypto_config_id.to_vec(),
+        id: e3_id.clone(),
+        plaintext_output: vec![],
+        request_block,
+        seed,
+        input_window,
+        committee_size: e3.committeeSize,
+        requester: e3.requester.to_string(),
+    };
+
+    let mut repo = E3Repository::new(db, &e3_id);
+    if repo.set_e3_if_absent(e3_obj).await? {
+        info!("E3 {} created and stored", e3_id);
+    } else {
+        info!("E3 {} already has a verified committee key", e3_id);
+    }
+    Ok(true)
+}
+
 impl<S: DataStore, R: ProviderType> InterfoldIndexer<S, R> {
     pub async fn new(
         mut event_listener: EventListener,
@@ -431,88 +520,7 @@ impl<S: DataStore, R: ProviderType> InterfoldIndexer<S, R> {
 
     async fn register_committee_published(&mut self) -> Result<()> {
         self.add_event_handler(move |e: CommitteePublished, ctx| async move {
-            let contract = ctx.contract();
-            let db = ctx.store();
-            let interfold_address = ctx.interfold_address();
-            let e3_id = e.e3Id.to_string();
-
-            info!(
-                "CommitteePublished: id={}, public_key_len={}, proof_len={}",
-                e.e3Id,
-                e.publicKey.len(),
-                e.proof.len()
-            );
-
-            let e3 = contract.get_e3(e.e3Id).await?;
-            let params_preset =
-                BfvPreset::from_on_chain_param_set(e3.paramSet).ok_or_else(|| {
-                    eyre!(
-                        "unsupported BFV parameter set {} for E3 {e3_id}",
-                        e3.paramSet
-                    )
-                })?;
-            let e3_params = encode_bfv_params(&BfvParamSet::from(params_preset).build_arc());
-            let crypto_config_id = keccak256(
-                (
-                    keccak256(b"fhe.rs:BFV"),
-                    keccak256(&e3_params),
-                    keccak256(b"interfold-bfv-v1"),
-                )
-                    .abi_encode(),
-            );
-            let request_crypto_config_id = contract.get_e3_crypto_config_id(e.e3Id).await?;
-            if request_crypto_config_id != crypto_config_id {
-                return Err(eyre!(
-                    "local circuit configuration does not match request-time config for E3 {e3_id}"
-                ));
-            }
-            if e3.encryptionSchemeId == keccak256("fhe.rs:BFV") {
-                let decoded_params = decode_bfv_params(&e3_params)
-                    .map_err(|error| eyre!("invalid BFV parameters for E3 {e3_id}: {error}"))?;
-                validate_pk_commitment(
-                    &e.publicKey,
-                    e.pkCommitment.0,
-                    decoded_params.degree(),
-                    decoded_params.plaintext(),
-                    decoded_params.moduli().to_vec(),
-                )
-                .map_err(|error| {
-                    eyre!("rejecting unbound CommitteePublished public key for E3 {e3_id}: {error}")
-                })?;
-            }
-            let seed = e3.seed.to_be_bytes();
-            let request_block = u64_try_from(e3.requestBlock)?;
-            let input_window = [
-                u64_try_from(e3.inputWindow[0])?,
-                u64_try_from(e3.inputWindow[1])?,
-            ];
-
-            let e3_obj = E3 {
-                chain_id: ctx.chain_id(),
-                ciphertext_inputs: vec![],
-                ciphertext_output: vec![],
-                ciphertext_commitment: vec![],
-                committee_public_key: e.publicKey.to_vec(),
-                committee_public_key_hash: e.pkCommitment.to_vec(),
-                custom_params: e3.customParams.to_vec(),
-                e3_params: e3_params.to_vec(),
-                interfold_address,
-                encryption_scheme_id: e3.encryptionSchemeId.to_vec(),
-                crypto_config_id: crypto_config_id.to_vec(),
-                id: e3_id.clone(),
-                plaintext_output: vec![],
-                request_block,
-                seed,
-                input_window,
-                committee_size: e3.committeeSize,
-                requester: e3.requester.to_string(),
-            };
-
-            let mut repo = E3Repository::new(db, &e3_id);
-            repo.set_e3(e3_obj).await?;
-
-            info!("E3 {} created and stored", e3_id);
-
+            store_committee_public_key(e, ctx).await?;
             Ok(())
         })
         .await;
@@ -888,6 +896,15 @@ impl<S: DataStore, R: ProviderType> InterfoldIndexer<S, R> {
 
     pub fn get_store(&self) -> SharedStore<S> {
         self.ctx.store.clone()
+    }
+
+    /// Schedule a timestamp callback without requiring an event-handler context.
+    pub fn schedule_at<F, Fut>(&self, timestamp: u64, callback: F)
+    where
+        F: Fn(u64, Arc<IndexerContext<S, R>>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        self.ctx.do_later(timestamp, callback);
     }
 }
 

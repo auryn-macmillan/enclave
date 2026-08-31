@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 // This correlates with the information from the contract
 // with an addition of a chain_id
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct E3 {
     pub chain_id: u64,
     pub ciphertext_inputs: Vec<(Vec<u8>, u64)>,

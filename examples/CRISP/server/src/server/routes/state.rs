@@ -59,19 +59,19 @@ fn round_not_found(e3_id: &str) -> HttpResponse {
     })
 }
 
-/// The round IS indexed — its committee just has not published a key.
+/// The round is indexed, but verified public-key bytes are not available.
 ///
 /// Same status as an unknown round, because there is still nothing to serve, but never the same
 /// message. The two have completely different causes: one means the request was never seen, the
-/// other means DKG has not completed (or never will, for a round that failed). Reporting both as
-/// "no state for round X" sent us looking for a broken indexer when the indexer was fine and the
-/// ciphernodes were not.
+/// other means the byte publication has not arrived or did not verify. `KeyPublished` on chain is
+/// not sufficient because that stage records the proof-backed commitment before the byte event.
 async fn round_state_pending(store: &web::Data<AppData>, e3_id: &str) -> HttpResponse {
     match store.e3(e3_id).has_crisp_record().await {
         Ok(true) => HttpResponse::NotFound().json(JsonResponse {
             response: format!(
-                "Round {e3_id} is indexed, but its committee has not published a key yet, so \
-                 there is no state to serve. Check whether the round has failed on chain."
+                "Round {e3_id} is indexed, but verified committee public-key bytes are not \
+                 available, so there is no state to serve. KeyPublished on chain confirms only \
+                 the commitment. Check the byte-publication event and the on-chain failure state."
             ),
         }),
         Ok(false) => round_not_found(e3_id),
@@ -145,9 +145,8 @@ async fn handle_program_server_result(data: web::Json<WebhookPayload>) -> impl R
         WebhookPayload::Failed { e3_id, error } => {
             error!("Computation failed for E3 ID: {}. Error: {}", e3_id, error);
 
-            // TODO: Update E3 state to indicate computation failed
-            // TODO: Handle ciphernode rewards for partial work
-            // TODO: Emit on-chain event if needed
+            // This callback is not authenticated. Do not let a caller move durable round state by
+            // claiming that the program server failed.
 
             HttpResponse::Ok().json(format!(
                 "Computation failed for E3 ID: {}. Error: {}",
@@ -317,11 +316,11 @@ async fn get_all_round_results(
                 }
             }
             Err(e) => {
-                // Expected for a round whose committee key is not published yet — the `_e3:`
-                // record only exists after CommitteePublished. See the note in
+                // Expected until a verified public-key byte event creates the `_e3:` record. See
+                // the note in
                 // `get_current_round_for_requester`.
                 info!(
-                    "Round {} is not fully indexed yet (usually: committee key pending) — skipping: {:?}",
+                    "Round {} has no verified public-key bytes yet — skipping: {:?}",
                     e3_id, e
                 );
                 continue;

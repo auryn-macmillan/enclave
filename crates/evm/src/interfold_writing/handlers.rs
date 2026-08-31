@@ -5,6 +5,7 @@
 use super::effects::*;
 use super::*;
 use e3_events::EventSource;
+use std::collections::HashSet;
 
 const PUBLICATION_RETRY_DELAY: std::time::Duration = std::time::Duration::from_secs(30);
 const FAILURE_RETRY_DELAY: Duration = Duration::from_secs(30);
@@ -27,12 +28,15 @@ impl<P: Provider + WalletProvider + Clone + 'static> InterfoldSolWriter<P> {
     }
 
     fn try_start_failure_watch(&self, e3_id: &E3id, ctx: &mut actix::Context<Self>) {
-        if !self.effects_enabled || !self.committee_party_ids.contains_key(e3_id) {
+        if !self.effects_enabled {
             return;
         }
         let Some(stage) = self.failure_stages.get(e3_id).cloned() else {
             return;
         };
+        if stage == E3Stage::Requested && !self.request_registries.contains_key(e3_id) {
+            return;
+        }
         ctx.notify(ResolveFailureDeadline {
             e3_id: e3_id.clone(),
             stage,
@@ -43,10 +47,14 @@ impl<P: Provider + WalletProvider + Clone + 'static> InterfoldSolWriter<P> {
         for e3_id in self.failure_stages.keys() {
             self.try_start_failure_watch(e3_id, ctx);
         }
-        for e3_id in self.committee_party_ids.keys() {
-            ctx.notify(DiscoverFailureStage {
-                e3_id: e3_id.clone(),
-            });
+        let discovery_ids = self
+            .committee_party_ids
+            .keys()
+            .chain(self.request_registries.keys())
+            .cloned()
+            .collect::<HashSet<_>>();
+        for e3_id in discovery_ids {
+            ctx.notify(DiscoverFailureStage { e3_id });
         }
     }
 
@@ -61,23 +69,21 @@ impl<P: Provider + WalletProvider + Clone + 'static> InterfoldSolWriter<P> {
         &mut self,
         e3_id: E3id,
         stage: E3Stage,
-        deadline_unix_secs: u64,
+        schedule: FailureSchedule,
         ctx: &mut actix::Context<Self>,
     ) {
         if self.failure_stages.get(&e3_id) != Some(&stage) {
             return;
         }
-        let Some(party_id) = self.committee_party_ids.get(&e3_id).copied() else {
-            return;
-        };
         if let Some(handle) = self.failure_timers.remove(&e3_id) {
             ctx.cancel_future(handle);
         }
 
         let delay = failure_watch_delay(
             Self::now_unix_secs(),
-            deadline_unix_secs,
-            party_id,
+            schedule.deadline,
+            self.committee_party_ids.get(&e3_id).copied(),
+            schedule.permissionless_grace,
             FAILURE_PARTY_STAGGER_SECS,
         );
         let timer_e3_id = e3_id.clone();
@@ -104,6 +110,11 @@ impl<P: Provider + WalletProvider + Clone + 'static> Handler<InterfoldEvent>
             InterfoldEventData::EffectsEnabled(data) => self.notify_sync(ctx, data),
             InterfoldEventData::AggregatorChanged(data) => self.notify_sync(ctx, data),
             InterfoldEventData::CiphernodeSelected(data) => self.notify_sync(ctx, data),
+            InterfoldEventData::DkgFoldAttestationContextEstablished(data) => {
+                if self.provider.chain_id() == data.e3_id.chain_id() {
+                    ctx.notify(data);
+                }
+            }
             InterfoldEventData::PlaintextAggregated(data) => {
                 // Only a locally computed result is a publication intent. Peer results are
                 // inputs for protocol observers and must not cross the EVM write boundary.
@@ -155,6 +166,37 @@ impl<P: Provider + WalletProvider + Clone + 'static> Handler<CiphernodeSelected>
     }
 }
 
+impl<P: Provider + WalletProvider + Clone + 'static> Handler<DkgFoldAttestationContextEstablished>
+    for InterfoldSolWriter<P>
+{
+    type Result = ();
+
+    fn handle(
+        &mut self,
+        msg: DkgFoldAttestationContextEstablished,
+        ctx: &mut Self::Context,
+    ) -> Self::Result {
+        if msg.schema_version != DKG_FOLD_ATTESTATION_CONTEXT_SCHEMA_VERSION {
+            self.request_registries.remove(&msg.e3_id);
+            self.bus.err(
+                EType::Evm,
+                anyhow::anyhow!(
+                    "unsupported DKG attestation context schema {} for E3 {}",
+                    msg.schema_version,
+                    msg.e3_id
+                ),
+            );
+            return;
+        }
+        self.request_registries
+            .insert(msg.e3_id.clone(), msg.context.registry);
+        self.try_start_failure_watch(&msg.e3_id, ctx);
+        if self.effects_enabled {
+            ctx.notify(DiscoverFailureStage { e3_id: msg.e3_id });
+        }
+    }
+}
+
 impl<P: Provider + WalletProvider + Clone + 'static> Handler<AggregatorChanged>
     for InterfoldSolWriter<P>
 {
@@ -178,6 +220,7 @@ impl<P: Provider + WalletProvider + Clone + 'static> Handler<E3RequestComplete>
     fn handle(&mut self, msg: E3RequestComplete, ctx: &mut Self::Context) -> Self::Result {
         self.active_aggregators.remove(&msg.e3_id);
         self.committee_party_ids.remove(&msg.e3_id);
+        self.request_registries.remove(&msg.e3_id);
         self.clear_failure_watch(&msg.e3_id, ctx);
     }
 }
@@ -315,7 +358,10 @@ impl<P: Provider + WalletProvider + Clone + 'static> Handler<E3StageChanged>
     fn handle(&mut self, msg: E3StageChanged, ctx: &mut Self::Context) -> Self::Result {
         let e3_id = msg.e3_id.clone();
         match &msg.new_stage {
-            E3Stage::CommitteeFinalized | E3Stage::CiphertextReady => {
+            E3Stage::Requested
+            | E3Stage::CommitteeFinalized
+            | E3Stage::KeyPublished
+            | E3Stage::CiphertextReady => {
                 self.failure_stages
                     .insert(e3_id.clone(), msg.new_stage.clone());
                 self.try_start_failure_watch(&e3_id, ctx);
@@ -359,15 +405,13 @@ impl<P: Provider + WalletProvider + Clone + 'static> Handler<ResolveFailureDeadl
     type Result = ResponseActFuture<Self, ()>;
 
     fn handle(&mut self, msg: ResolveFailureDeadline, _ctx: &mut Self::Context) -> Self::Result {
-        if !self.effects_enabled
-            || self.failure_stages.get(&msg.e3_id) != Some(&msg.stage)
-            || !self.committee_party_ids.contains_key(&msg.e3_id)
-        {
+        if !self.effects_enabled || self.failure_stages.get(&msg.e3_id) != Some(&msg.stage) {
             return Box::pin(async {}.into_actor(self));
         }
 
         let provider = self.provider.clone();
         let contract_address = self.contract_address;
+        let request_registry = self.request_registries.get(&msg.e3_id).copied();
         let request = msg.clone();
         Box::pin(
             async move {
@@ -376,19 +420,20 @@ impl<P: Provider + WalletProvider + Clone + 'static> Handler<ResolveFailureDeadl
                     contract_address,
                     request.e3_id.clone(),
                     request.stage.clone(),
+                    request_registry,
                 )
                 .await;
                 (request, result)
             }
             .into_actor(self)
             .map(|(request, result), actor, ctx| match result {
-                Ok(deadline) if deadline > 0 => {
-                    actor.arm_failure_timer(request.e3_id, request.stage, deadline, ctx);
+                Ok(schedule) if schedule.deadline > 0 => {
+                    actor.arm_failure_timer(request.e3_id, request.stage, schedule, ctx);
                 }
                 Ok(_) => {
                     actor.bus.err(
                         EType::Evm,
-                        anyhow::anyhow!("canonical aggregation deadline is zero"),
+                        anyhow::anyhow!("canonical failure deadline is zero"),
                     );
                     ctx.notify_later(request, FAILURE_RETRY_DELAY);
                 }
@@ -407,7 +452,7 @@ impl<P: Provider + WalletProvider + Clone + 'static> Handler<DiscoverFailureStag
     type Result = ResponseActFuture<Self, ()>;
 
     fn handle(&mut self, msg: DiscoverFailureStage, _ctx: &mut Self::Context) -> Self::Result {
-        if !self.effects_enabled || !self.committee_party_ids.contains_key(&msg.e3_id) {
+        if !self.effects_enabled {
             return Box::pin(async {}.into_actor(self));
         }
 
@@ -417,7 +462,7 @@ impl<P: Provider + WalletProvider + Clone + 'static> Handler<DiscoverFailureStag
         Box::pin(
             async move {
                 let result =
-                    read_aggregation_failure_stage(provider, contract_address, e3_id.clone()).await;
+                    read_watched_failure_stage(provider, contract_address, e3_id.clone()).await;
                 (e3_id, result)
             }
             .into_actor(self)

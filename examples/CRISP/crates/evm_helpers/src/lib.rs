@@ -129,6 +129,14 @@ impl CRISPContract<CRISPWriteProvider> {
         Ok(receipt)
     }
 
+    /// Read the Merkle root already stored for a round.
+    pub async fn get_merkle_root(&self, e3_id: U256) -> Result<U256> {
+        let contract = CRISPProgram::new(self.contract_address, self.provider.as_ref());
+        let round = contract.getRoundData(e3_id).call().await?;
+
+        Ok(round.merkleRoot)
+    }
+
     /// Dry-run `publishInput` as an `eth_call` from the relay's own account.
     ///
     /// The relay signs and pays for whatever it is handed, so an input that would revert — a bad

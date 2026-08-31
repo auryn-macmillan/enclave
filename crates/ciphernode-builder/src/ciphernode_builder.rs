@@ -26,8 +26,8 @@ use e3_crypto::Cipher;
 use e3_data::{InMemStore, RepositoriesFactory};
 use e3_events::DkgFoldAttestationContext;
 use e3_events::{
-    AggregateConfig, AggregateId, BusHandle, E3id, EventBus, EventBusConfig, EventSubscriber,
-    EventType, EvmEventConfig, InterfoldEvent,
+    AggregateConfig, AggregateId, BusHandle, E3Stage, E3id, EventBus, EventBusConfig,
+    EventSubscriber, EventType, EvmEventConfig, InterfoldEvent,
 };
 use e3_evm::{
     ensure_node_release, fetch_accusation_vote_validity, fetch_randomness_providers,
@@ -73,6 +73,7 @@ struct EvmStartupRecovery<'a> {
     dkg_fold_contexts_by_e3: &'a HashMap<E3id, DkgFoldAttestationContext>,
     active_aggregators: &'a HashMap<E3id, bool>,
     selected_party_ids: &'a HashMap<E3id, u64>,
+    lifecycle_stages: &'a HashMap<E3id, E3Stage>,
     committee_finalizer: &'a CommitteeFinalizerRecoveryState,
 }
 
@@ -597,6 +598,11 @@ impl CiphernodeBuilder {
             self.contract_components.slashing_manager,
         )
         .await?;
+        let lifecycle_stages = repositories
+            .e3_lifecycle()
+            .read()
+            .await?
+            .unwrap_or_default();
         let dkg_fold_contexts_by_e3 = load_dkg_fold_attestation_contexts(&repositories).await?;
 
         let mut provider_cache =
@@ -673,6 +679,7 @@ impl CiphernodeBuilder {
                     dkg_fold_contexts_by_e3: &dkg_fold_contexts_by_e3,
                     active_aggregators: &selector_state.is_aggregator,
                     selected_party_ids: &selected_party_ids,
+                    lifecycle_stages: &lifecycle_stages,
                     committee_finalizer: &committee_finalizer_recovery,
                 },
             )
@@ -1225,6 +1232,7 @@ async fn setup_evm_system(
         dkg_fold_contexts_by_e3,
         active_aggregators,
         selected_party_ids,
+        lifecycle_stages,
         committee_finalizer,
     } = recovery;
     let mut evm_config = EvmEventConfig::new();
@@ -1261,12 +1269,33 @@ async fn setup_evm_system(
                 .filter(|(e3_id, _)| e3_id.chain_id() == chain_id)
                 .map(|(e3_id, party_id)| (e3_id.clone(), *party_id))
                 .collect();
+            let chain_request_registries = dkg_fold_contexts_by_e3
+                .iter()
+                .filter(|(e3_id, _)| e3_id.chain_id() == chain_id)
+                .map(|(e3_id, context)| (e3_id.clone(), context.registry))
+                .collect();
+            let chain_failure_stages = lifecycle_stages
+                .iter()
+                .filter(|(e3_id, stage)| {
+                    e3_id.chain_id() == chain_id
+                        && matches!(
+                            stage,
+                            E3Stage::Requested
+                                | E3Stage::CommitteeFinalized
+                                | E3Stage::KeyPublished
+                                | E3Stage::CiphertextReady
+                        )
+                })
+                .map(|(e3_id, stage)| (e3_id.clone(), stage.clone()))
+                .collect();
             InterfoldSolWriter::attach_with_recovery(
                 bus,
                 write_provider.clone(),
                 contract.address()?,
                 chain_active_aggregators,
                 chain_party_ids,
+                chain_request_registries,
+                chain_failure_stages,
             );
             system.with_contract(contract.address()?, move |next| {
                 InterfoldSolReader::setup(&next).recipient()

@@ -6,7 +6,7 @@
 
 //! Interfold contract publication boundary.
 
-use crate::contracts::IInterfold;
+use crate::contracts::{ICiphernodeRegistry, IInterfold};
 use crate::domain::error_decoder::format_evm_error;
 use crate::domain::plaintext_publication::failure_watch_delay;
 use crate::domain::plaintext_publication::validate_plaintext_output;
@@ -21,9 +21,10 @@ use alloy::{
 };
 use anyhow::Result;
 use e3_events::{
-    prelude::*, AggregatorChanged, BusHandle, CiphernodeSelected, E3RequestComplete, E3Stage,
-    E3StageChanged, E3id, EType, EffectsEnabled, EventType, InterfoldEvent, InterfoldEventData,
-    PlaintextAggregated, Proof, Shutdown,
+    prelude::*, AggregatorChanged, BusHandle, CiphernodeSelected,
+    DkgFoldAttestationContextEstablished, E3RequestComplete, E3Stage, E3StageChanged, E3id, EType,
+    EffectsEnabled, EventType, InterfoldEvent, InterfoldEventData, PlaintextAggregated, Proof,
+    Shutdown, DKG_FOLD_ATTESTATION_CONTEXT_SCHEMA_VERSION,
 };
 use e3_utils::{require_successful_receipt, NotifySync, MAILBOX_LIMIT};
 use std::collections::HashMap;
@@ -44,6 +45,7 @@ pub struct InterfoldSolWriter<P> {
     active_aggregators: HashMap<E3id, bool>,
     publication: ReplaySubmissionGate<E3id, PlaintextAggregated>,
     committee_party_ids: HashMap<E3id, u64>,
+    request_registries: HashMap<E3id, Address>,
     failure_stages: HashMap<E3id, E3Stage>,
     failure_timers: HashMap<E3id, SpawnHandle>,
 }
@@ -60,6 +62,8 @@ impl<P: Provider + WalletProvider + Clone + 'static> InterfoldSolWriter<P> {
             contract_address,
             HashMap::new(),
             HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
         )
     }
 
@@ -69,6 +73,8 @@ impl<P: Provider + WalletProvider + Clone + 'static> InterfoldSolWriter<P> {
         contract_address: Address,
         active_aggregators: HashMap<E3id, bool>,
         committee_party_ids: HashMap<E3id, u64>,
+        request_registries: HashMap<E3id, Address>,
+        failure_stages: HashMap<E3id, E3Stage>,
     ) -> Result<Self> {
         Ok(Self {
             provider,
@@ -78,7 +84,8 @@ impl<P: Provider + WalletProvider + Clone + 'static> InterfoldSolWriter<P> {
             active_aggregators,
             publication: ReplaySubmissionGate::new(),
             committee_party_ids,
-            failure_stages: HashMap::new(),
+            request_registries,
+            failure_stages,
             failure_timers: HashMap::new(),
         })
     }
@@ -90,6 +97,8 @@ impl<P: Provider + WalletProvider + Clone + 'static> InterfoldSolWriter<P> {
             contract_address,
             HashMap::new(),
             HashMap::new(),
+            HashMap::new(),
+            HashMap::new(),
         );
     }
 
@@ -99,6 +108,8 @@ impl<P: Provider + WalletProvider + Clone + 'static> InterfoldSolWriter<P> {
         contract_address: Address,
         active_aggregators: HashMap<E3id, bool>,
         committee_party_ids: HashMap<E3id, u64>,
+        request_registries: HashMap<E3id, Address>,
+        failure_stages: HashMap<E3id, E3Stage>,
     ) {
         let addr = InterfoldSolWriter::new_with_recovery(
             bus,
@@ -106,6 +117,8 @@ impl<P: Provider + WalletProvider + Clone + 'static> InterfoldSolWriter<P> {
             contract_address,
             active_aggregators,
             committee_party_ids,
+            request_registries,
+            failure_stages,
         )
         .expect("failed to create InterfoldSolWriter")
         .start();
@@ -114,6 +127,7 @@ impl<P: Provider + WalletProvider + Clone + 'static> InterfoldSolWriter<P> {
                 EventType::EffectsEnabled,
                 EventType::AggregatorChanged,
                 EventType::CiphernodeSelected,
+                EventType::DkgFoldAttestationContextEstablished,
                 EventType::PlaintextAggregated,
                 EventType::E3StageChanged,
                 EventType::E3RequestComplete,

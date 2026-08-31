@@ -3,6 +3,7 @@
 //! Idempotency preflights and CiphernodeRegistry contract effects.
 
 use super::*;
+use crate::contracts::IInterfold;
 
 const TICKET_GAS_SAFETY_MULTIPLIER: u64 = 2;
 
@@ -81,6 +82,46 @@ pub(in crate::actors::ciphernode_registry_sol) fn ticket_submission_error_is_ter
     ]
     .into_iter()
     .any(|selector| reverts_with(error, selector))
+}
+
+/// Return true when another committee-publication attempt cannot succeed unchanged.
+pub(in crate::actors::ciphernode_registry_sol) fn committee_publication_error_is_terminal(
+    error: &anyhow::Error,
+) -> bool {
+    let encoded = format!("{error:?}");
+    let message = encoded.to_ascii_lowercase();
+    let permanent_rpc_rejection = message.contains("oversized data")
+        || (message.contains("transaction size") && message.contains("limit"))
+        || message.contains("request entity too large")
+        || message.contains("content length too large")
+        || message.contains("function selector was not recognized");
+    let permanent_local_rejection = message
+        .contains("mandatory dkg aggregator proof payload missing")
+        || message.contains("mandatory dkg attestation bundle missing")
+        || (message.contains("on-chain committee commitment")
+            && message.contains("does not match local commitment"));
+    let permanent_contract_rejection = [
+        ICiphernodeRegistry::InvalidPublicKeyLength::SELECTOR,
+        ICiphernodeRegistry::PkCommitmentRequired::SELECTOR,
+        ICiphernodeRegistry::DkgProofRequired::SELECTOR,
+        ICiphernodeRegistry::InvalidDkgProof::SELECTOR,
+        ICiphernodeRegistry::FoldAttestationsRequired::SELECTOR,
+        ICiphernodeRegistry::FoldAttestationVerifierNotSet::SELECTOR,
+        ICiphernodeRegistry::InvalidFoldAttestation::SELECTOR,
+        ICiphernodeRegistry::PartyIdNotInProof::SELECTOR,
+        ICiphernodeRegistry::AttestationBindingCountMismatch::SELECTOR,
+        ICiphernodeRegistry::PartyIdOutOfBounds::SELECTOR,
+        ICiphernodeRegistry::InvalidProof::SELECTOR,
+        ICiphernodeRegistry::InvalidPublicInputsLength::SELECTOR,
+        ICiphernodeRegistry::VkHashMismatch::SELECTOR,
+        ICiphernodeRegistry::PkCommitmentMismatch::SELECTOR,
+        ICiphernodeRegistry::DomainBindingMismatch::SELECTOR,
+        IInterfold::DKGDeadlinePassed::SELECTOR,
+    ]
+    .into_iter()
+    .any(|selector| contains_error_selector(&encoded, selector));
+
+    permanent_rpc_rejection || permanent_local_rejection || permanent_contract_rejection
 }
 
 /// Report whether this node's ticket is already recorded on chain.
@@ -412,8 +453,11 @@ pub async fn fetch_randomness_providers<P: Provider + Clone>(
 
 #[cfg(test)]
 mod tests {
-    use super::{reverts_with, ticket_gas_limit, ticket_submission_error_is_terminal};
-    use crate::contracts::ICiphernodeRegistry;
+    use super::{
+        committee_publication_error_is_terminal, reverts_with, ticket_gas_limit,
+        ticket_submission_error_is_terminal,
+    };
+    use crate::contracts::{ICiphernodeRegistry, IInterfold};
     use alloy::sol_types::{Revert, SolError};
 
     fn selector_error(selector: [u8; 4]) -> anyhow::Error {
@@ -461,5 +505,32 @@ mod tests {
     fn doubles_ticket_gas_estimate_without_overflow() {
         assert_eq!(ticket_gas_limit(250_000), 500_000);
         assert_eq!(ticket_gas_limit(u64::MAX), u64::MAX);
+    }
+
+    #[test]
+    fn oversized_rpc_rejection_is_terminal() {
+        let error = anyhow::anyhow!(
+            "server returned error code -32000: oversized data: transaction size 356602, limit 131072"
+        );
+        assert!(committee_publication_error_is_terminal(&error));
+        assert!(!committee_publication_error_is_terminal(&anyhow::anyhow!(
+            "RPC connection reset"
+        )));
+        assert!(!committee_publication_error_is_terminal(&selector_error(
+            ICiphernodeRegistry::CommitteeNotPublished::SELECTOR
+        )));
+    }
+
+    #[test]
+    fn invalid_public_key_length_is_terminal() {
+        assert!(committee_publication_error_is_terminal(&selector_error(
+            ICiphernodeRegistry::InvalidPublicKeyLength::SELECTOR
+        )));
+        assert!(committee_publication_error_is_terminal(&selector_error(
+            ICiphernodeRegistry::InvalidProof::SELECTOR
+        )));
+        assert!(committee_publication_error_is_terminal(&selector_error(
+            IInterfold::DKGDeadlinePassed::SELECTOR
+        )));
     }
 }
