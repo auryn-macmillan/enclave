@@ -212,7 +212,7 @@ async fn get_availability_status(
     job_id: web::Path<String>,
     availability: web::Data<AvailabilityService>,
 ) -> impl Responder {
-    match availability.view(&job_id) {
+    match availability.refreshed_view(&job_id).await {
         Ok(Some(job)) => HttpResponse::Ok().json(job),
         Ok(None) => HttpResponse::NotFound().finish(),
         Err(error) => HttpResponse::InternalServerError().body(error.to_string()),

@@ -58,8 +58,9 @@ pub struct JsonResponse {
 #[serde(rename_all = "snake_case")]
 pub enum VoteResponseStatus {
     Success,
+    PendingCommitment,
     PendingAvailability,
-    ReadyForSubmission,
+    ReadyForCommitment,
     FailedBroadcast,
 }
 
@@ -269,6 +270,10 @@ pub struct E3 {
 pub struct E3Crisp {
     pub emojis: [String; 2],
     pub start_time: u64,
+    /// Last timestamp at which a voter can commit a new proof. The protocol input window ends
+    /// later so the availability service can finalize already committed ciphertexts.
+    #[serde(default)]
+    pub voting_end_time: u64,
     pub end_time: u64,
     pub status: String,
     pub tally: Vec<String>,

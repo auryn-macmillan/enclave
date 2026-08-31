@@ -32,7 +32,7 @@ export interface BroadcastVoteRequest {
   encoded_proof: string
 }
 
-export type VoteResponseStatus = 'success' | 'pending_availability' | 'ready_for_submission' | 'failed_broadcast'
+export type VoteResponseStatus = 'success' | 'pending_commitment' | 'ready_for_commitment' | 'pending_availability' | 'failed_broadcast'
 export interface BroadcastVoteResponse {
   status: VoteResponseStatus
   tx_hash: string | null

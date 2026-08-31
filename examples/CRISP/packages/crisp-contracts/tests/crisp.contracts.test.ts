@@ -27,7 +27,15 @@ before(async () => {
   setCircuits(await loadCircuits())
 })
 import { expect } from 'chai'
-import { deployCRISPProgram, deployHonkVerifier, deployMockInterfold, ethers } from './utils'
+import {
+  deployCRISPProgram,
+  deployHonkVerifier,
+  deployMockInterfold,
+  ethers,
+  inputCommitmentPayload,
+  publishAvailableInput,
+  splitInputEnvelope,
+} from './utils'
 import type { CRISPProgram, HonkVerifier, MockInterfold } from '../types'
 
 let keys = generateBFVKeys()
@@ -188,23 +196,35 @@ describe('CRISP Contracts', function () {
       expect(pi[8], 'committee_public_key').to.eq(BigInt(e3.committeePublicKey))
 
       const encoded = encodeSolidityProof(voteProof)
-      const inputTypes = ['bytes', 'address', 'bytes32', 'bytes32', 'uint40', 'bytes']
-      const envelope = ethers.AbiCoder.defaultAbiCoder().decode(inputTypes, encoded)
-      const mismatched = ethers.AbiCoder.defaultAbiCoder().encode(
-        inputTypes,
-        [envelope[0], envelope[1], envelope[2], envelope[3], envelope[4], '0xdeadbeef'],
-      )
-      await expect(crispProgram.publishInput(publishE3Id, mismatched)).to.be.revert(ethers)
-      expect((await crispProgram.getRoundData(publishE3Id)).numberOfVotes).to.equal(0n)
+      const envelope = splitInputEnvelope(encoded)
+      await (await crispProgram.publishInput(publishE3Id, await inputCommitmentPayload(crispProgram, publishE3Id, encoded))).wait()
+      await expect(
+        crispProgram.finalizeInput(
+          publishE3Id,
+          envelope.slotAddress,
+          envelope.encryptedVoteCommitment,
+          envelope.encryptedVoteHash,
+          envelope.parentIndexPlusOne,
+          '0xdeadbeef',
+        ),
+      ).to.be.revert(ethers)
+      expect((await crispProgram.getRoundData(publishE3Id)).numberOfVotes).to.equal(1n)
 
-      await crispProgram.publishInput(publishE3Id, encoded)
+      await crispProgram.finalizeInput(
+        publishE3Id,
+        envelope.slotAddress,
+        envelope.encryptedVoteCommitment,
+        envelope.encryptedVoteHash,
+        envelope.parentIndexPlusOne,
+        envelope.availabilityProof,
+      )
       expect(
         await crispProgram.isInputPublished(
           publishE3Id,
-          envelope[3],
-          envelope[2],
-          envelope[1],
-          envelope[4],
+          envelope.encryptedVoteHash,
+          envelope.encryptedVoteCommitment,
+          envelope.slotAddress,
+          envelope.parentIndexPlusOne,
         ),
       ).to.equal(true)
     })
@@ -228,7 +248,7 @@ describe('CRISP Contracts', function () {
 
       // `voteProof` was built for `publishE3Id`. Everything else about it is valid here — same
       // slot, same census, same committee key — so only the round binding rejects it.
-      await expect(crispProgram.publishInput(otherE3Id, encodeSolidityProof(voteProof))).to.be.revert(ethers)
+      await expect(publishAvailableInput(crispProgram, otherE3Id, encodeSolidityProof(voteProof))).to.be.revert(ethers)
     })
   })
 

@@ -269,6 +269,7 @@ export interface SecureCrispUpgradePlan {
   ciphertextVerifier: string;
   crispProgram: string;
   dataAvailabilityVerifier: string;
+  inputAvailabilitySigner: string;
   availBridge: string;
   vectorx: string;
   bfvVerifierRoutes: BfvVerifierRouteDeployment[];

@@ -437,10 +437,26 @@ design citation alone does not establish current runtime behavior.
   skips the comparison accepts a result computed over any input set. — `flow-trace/04`
 - **A Secure Process derives its leaves; it never receives them, and never drops one.**
   `MerkleTreeBuilder::compute_leaf_hashes` builds every leaf from the ciphertexts it was given and
-  pushes one per published input, whatever the E3 program's policy decides about computing over it.
-  Both rules are applied by `e3-compute-provider` rather than delegated: a received root can
+  pushes one per on-chain input leaf, whatever the E3 program's policy decides about computing over
+  it. Both rules are applied by `e3-compute-provider` rather than delegated: a received root can
   disagree with the data it claims to describe, and a missing leaf changes the root and makes the
   result unpublishable. — `flow-trace/04`
+- **A CRISP input is committed before it is finalized, but computation requires both.**
+  `publishInput` verifies the Noir proof and the configured service's EIP-712 storage attestation,
+  then reserves the leaf and index so a later input can name it as its parent. `finalizeInput` must
+  prove VectorX availability for the exact committed content hash. The input tuple cannot change
+  between the calls, and `CRISPProgram.verify` must reject while any committed input remains
+  pending. — `flow-trace/08`
+- **Avail-backed CRISP rounds leave a usable voting interval.** `CRISPProgram.validate` derives the
+  worst-case key time from the E3 timeout snapshot and the request-time Registry windows. The
+  commitment cutoff must be at least one hour after both that time and the configured input start.
+  The server repeats the production minimum as an early configuration check, but it is not the
+  security boundary. — `flow-trace/08`
+- **Avail references name exact application bytes.** The application content hash is
+  `keccak256(rawBytes)`, which is also the `leaf` returned by Avail's proof API. The official bridge
+  hashes that value once more when it verifies the submitted-data Merkle root. Solidity binds the
+  proof API leaf to `contentHash`, and every reader hashes retrieved raw bytes again before decoding
+  or proving over them. An App ID or RPC response is not a correctness proof. — `flow-trace/08`
 - **The leaf layout and input selection are the E3 program's, not the crate's.** They are supplied
   as an `InputPolicy`, because a leaf must match whatever that program builds on chain and no two
   programs need agree, and because "what does a second input for the same participant mean?" has no

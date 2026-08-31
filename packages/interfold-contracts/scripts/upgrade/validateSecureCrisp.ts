@@ -3,7 +3,11 @@ import { ethers as ethersLib } from "ethers";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { availVectorXForChain } from "../dataAvailability";
+import {
+  AVAIL_FINALIZATION_WINDOW_SECONDS,
+  CRISP_MIN_VOTING_DURATION_SECONDS,
+  availVectorXForChain,
+} from "../dataAvailability";
 import { connect } from "../protocol/cli";
 import { BFV_PARAMS } from "../protocol/constants";
 import {
@@ -43,6 +47,9 @@ const crispInterface = new ethersLib.Interface([
   "function imageId() view returns (bytes32)",
   "function risc0Verifier() view returns (address)",
   "function dataAvailabilityVerifier() view returns (address)",
+  "function availabilityFinalizationWindow() view returns (uint256)",
+  "function MIN_VOTING_DURATION() view returns (uint256)",
+  "function inputAvailabilitySigner() view returns (address)",
 ]);
 const ciphertextInterface = new ethersLib.Interface([
   "function imageId() view returns (bytes32)",
@@ -348,6 +355,38 @@ export async function validateSecureCrispUpgrade(): Promise<void> {
     ),
     plan.dataAvailabilityVerifier,
     "CRISP data-availability verifier",
+  );
+  equalValue(
+    await readContract(
+      ethers.provider,
+      plan.crispProgram,
+      crispInterface,
+      "availabilityFinalizationWindow",
+    ),
+    AVAIL_FINALIZATION_WINDOW_SECONDS,
+    "CRISP availability finalization window",
+  );
+  equalValue(
+    await readContract(
+      ethers.provider,
+      plan.crispProgram,
+      crispInterface,
+      "MIN_VOTING_DURATION",
+    ),
+    CRISP_MIN_VOTING_DURATION_SECONDS,
+    "CRISP minimum voting duration",
+  );
+  equalAddress(
+    String(
+      await readContract(
+        ethers.provider,
+        plan.crispProgram,
+        crispInterface,
+        "inputAvailabilitySigner",
+      ),
+    ),
+    plan.inputAvailabilitySigner,
+    "CRISP input availability signer",
   );
   equalAddress(
     String(

@@ -4,7 +4,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { availVectorXForChain } from "../dataAvailability";
+import {
+  AVAIL_FINALIZATION_WINDOW_SECONDS,
+  CRISP_MIN_VOTING_DURATION_SECONDS,
+  availVectorXForChain,
+} from "../dataAvailability";
 import { arg, connect, hasFlag, networkName } from "../protocol/cli";
 import { BFV_PARAMS, ZERO, proxyAdminInterface } from "../protocol/constants";
 import { deployBfvVerifierRoutes } from "../protocol/deployContracts";
@@ -60,6 +64,9 @@ const crispInterface = new ethersLib.Interface([
   "function imageId() view returns (bytes32)",
   "function risc0Verifier() view returns (address)",
   "function dataAvailabilityVerifier() view returns (address)",
+  "function availabilityFinalizationWindow() view returns (uint256)",
+  "function MIN_VOTING_DURATION() view returns (uint256)",
+  "function inputAvailabilitySigner() view returns (address)",
 ]);
 const ciphertextInterface = new ethersLib.Interface([
   "function imageId() view returns (bytes32)",
@@ -226,6 +233,12 @@ export async function prepareSecureCrispUpgrade(): Promise<void> {
 
   const { crispProgram, ciphertextVerifier, dataAvailabilityVerifier } =
     resolveCrispAddresses();
+  const inputAvailabilitySigner = address(
+    arg("input-availability-signer") ??
+      process.env.INPUT_AVAILABILITY_SIGNER ??
+      "",
+    "input availability signer",
+  );
   const avail = availVectorXForChain(chainId);
   await Promise.all([
     requireContract(ethers.provider, deployment.interfold, "Interfold proxy"),
@@ -447,6 +460,50 @@ export async function prepareSecureCrispUpgrade(): Promise<void> {
       `CRISP data-availability verifier mismatch: expected ${dataAvailabilityVerifier}, got ${crispDataAvailability}`,
     );
   }
+  const crispFinalizationWindow = await readContract(
+    ethers.provider,
+    crispProgram,
+    crispInterface,
+    "availabilityFinalizationWindow",
+  );
+  if (
+    BigInt(String(crispFinalizationWindow)) !==
+    BigInt(AVAIL_FINALIZATION_WINDOW_SECONDS)
+  ) {
+    throw new Error(
+      `CRISP availability finalization window mismatch: expected ${AVAIL_FINALIZATION_WINDOW_SECONDS}, got ${crispFinalizationWindow}`,
+    );
+  }
+  const crispMinimumVotingDuration = await readContract(
+    ethers.provider,
+    crispProgram,
+    crispInterface,
+    "MIN_VOTING_DURATION",
+  );
+  if (
+    BigInt(String(crispMinimumVotingDuration)) !==
+    BigInt(CRISP_MIN_VOTING_DURATION_SECONDS)
+  ) {
+    throw new Error(
+      `CRISP minimum voting duration mismatch: expected ${CRISP_MIN_VOTING_DURATION_SECONDS}, got ${crispMinimumVotingDuration}`,
+    );
+  }
+  const configuredInputAvailabilitySigner = String(
+    await readContract(
+      ethers.provider,
+      crispProgram,
+      crispInterface,
+      "inputAvailabilitySigner",
+    ),
+  );
+  if (
+    configuredInputAvailabilitySigner.toLowerCase() !==
+    inputAvailabilitySigner.toLowerCase()
+  ) {
+    throw new Error(
+      `CRISP input availability signer mismatch: expected ${inputAvailabilitySigner}, got ${configuredInputAvailabilitySigner}`,
+    );
+  }
   const [adapterBridge, adapterVectorX, liveBridgeVectorX] = await Promise.all([
     readContract(
       ethers.provider,
@@ -658,6 +715,7 @@ export async function prepareSecureCrispUpgrade(): Promise<void> {
     ciphertextVerifier,
     crispProgram,
     dataAvailabilityVerifier,
+    inputAvailabilitySigner,
     availBridge: avail.bridge,
     vectorx: avail.vectorx,
     bfvVerifierRoutes: verifierDeployment.bfvVerifierRoutes,
@@ -683,6 +741,7 @@ Secure CRISP activation prepared
   decryption router:         ${plan.decryptionVerifier}
   CRISP program:             ${plan.crispProgram}
   DA verifier:               ${plan.dataAvailabilityVerifier}
+  input availability signer: ${plan.inputAvailabilitySigner}
   required node release:     ${plan.nodeRelease.version} (protocol ${plan.nodeRelease.protocolVersion}, generation ${plan.nodeRelease.nodeGeneration})
   governance batch:          ${plan.safeTransactions}
   Aragon Safe batch:         ${plan.governanceSafeBuilder ?? "not configured"}

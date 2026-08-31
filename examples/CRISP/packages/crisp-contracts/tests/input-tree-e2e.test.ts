@@ -30,7 +30,7 @@ import { expect } from 'chai'
 import { mkdirSync, writeFileSync } from 'fs'
 import { dirname } from 'path'
 import { fileURLToPath } from 'url'
-import { deployCRISPProgram, deployHonkVerifier, deployMockInterfold, ethers } from './utils'
+import { deployCRISPProgram, deployHonkVerifier, deployMockInterfold, ethers, publishAvailableInput } from './utils'
 import type { CRISPProgram, HonkVerifier, MockInterfold } from '../types'
 
 const keys = generateBFVKeys()
@@ -208,7 +208,7 @@ describe('CRISPProgram input tree (e2e)', function () {
     await mockInterfold.setCommitteePublicKey(ballot.publicInputs[8])
     await crispProgram.setMerkleRoot(e3Id, generateMerkleTree(leaves).root)
 
-    await crispProgram.publishInput(e3Id, encodeSolidityProof(ballot))
+    await publishAvailableInput(crispProgram, e3Id, encodeSolidityProof(ballot))
 
     const [, , , , inputRoot] = await crispProgram.getRoundData(e3Id)
     expect(inputRoot, 'the round must have an input root after publishing').to.not.equal(0n)
@@ -282,7 +282,7 @@ describe('CRISPProgram input tree (e2e)', function () {
       // A genuine proof, published beside bytes that are not its ciphertext. Nothing on chain can
       // reject this, which is exactly why the Secure Process has to check it.
       const forged = { ...ballot, encryptedVote: new Uint8Array([0xde, 0xad, 0xbe, 0xef]) }
-      await crispProgram.publishInput(forgedE3Id, encodeSolidityProof(forged))
+      await publishAvailableInput(crispProgram, forgedE3Id, encodeSolidityProof(forged))
 
       const [, , , , rootAfter] = await crispProgram.getRoundData(forgedE3Id)
       expect(rootAfter, 'the forged input entered the tree').to.not.equal(rootBefore)
@@ -328,7 +328,7 @@ describe('CRISPProgram input tree (e2e)', function () {
       const ballot = await buildBallot([6, 0])
       await mockInterfold.setCommitteePublicKey(ballot.publicInputs[8])
       await crispProgram.setMerkleRoot(appendE3Id, generateMerkleTree(leaves).root)
-      await crispProgram.publishInput(appendE3Id, encodeSolidityProof(ballot))
+      await publishAvailableInput(crispProgram, appendE3Id, encodeSolidityProof(ballot))
 
       const [, , , , rootAfterFirst, votesAfterFirst] = await crispProgram.getRoundData(appendE3Id)
       expect(votesAfterFirst).to.equal(1n)
@@ -337,7 +337,7 @@ describe('CRISPProgram input tree (e2e)', function () {
       // A third party masks over the slot. No signature is checked on this path.
       const mask = await buildMaskOver(ballot.encryptedVote, 0)
       const poisoned = { ...mask, encryptedVote: new Uint8Array([0xde, 0xad, 0xbe, 0xef]) }
-      await crispProgram.publishInput(appendE3Id, encodeSolidityProof(poisoned))
+      await publishAvailableInput(crispProgram, appendE3Id, encodeSolidityProof(poisoned))
 
       const [, , , , rootAfterSecond, votesAfterSecond] = await crispProgram.getRoundData(appendE3Id)
 
@@ -348,7 +348,7 @@ describe('CRISPProgram input tree (e2e)', function () {
       // The recovery. The poisoned entry cannot be a parent, so an honest mask names index 0 — the
       // same parent the poisoned one named — and the contract accepts it.
       const recovery = await buildMaskOver(ballot.encryptedVote, 0)
-      await crispProgram.publishInput(appendE3Id, encodeSolidityProof(recovery))
+      await publishAvailableInput(crispProgram, appendE3Id, encodeSolidityProof(recovery))
 
       const [, , , , rootAfterThird, votesAfterThird] = await crispProgram.getRoundData(appendE3Id)
       expect(votesAfterThird, 'the recovery is a third leaf').to.equal(3n)
@@ -406,10 +406,10 @@ describe('CRISPProgram input tree (e2e)', function () {
       const first = await buildBallot([4, 0])
       await mockInterfold.setCommitteePublicKey(first.publicInputs[8])
       await crispProgram.setMerkleRoot(revoteE3Id, generateMerkleTree(leaves).root)
-      await crispProgram.publishInput(revoteE3Id, encodeSolidityProof(first))
+      await publishAvailableInput(crispProgram, revoteE3Id, encodeSolidityProof(first))
 
       const second = await buildReVote([0, 9], first.encryptedVote, 0)
-      await crispProgram.publishInput(revoteE3Id, encodeSolidityProof(second))
+      await publishAvailableInput(crispProgram, revoteE3Id, encodeSolidityProof(second))
 
       const [, , , , root, votes] = await crispProgram.getRoundData(revoteE3Id)
       expect(votes, 'the re-vote is appended').to.equal(2n)

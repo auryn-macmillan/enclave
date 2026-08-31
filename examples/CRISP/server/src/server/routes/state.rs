@@ -24,8 +24,8 @@ pub fn setup_routes(config: &mut web::ServiceConfig) {
             .route("/result", web::post().to(get_round_result))
             .route("/all", web::post().to(get_all_round_results))
             .route("/lite", web::post().to(get_round_state_lite))
-            // Do we need protection on this endpoint? technically they would need to send a valid proof for it to
-            // be included on chain
+            // The handler verifies the compute proof on Ethereum before it creates an Avail job.
+            // Valid retries are idempotent, so this endpoint needs no separate caller identity.
             .route("/add-result", web::post().to(handle_program_server_result))
             // Get the token holders hashes for a given round
             .route("/token-holders", web::post().to(get_token_holders_hashes))

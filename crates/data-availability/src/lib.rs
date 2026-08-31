@@ -118,10 +118,15 @@ struct BridgeProofResponse {
 
 impl BridgeProofResponse {
     fn into_status(self, expected: [u8; 32]) -> Result<ProofStatus> {
-        if self.leaf.0 != expected {
+        // Avail's proof response exposes `keccak256(raw_data)` as `leaf`. The bridge hashes this
+        // value once more while verifying it against the submitted-data Merkle root. Keep the
+        // response boundary and bridge boundary distinct: passing the second hash here would make
+        // the bridge hash it a third time and reject every real proof.
+        let expected_leaf = B256::from(expected);
+        if self.leaf != expected_leaf {
             bail!(
                 "bridge proof leaf mismatch: expected 0x{}, got {}",
-                hex::encode(expected),
+                hex::encode(expected_leaf),
                 self.leaf
             );
         }
@@ -157,15 +162,21 @@ impl BridgeProofResponse {
 #[derive(Clone)]
 pub struct VectorXBridgeApi {
     client: reqwest::Client,
-    base_url: String,
+    base_url: reqwest::Url,
     destination_chain_id: u64,
 }
 
 impl VectorXBridgeApi {
     pub fn new(base_url: impl Into<String>, destination_chain_id: u64) -> Result<Self> {
-        let base_url = base_url.into().trim_end_matches('/').to_owned();
+        let base_url = base_url.into();
+        let base_url = base_url.trim();
         if base_url.is_empty() {
             bail!("VectorX bridge API URL is empty");
+        }
+        let base_url = reqwest::Url::parse(&format!("{}/", base_url.trim_end_matches('/')))
+            .context("VectorX bridge API URL is invalid")?;
+        if !matches!(base_url.scheme(), "http" | "https") {
+            bail!("VectorX bridge API URL must use HTTP or HTTPS");
         }
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
@@ -179,15 +190,22 @@ impl VectorXBridgeApi {
         })
     }
 
+    fn proof_url(&self, publication: &PendingPublication) -> Result<reqwest::Url> {
+        let mut url = self
+            .base_url
+            .join(&format!("v1/proof/{}", self.destination_chain_id))
+            .context("failed to build VectorX bridge proof URL")?;
+        url.query_pairs_mut()
+            .append_pair("block_hash", &publication.block_hash)
+            .append_pair("index", &publication.extrinsic_index.to_string());
+        Ok(url)
+    }
+
     pub async fn proof(&self, publication: &PendingPublication) -> Result<ProofStatus> {
-        let url = format!("{}/v1/proof/{}", self.base_url, self.destination_chain_id);
+        let url = self.proof_url(publication)?;
         let response = self
             .client
             .get(url)
-            .query(&[
-                ("block_hash", publication.block_hash.as_str()),
-                ("index", &publication.extrinsic_index.to_string()),
-            ])
             .send()
             .await
             .context("VectorX bridge proof request failed")?;
@@ -289,7 +307,7 @@ mod tests {
 
     #[test]
     fn official_bridge_response_shape_encodes_for_solidity() {
-        let response: BridgeProofResponse = serde_json::from_str(
+        let mut response: BridgeProofResponse = serde_json::from_str(
             r#"{
               "dataRootProof":["0x0395f21560a9ccc1f2aa972601250256fbdb20fd936e1723397ff8d5e4f07b5d"],
               "leafProof":["0x00017cadd87ec12039f98d646afaa33ed843056ad12f5e971cc81be15d00c26f"],
@@ -303,7 +321,8 @@ mod tests {
             }"#,
         )
         .unwrap();
-        let expected = response.leaf.0;
+        let expected = keccak256(b"available object").0;
+        response.leaf = B256::from(expected);
         let ProofStatus::Ready {
             reference,
             abi_proof,
@@ -313,9 +332,26 @@ mod tests {
         };
 
         let decoded = AvailMerkleProofInput::abi_decode(&abi_proof).unwrap();
-        assert_eq!(decoded.leaf.0, expected);
+        assert_eq!(decoded.leaf, B256::from(expected));
         assert_eq!(decoded.dataRootIndex, alloy_primitives::U256::from(48));
         assert_eq!(reference.content_hash, expected);
         assert_eq!(reference.leaf_index, 0);
+    }
+
+    #[test]
+    fn bridge_proof_url_matches_the_official_api_route() {
+        let api = VectorXBridgeApi::new("https://turing-bridge-api.avail.so/", 11155111)
+            .expect("official bridge URL must be valid");
+        let publication = PendingPublication {
+            content_hash: [0; 32],
+            block_hash: "0x5bc7bd3a".to_owned(),
+            block_number: 42,
+            extrinsic_index: 5,
+        };
+
+        assert_eq!(
+            api.proof_url(&publication).unwrap().as_str(),
+            "https://turing-bridge-api.avail.so/v1/proof/11155111?block_hash=0x5bc7bd3a&index=5"
+        );
     }
 }

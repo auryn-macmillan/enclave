@@ -35,7 +35,7 @@ use e3_sdk::{
     },
     indexer::{DataStore, IndexerContext, InterfoldIndexer, SharedStore},
 };
-use evm_helpers::{CRISPContractFactory, InputPublished};
+use evm_helpers::{CRISPContractFactory, InputCommitted, InputPublished};
 use eyre::Context;
 use log::{error, info, warn};
 use num_bigint::BigUint;
@@ -129,6 +129,18 @@ pub async fn register_e3_requested(
                     .with_context(|| "Invalid token address")?;
 
                 let input_window = [e3.inputWindow[0].to::<u64>(), e3.inputWindow[1].to::<u64>()];
+                let crisp = CRISPContractFactory::create_read(
+                    &CONFIG.http_rpc_url,
+                    &CONFIG.e3_program_address,
+                )
+                .await
+                .with_context(|| "Failed to create CRISP contract reader")?;
+                let voting_end_time = crisp
+                    .input_commitment_deadline(event.e3Id)
+                    .await
+                    .with_context(|| {
+                        format!("[e3_id={e3_id}] Failed to read the input commitment deadline")
+                    })?;
 
                 // The census is built one tick before the request, as the request timepoint
                 // itself is not final when the E3 is requested.
@@ -332,6 +344,7 @@ pub async fn register_e3_requested(
                 repo.initialize_round(
                     custom_params,
                     e3.requester.to_string(),
+                    voting_end_time,
                     input_window[1],
                     snapshot_timepoint,
                 )
@@ -415,7 +428,7 @@ pub async fn register_e3_requested(
     Ok(indexer)
 }
 
-/// What the indexer holds for a round, measured against what `CRISPProgram` accepted.
+/// What the indexer holds for a round, measured against what `CRISPProgram` committed.
 enum IndexedInputs {
     /// The indexer holds every input, and this is the snapshot it holds them in.
     Complete(InputSnapshot),
@@ -423,7 +436,7 @@ enum IndexedInputs {
     Short { indexed: usize, published: usize },
 }
 
-/// The round's inputs, once the indexer holds every one `CRISPProgram` accepted.
+/// The round's inputs, once the indexer holds every one `CRISPProgram` committed.
 ///
 /// Polls rather than reading once: the deadline callback and the last `InputPublished` handler race,
 /// and the gap is the few seconds it takes one log to be delivered and stored.
@@ -491,6 +504,23 @@ async fn handle_e3_input_deadline_expiration(
     let mut repo = CrispE3Repository::new(store.clone(), &e3_id);
     let e3: e3_sdk::indexer::models::E3 = repo.get_e3().await?;
 
+    let crisp =
+        CRISPContractFactory::create_read(&CONFIG.http_rpc_url, &CONFIG.e3_program_address).await?;
+    let pending = crisp
+        .pending_input_count(e3_id_to_u256(&e3_id).map_err(|error| eyre::eyre!(error.to_string()))?)
+        .await?;
+    if pending != 0 {
+        // The input root already includes these reserved leaves, but Ethereum has not verified
+        // their Avail receipts. Starting RISC Zero now would waste the proof: CRISPProgram.verify
+        // refuses every output until this reaches zero. InputPublished recovery wakes this handler
+        // again as each delayed VectorX proof lands.
+        return Err(eyre::eyre!(
+            "[e3_id={}] {} input(s) still await data-availability finalization; refusing to compute",
+            e3_id,
+            pending
+        ));
+    }
+
     // This transition is atomic. A delayed callback must not move a round from
     // `PublishingCiphertext` or `CiphertextPublished` back to `Expired` and compute it twice.
     if !repo.try_mark_expired().await? {
@@ -500,12 +530,11 @@ async fn handle_e3_input_deadline_expiration(
     let voter_count = repo.get_vote_count().await?;
 
     // The contract is the authority on how many inputs there are, and this callback can run before
-    // the last of them is indexed: `publishInput` still accepts one while
-    // `block.timestamp == inputWindow[1]`. Computation is one-shot, so starting short would tally a
-    // subset and derive a root the contract rejects — a failure with no other symptom.
+    // the last committed input is indexed. Computation is one-shot, so starting short would tally
+    // a subset and derive a root the contract rejects — a failure with no other symptom.
     //
     // The snapshot comes back from the same call, read once. Assembling the request from separate
-    // reads lets an `InputPublished` event land between them, which pairs a ciphertext with another
+    // reads lets an input event land between them, which pairs a ciphertext with another
     // input's commitment and derives a root `CRISPProgram` rejects.
     let snapshot = match wait_for_indexed_inputs(&e3_id, &repo).await? {
         IndexedInputs::Complete(snapshot) => snapshot,
@@ -532,8 +561,8 @@ async fn handle_e3_input_deadline_expiration(
 
     if voter_count > 0 && votes.is_empty() {
         warn!(
-            "[e3_id={}] {} voter(s) recorded but no InputPublished ciphertexts indexed — \
-             skipping FHE compute (check CRISP indexer + on-chain publishInput)",
+            "[e3_id={}] {} voter(s) recorded but no available ciphertexts indexed — \
+             skipping FHE compute (check CRISP indexer and data availability)",
             e3_id, voter_count
         );
         repo.update_status("Finished").await?;
@@ -563,7 +592,7 @@ async fn handle_e3_input_deadline_expiration(
             return Ok(());
         }
 
-        let (id, status) = run_compute(
+        let response = run_compute(
             &e3_id,
             e3.chain_id,
             e3.interfold_address,
@@ -581,10 +610,18 @@ async fn handle_e3_input_deadline_expiration(
                 CONFIG.interfold_server_url_for_clients()
             ),
         )
-        .await
-        .map_err(|e| eyre::eyre!("Error sending run compute request: {e}"))?;
+        .await;
+
+        let (id, status) = match response {
+            Ok(response) => response,
+            Err(error) => {
+                repo.release_compute_claim().await?;
+                return Err(eyre::eyre!("Error sending run compute request: {error}"));
+            }
+        };
 
         if id != e3_id {
+            repo.release_compute_claim().await?;
             return Err(eyre::eyre!(
                 "Computation request returned unexpected E3 ID: expected {}, got {}",
                 e3_id,
@@ -593,6 +630,7 @@ async fn handle_e3_input_deadline_expiration(
         }
 
         if status != "processing" {
+            repo.release_compute_claim().await?;
             return Err(eyre::eyre!(
                 "Computation request failed with status: {}",
                 status
@@ -814,22 +852,71 @@ pub async fn register_input_published(
     Ok(indexer)
 }
 
+/// Index a committed ciphertext immediately when this availability service holds its bytes.
+///
+/// VectorX finalization can take hours. Reserving the input index on Ethereum preserves CRISP's
+/// parent chain, and this local copy lets a later vote or mask extend that entry during the wait.
+/// Other indexers that do not hold the staged object simply learn it from `InputPublished` later.
+pub async fn register_input_committed(
+    indexer: InterfoldIndexer<impl DataStore, ReadWrite>,
+    availability: Arc<AvailabilityService>,
+) -> Result<InterfoldIndexer<impl DataStore, ReadWrite>> {
+    indexer
+        .add_event_handler(move |event: InputCommitted, ctx| {
+            let availability = Arc::clone(&availability);
+            let store = ctx.store();
+            async move {
+                let hash = format!("0x{}", hex::encode(event.encryptedVoteHash));
+                let Some(ciphertext) = availability
+                    .object(&hash)
+                    .map_err(|error| eyre::eyre!(error.to_string()))?
+                else {
+                    // This is normal for a secondary indexer. The verified InputPublished event
+                    // supplies Avail coordinates later; advancing the cursor is safe because no
+                    // unverified bytes are needed for final computation.
+                    return Ok(());
+                };
+                e3_data_availability::verify_retrieved_bytes(
+                    e3_data_availability::DataReference {
+                        content_hash: event.encryptedVoteHash.0,
+                        block_number: 0,
+                        leaf_index: 0,
+                    },
+                    ciphertext.clone(),
+                )
+                .map_err(|error| eyre::eyre!(error.to_string()))?;
+                store_input_bytes(
+                    store,
+                    event.e3Id.to_string(),
+                    ciphertext,
+                    event.index.to::<u64>(),
+                    event.encryptedVoteCommitment.0,
+                    event.slotAddress.into(),
+                    event.parentIndexPlusOne.to::<u64>(),
+                )
+                .await
+                .map_err(|error| eyre::eyre!(error.to_string()))?;
+                Ok::<(), eyre::Report>(())
+            }
+        })
+        .await;
+    Ok(indexer)
+}
+
 async fn store_available_input<S: DataStore>(
     store: SharedStore<S>,
     availability: Arc<AvailabilityService>,
     reference: AvailableInputReference,
 ) -> Result<()> {
     let ciphertext = availability.retrieve(reference.data_reference()).await?;
-    let mut repo = CrispE3Repository::new(store, &reference.e3_id);
-    let e3 = repo.get_e3().await?;
-    let params = decode_bfv_params_arc(&e3.e3_params)?;
-    repo.insert_ciphertext_input(
+    store_input_bytes(
+        store,
+        reference.e3_id.clone(),
         ciphertext,
         reference.index,
         reference.commitment,
         reference.slot,
         reference.parent_index_plus_one,
-        &params,
     )
     .await?;
     availability.complete_input_reference(&reference)?;
@@ -837,6 +924,30 @@ async fn store_available_input<S: DataStore>(
         "[e3_id={}] Retrieved input {} from data availability",
         reference.e3_id, reference.index
     );
+    Ok(())
+}
+
+async fn store_input_bytes<S: DataStore>(
+    store: SharedStore<S>,
+    e3_id: String,
+    ciphertext: Vec<u8>,
+    index: u64,
+    commitment: [u8; 32],
+    slot: [u8; 20],
+    parent_index_plus_one: u64,
+) -> Result<()> {
+    let mut repo = CrispE3Repository::new(store, &e3_id);
+    let e3 = repo.get_e3().await?;
+    let params = decode_bfv_params_arc(&e3.e3_params)?;
+    repo.insert_ciphertext_input(
+        ciphertext,
+        index,
+        commitment,
+        slot,
+        parent_index_plus_one,
+        &params,
+    )
+    .await?;
     Ok(())
 }
 
@@ -1043,6 +1154,7 @@ pub async fn start_indexer(
     let crisp_indexer = register_plaintext_output_published(crisp_indexer).await?;
     let crisp_indexer = register_committee_published(crisp_indexer).await?;
     let crisp_indexer = register_committee_public_key_chunks(crisp_indexer).await?;
+    let crisp_indexer = register_input_committed(crisp_indexer, Arc::clone(&availability)).await?;
     let crisp_indexer = register_input_published(crisp_indexer, availability).await?;
     let crisp_indexer = register_log_index(crisp_indexer, index_log_contracts).await?;
     tokio::spawn(recover_round_deadlines(crisp_indexer.get_store()));

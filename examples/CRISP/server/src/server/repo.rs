@@ -286,6 +286,7 @@ impl<S: DataStore> CrispE3Repository<S> {
         &mut self,
         custom_params: CustomParams,
         requester: String,
+        voting_end_time: u64,
         end_time: u64,
         snapshot_block: u64,
     ) -> Result<()> {
@@ -295,6 +296,7 @@ impl<S: DataStore> CrispE3Repository<S> {
             input_parents: Vec::new(),
             input_usable: Vec::new(),
             start_time: 0u64,
+            voting_end_time,
             status: "Requested".to_string(),
             tally: vec![],
             emojis: generate_emoji(),
@@ -341,7 +343,7 @@ impl<S: DataStore> CrispE3Repository<S> {
         Ok(e3_crisp.num_options.parse::<usize>()?)
     }
 
-    /// How many slots hold at least one published entry.
+    /// How many slots hold at least one available, locally indexed entry.
     ///
     /// The closest thing to a participation count the server can give. A mask is
     /// indistinguishable from a vote by design, so per-slot activity — not "who voted" — is what
@@ -406,6 +408,31 @@ impl<S: DataStore> CrispE3Repository<S> {
             .map_err(|_| eyre::eyre!("Could not claim computation for '{key}'"))?;
 
         Ok(claimed)
+    }
+
+    /// Release a compute claim when the program server refused the request.
+    ///
+    /// Only `Computing` can move back. A callback or output event may already have advanced the
+    /// round while the request handler was returning an error, and reverting either later state
+    /// would start a second computation for an output already in progress.
+    pub async fn release_compute_claim(&mut self) -> Result<bool> {
+        let key = self.crisp_key();
+        let mut released = false;
+
+        self.store
+            .modify(&key, |e3_obj: Option<E3Crisp>| {
+                e3_obj.map(|mut e| {
+                    if e.status == "Computing" {
+                        e.status = "Expired".to_owned();
+                        released = true;
+                    }
+                    e
+                })
+            })
+            .await
+            .map_err(|_| eyre::eyre!("Could not release computation for '{key}'"))?;
+
+        Ok(released)
     }
 
     pub async fn update_status(&mut self, value: &str) -> Result<()> {
@@ -499,13 +526,18 @@ impl<S: DataStore> CrispE3Repository<S> {
             return Ok(None);
         };
         let snapshot_block = snapshot_block(e3.request_block, e3_crisp.snapshot_block);
+        let voting_end_time = if e3_crisp.voting_end_time == 0 {
+            e3.input_window[1]
+        } else {
+            e3_crisp.voting_end_time
+        };
         Ok(Some(E3StateLite {
             emojis: e3_crisp.emojis,
             id: self.e3_id.clone(),
             status: e3_crisp.status,
             chain_id: e3.chain_id,
             start_time: e3.input_window[0],
-            end_time: e3.input_window[1],
+            end_time: voting_end_time,
             vote_count: count_active_slots(&e3_crisp.input_slots),
             start_block: e3.request_block,
             snapshot_block,
@@ -636,7 +668,7 @@ impl<S: DataStore> CrispE3Repository<S> {
         Ok(())
     }
 
-    /// Whether the slot holds any published entry, from the indexed `InputPublished` events.
+    /// Whether the slot holds any committed entry that this server has the bytes for.
     ///
     /// Deliberately not "has this address voted" — the server cannot know that. Anyone can mask
     /// any eligible slot, and a mask is indistinguishable from a vote, so activity is the only

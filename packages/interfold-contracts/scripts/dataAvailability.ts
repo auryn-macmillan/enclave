@@ -14,6 +14,12 @@ export const AVAIL_VECTORX = {
   },
 } as const;
 
+/** Time reserved between the last accepted input proof and the Ethereum input deadline. */
+export const AVAIL_FINALIZATION_WINDOW_SECONDS = 10_800;
+
+/** Voting time CRISP must leave after the worst-case committee setup. */
+export const CRISP_MIN_VOTING_DURATION_SECONDS = 3_600;
+
 export function availVectorXForChain(chainId: number) {
   const entry = Object.values(AVAIL_VECTORX).find(
     (candidate) => candidate.chainId === chainId,

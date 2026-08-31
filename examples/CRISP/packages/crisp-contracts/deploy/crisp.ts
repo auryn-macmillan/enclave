@@ -4,7 +4,13 @@
 // without even the implied warranty of MERCHANTABILITY
 // or FITNESS FOR A PARTICULAR PURPOSE.
 
-import { AVAIL_VECTORX, getDeploymentChain, readDeploymentArgs, storeDeploymentArgs } from '@interfold/contracts/scripts'
+import {
+  AVAIL_FINALIZATION_WINDOW_SECONDS,
+  AVAIL_VECTORX,
+  getDeploymentChain,
+  readDeploymentArgs,
+  storeDeploymentArgs,
+} from '@interfold/contracts/scripts'
 import { Interfold__factory as InterfoldFactory } from '@interfold/contracts/types'
 import { readFileSync } from 'fs'
 
@@ -15,10 +21,7 @@ import { verifierNames } from '../scripts/verifiers'
 
 // The production guest lives in crates/support. Read the Image ID generated from that exact
 // guest instead of the example project's cached copy, which can lag behind a guest change.
-const imageIdContent = readFileSync(
-  new URL('../../../../../crates/support/contracts/ImageID.sol', import.meta.url),
-  'utf-8',
-)
+const imageIdContent = readFileSync(new URL('../../../../../crates/support/contracts/ImageID.sol', import.meta.url), 'utf-8')
 const match = imageIdContent.match(/bytes32 public constant PROGRAM_ID = bytes32\((0x[a-fA-F0-9]+)\)/)
 const IMAGE_ID = match ? match[1] : null
 
@@ -42,7 +45,19 @@ export const deployCRISPContracts = async (): Promise<CRISPDeploymentResult> => 
   }
   const initialOwner = configuredOwner ? ethers.getAddress(configuredOwner) : ownerAddress
 
-  const useMocks = Boolean(process.env.USE_MOCKS)
+  const rawUseMocks = process.env.USE_MOCKS?.trim().toLowerCase()
+  if (rawUseMocks && rawUseMocks !== 'true' && rawUseMocks !== 'false') {
+    throw new Error("USE_MOCKS must be 'true', 'false', or unset")
+  }
+  const useMocks = rawUseMocks === 'true'
+  const configuredAvailabilitySigner = process.env.INPUT_AVAILABILITY_SIGNER
+  const inputAvailabilitySigner = configuredAvailabilitySigner
+    ? ethers.getAddress(configuredAvailabilitySigner)
+    : useMocks || chain === 'localhost'
+      ? ownerAddress
+      : (() => {
+          throw new Error('INPUT_AVAILABILITY_SIGNER is required for an Avail-backed CRISP deployment')
+        })()
 
   const verifier = await deployVerifier(useMocks, ethers)
 
@@ -135,9 +150,7 @@ export const deployCRISPContracts = async (): Promise<CRISPDeploymentResult> => 
   )
 
   const useMockDataAvailability = useMocks || chain === 'localhost'
-  const dataAvailabilityContract = useMockDataAvailability
-    ? 'MockCrispDataAvailabilityVerifier'
-    : 'AvailVectorXDataAvailabilityVerifier'
+  const dataAvailabilityContract = useMockDataAvailability ? 'MockCrispDataAvailabilityVerifier' : 'AvailVectorXDataAvailabilityVerifier'
   let dataAvailabilityVerifier
   if (useMockDataAvailability) {
     dataAvailabilityVerifier = await ethers.deployContract('MockCrispDataAvailabilityVerifier')
@@ -146,10 +159,7 @@ export const deployCRISPContracts = async (): Promise<CRISPDeploymentResult> => 
     if (!addresses) {
       throw new Error(`Avail/VectorX data availability is not configured for ${chain}`)
     }
-    dataAvailabilityVerifier = await ethers.deployContract('AvailVectorXDataAvailabilityVerifier', [
-      addresses.bridge,
-      addresses.vectorx,
-    ])
+    dataAvailabilityVerifier = await ethers.deployContract('AvailVectorXDataAvailabilityVerifier', [addresses.bridge, addresses.vectorx])
   }
   await dataAvailabilityVerifier.waitForDeployment()
   const dataAvailabilityVerifierAddress = await dataAvailabilityVerifier.getAddress()
@@ -182,6 +192,8 @@ export const deployCRISPContracts = async (): Promise<CRISPDeploymentResult> => 
     honkVerifierAddress,
     onchainHonkVerifierAddress,
     dataAvailabilityVerifierAddress,
+    useMockDataAvailability ? 0 : AVAIL_FINALIZATION_WINDOW_SECONDS,
+    inputAvailabilitySigner,
     IMAGE_ID,
   )
   await crisp.waitForDeployment()
@@ -197,6 +209,8 @@ export const deployCRISPContracts = async (): Promise<CRISPDeploymentResult> => 
         honkVerifierAddress,
         onchainHonkVerifierAddress,
         dataAvailabilityVerifierAddress,
+        availabilityFinalizationWindow: useMockDataAvailability ? 0 : AVAIL_FINALIZATION_WINDOW_SECONDS,
+        inputAvailabilitySigner,
         imageId: IMAGE_ID,
       },
     },

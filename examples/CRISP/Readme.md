@@ -206,9 +206,10 @@ Sepolia and Ethereum mainnet use Avail. Before starting the CRISP server:
 2. Fund a dedicated Avail account that can pay for every `submit_data` transaction.
 3. Keep the server database durable. It stores each pending publication until its VectorX proof is
    available and resumes the job after a restart.
-4. Configure at least a four-hour input window. VectorX normally needs about 1.5 to 2 hours to
-   anchor an Avail block on Ethereum; the default three-hour proof lead leaves one extra hour for
-   submission.
+4. Deploy CRISP with `INPUT_AVAILABILITY_SIGNER` set to the Ethereum address derived from the
+   server's `PRIVATE_KEY`.
+5. Configure a 12-hour input window. This covers the current worst-case committee setup, at least
+   one hour for voters, and a three-hour VectorX finalization target.
 
 ```dotenv
 # Sepolia + Avail Turing
@@ -218,21 +219,27 @@ AVAIL_BRIDGE_API_URL=https://turing-bridge-api.avail.so
 AVAIL_APP_ID=<registered-app-id>
 AVAIL_SEED=<dedicated-funded-secret-uri>
 AVAIL_PROOF_LEAD_SECONDS=10800
-E3_DURATION=14400
+# 12 hours. Covers the current 1h VRF + 10m sortition + 6h DKG upper bound,
+# at least 1h of voting, and the 3h VectorX finalization target.
+E3_DURATION=43200
 
 # Ethereum mainnet uses these two endpoints instead:
 # AVAIL_RPC_URL=wss://avail-rpc.publicnode.com/
 # AVAIL_BRIDGE_API_URL=https://bridge-api.avail.so
 ```
 
-The server first validates the Noir proof, publishes the exact encrypted bytes to Avail, waits for
-the official bridge proof, and then submits the compact reference to Ethereum. The aggregate
-ciphertext follows the same path after the RISC Zero proof is ready. On mainnet the voter submits
-the final input transaction from their wallet; the server never relays it with the operator key.
+The server first validates the Noir proof and durably stores the exact encrypted bytes. It signs a
+compact proof commitment only after storage succeeds. On mainnet, the voter submits that commitment
+from their wallet and can then leave. The server publishes the ciphertext to Avail, waits for the
+official VectorX proof, and finalizes the input without the voter. The proof transaction reserves
+the input's tree index immediately, so masks and revotes can still extend it during the VectorX
+wait. CRISP refuses the aggregate computation while any input is not finalized.
 
-Each accepted Ethereum reference contains `keccak256(exact bytes)`. The CRISP server and
-ciphernodes re-hash retrieved bytes before they use them. An App ID helps indexing, but it is not a
-security boundary.
+The aggregate ciphertext follows the Avail and VectorX path after its RISC Zero proof is ready.
+
+Each accepted Ethereum reference contains `keccak256(exact bytes)`. The CRISP server and ciphernodes
+re-hash retrieved bytes before they use them. An App ID helps indexing, but it is not a security
+boundary.
 
 ### Environment Variables
 

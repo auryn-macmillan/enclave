@@ -137,7 +137,10 @@ export const requestNewRound = async (serverUrl: string, request: NewRoundReques
   })
 
 /**
- * Broadcast an encrypted vote through the CRISP server, which relays it on-chain.
+ * Stage an encrypted vote with the CRISP availability service.
+ *
+ * This call returns after the proof commitment is accepted or is ready for the voter's wallet.
+ * The server publishes the ciphertext to Avail and finalizes the input in the background.
  * @param serverUrl - The base URL of the CRISP server
  * @param request - The vote request (round id and hex encoded proof)
  * @returns The broadcast result, including the transaction hash on success
@@ -161,22 +164,21 @@ export const broadcastVote = async (serverUrl: string, request: BroadcastVoteReq
     throw new Error(`Failed to broadcast vote (${response.status}): ${data}`)
   }
 
-  if (data.status !== 'pending_availability') return data
-  if (!data.job_id) throw new Error('Availability job response is missing job_id')
+  return data
+}
 
-  // VectorX proves a range of Avail blocks, so this can take substantially longer than an
-  // Ethereum transaction. The server owns the durable job; closing this page does not cancel it.
-  for (;;) {
-    await new Promise((resolve) => setTimeout(resolve, 15_000))
-    const statusResponse = await fetch(
-      `${serverUrl}/${CRISP_SERVER_VOTING_AVAILABILITY_ENDPOINT}/${encodeURIComponent(data.job_id)}`,
-    )
-    if (!statusResponse.ok) {
-      throw new Error(`Failed to read availability job (${statusResponse.status})`)
-    }
-    const status = (await statusResponse.json()) as BroadcastVoteResponse
-    if (status.status !== 'pending_availability') return status
+/**
+ * Read a durable vote availability job without waiting for VectorX finalization.
+ * @param serverUrl The base URL of the CRISP server.
+ * @param jobId The job id returned by {@link broadcastVote}.
+ * @returns The current commitment or availability state.
+ */
+export const getVoteAvailability = async (serverUrl: string, jobId: string): Promise<BroadcastVoteResponse> => {
+  const response = await fetch(`${serverUrl}/${CRISP_SERVER_VOTING_AVAILABILITY_ENDPOINT}/${encodeURIComponent(jobId)}`)
+  if (!response.ok) {
+    throw new Error(`Failed to read availability job (${response.status}): ${await response.text()}`)
   }
+  return (await response.json()) as BroadcastVoteResponse
 }
 
 /**

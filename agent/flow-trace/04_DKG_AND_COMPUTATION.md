@@ -804,15 +804,26 @@ comparison.
 ```
 Data providers submit encrypted inputs:
 │
-├─ Publish the exact encrypted bytes to Avail with submit_data
-├─ Wait for VectorX to anchor that Avail block on Ethereum
-└─ e3Program.publishInput(e3Id, encodedReference)
-   → Must be within inputWindow [start, end]
-   → Encrypted under the committee's aggregate public key
-   → Verifies the Avail receipt for keccak256(encryptedData)
-   → Verifies the Noir proof against the same hash and SAFE commitment
-   → Only M+1 committee members can collectively decrypt
+├─ Server validates the Noir proof and durably stores the exact ciphertext
+├─ Server signs the chain-bound input ID only after storage succeeds
+├─ e3Program.publishInput(e3Id, proofCommitment)
+│  → Must be before inputCommitmentDeadline
+│  → Verifies the Noir proof, content hash, SAFE commitment, and server signature
+│  → Reserves the input leaf and index immediately
+│  → Emits InputCommitted and increments pendingInputCount
+├─ Server publishes the stored ciphertext to Avail with submit_data
+├─ VectorX anchors that Avail block on Ethereum
+└─ e3Program.finalizeInput(e3Id, inputTuple, vectorXProof)
+   → Verifies availability of the exact keccak256(ciphertext)
+   → Emits InputPublished and decrements pendingInputCount
+   → Can be called by anyone; the voter does not stay online
 ```
+
+The final three hours of the input window accept finalizations but no new proof commitments. The
+input leaf is reserved in the first transaction so later masks and revotes can extend it while
+VectorX is pending. Computation waits for the original input-window end and for
+`pendingInputCount == 0`. See [08_DATA_AVAILABILITY.md](08_DATA_AVAILABILITY.md) for the exact
+deadlines, recovery flow, and remaining trust.
 
 ### Ciphertext Output Publication
 
@@ -1388,11 +1399,10 @@ index there, laid out as `abi.encodePacked(address, uint40)`.
 
 ### Input leaf binding and per-slot selection
 
-An E3 program verifies a proof over the ciphertext **commitment** when an input is published. The
-proof never sees the serialized ciphertext the event carries, so the two can disagree, and neither
-the contract nor the circuit can tell: the commitment is a Poseidon sponge over the ciphertext's CRT
-limbs (~49k field elements at the secure preset), and the circuit cannot reproduce the fhe.rs
-serialization. The guest is the first place both representations exist at once.
+An E3 program verifies a proof over the ciphertext **commitment** when an input is committed. The
+proof also exposes the Keccak hash of the serialized ciphertext, split across two field elements.
+The contract cannot deserialize the ciphertext or reproduce its Poseidon commitment. The guest is
+the first place both representations exist at once.
 
 `CRISPProgram.inputLeaf` therefore binds four values:
 
@@ -1401,7 +1411,7 @@ leaf = sha256(keccak256(encryptedVote) || encryptedVoteCommitment || slotAddress
        mod SNARK_SCALAR_FIELD
 ```
 
-- the **bytes**, so a submitter cannot publish a valid commitment beside unrelated data;
+- the **content hash**, so a submitter cannot pair a valid commitment with unrelated bytes;
 - the **commitment**, so any commitment cannot be paired with any ciphertext;
 - the **slot**, because the tree is append-only and the guest selects per slot — an unbound slot
   would let a prover re-group entries and change which one wins;
@@ -1485,10 +1495,10 @@ empty ciphertext does not deserialize. That is only reachable when no honest inp
 indistinguishable from a round that received none, which the protocol resolves as
 `NoInputsReceived`.
 
-`InputPublished` carries the slot, the commitment, and the parent alongside the bytes. All three
-were already public — the slot and the parent are plaintext `publishInput` arguments, and
-`getSlotIndex` and `inputCommitmentOf` expose the rest — so emitting them leaks nothing and saves
-every consumer from parsing transaction calldata.
+`InputCommitted` carries the slot, commitment, content hash, parent, and reserved index. The later
+`InputPublished` event repeats the tuple with the VectorX-verified Avail coordinates. Neither event
+carries the ciphertext bytes. Indexers fetch those bytes and reject them unless their Keccak hash
+matches the on-chain content hash.
 
 ### One relation for voting, updating, and masking
 

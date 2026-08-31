@@ -9,6 +9,11 @@ use dotenvy::dotenv;
 use once_cell::sync::Lazy;
 use serde::Deserialize;
 
+const AVAIL_FINALIZATION_WINDOW_SECONDS: u64 = 10_800;
+// Current production upper bounds before a committee key can exist:
+// 1h VRF + 10m sortition + 6h DKG. Add one hour for voters and the three-hour VectorX tail.
+const MIN_AVAIL_E3_DURATION_SECONDS: u64 = 40_200;
+
 // Do not derive `Debug`: this structure owns private keys and other secrets.
 #[derive(Deserialize)]
 pub struct Config {
@@ -132,7 +137,9 @@ impl Config {
         Self::validate_data_availability(
             &config.data_availability_mode(),
             config.e3_duration,
-            config.avail_proof_lead_seconds.unwrap_or(10_800),
+            config
+                .avail_proof_lead_seconds
+                .unwrap_or(AVAIL_FINALIZATION_WINDOW_SECONDS),
         )?;
         Ok(config)
     }
@@ -145,15 +152,16 @@ impl Config {
         if mode != "avail" {
             return Ok(());
         }
-        if proof_lead < 7_200 {
+        if proof_lead != AVAIL_FINALIZATION_WINDOW_SECONDS {
             return Err(ConfigError::Message(
-                "AVAIL_PROOF_LEAD_SECONDS must be at least 7200".to_owned(),
+                format!(
+                    "AVAIL_PROOF_LEAD_SECONDS must match the deployed CRISP finalization window ({AVAIL_FINALIZATION_WINDOW_SECONDS})"
+                ),
             ));
         }
-        if input_duration < proof_lead.saturating_add(3_600) {
+        if input_duration < MIN_AVAIL_E3_DURATION_SECONDS {
             return Err(ConfigError::Message(format!(
-                "E3_DURATION must leave one hour for voting before the Avail proof lead; expected at least {}, got {input_duration}",
-                proof_lead.saturating_add(3_600)
+                "E3_DURATION must cover committee setup, one hour of voting, and Avail finalization; expected at least {MIN_AVAIL_E3_DURATION_SECONDS}, got {input_duration}"
             )));
         }
         Ok(())
@@ -201,7 +209,8 @@ mod tests {
     #[test]
     fn avail_requires_a_window_long_enough_for_vectorx() {
         assert!(Config::validate_data_availability("mock", 300, 10_800).is_ok());
-        assert!(Config::validate_data_availability("avail", 14_400, 10_800).is_ok());
-        assert!(Config::validate_data_availability("avail", 10_800, 10_800).is_err());
+        assert!(Config::validate_data_availability("avail", 40_200, 10_800).is_ok());
+        assert!(Config::validate_data_availability("avail", 40_199, 10_800).is_err());
+        assert!(Config::validate_data_availability("avail", 43_200, 7_200).is_err());
     }
 }

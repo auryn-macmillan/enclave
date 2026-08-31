@@ -46,10 +46,7 @@ describe("AvailVectorXDataAvailabilityVerifier", function () {
 
   it("returns stable retrieval coordinates for the exact Avail leaf", async function () {
     const { verifier } = await fixture();
-    const receipt = await verifier.verifyDataAvailability(
-      contentHash,
-      proof(),
-    );
+    const receipt = await verifier.verifyDataAvailability(contentHash, proof());
     expect(receipt.contentHash).to.equal(contentHash);
     expect(receipt.blockNumber).to.equal(1_008n);
     expect(receipt.leafIndex).to.equal(12n);
@@ -61,6 +58,16 @@ describe("AvailVectorXDataAvailabilityVerifier", function () {
       verifier.verifyDataAvailability(
         ethers.keccak256(ethers.toUtf8Bytes("substitute")),
         proof(),
+      ),
+    ).to.be.revertedWithCustomError(verifier, "ContentHashMismatch");
+  });
+
+  it("rejects the submitted-data Merkle hash in place of the proof leaf", async function () {
+    const { verifier } = await fixture();
+    await expect(
+      verifier.verifyDataAvailability(
+        contentHash,
+        proof({ leaf: ethers.keccak256(contentHash) }),
       ),
     ).to.be.revertedWithCustomError(verifier, "ContentHashMismatch");
   });

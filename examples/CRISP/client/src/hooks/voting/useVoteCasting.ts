@@ -22,7 +22,7 @@ import { handleGenericError } from '@/utils/handle-generic-error'
 import { NUM_OPTIONS } from '@/utils/constants'
 import { ballotTypedData, getBallotDigest, getCrispProgramAddress, getCrispRoundConfig } from '@/utils/ballotDigest'
 import { getRandomRegistrant, getVotingPower, isRegisteredIn } from '@/utils/onchainCensus'
-import { submitVoteDirectly } from '@/utils/directVote'
+import { submitInputCommitmentDirectly } from '@/utils/directVote'
 import { txExplorerUrl } from '@/utils/methods'
 
 const INTERFOLD_API = import.meta.env.VITE_INTERFOLD_API
@@ -149,7 +149,7 @@ export const useVoteCasting = (customRoundState?: VoteStateLite | null, customVo
     setTxUrl,
     markVotedInRound,
     hasVotedInCurrentRound,
-    waitForVoteAvailability,
+    getVoteAvailability,
   } = useVoteManagementContext()
 
   const roundState = customRoundState ?? contextRoundState
@@ -407,18 +407,25 @@ export const useVoteCasting = (customRoundState?: VoteStateLite | null, customVo
 
       const pendingJobKey = availabilityJobKey(chainId, roundState.id, user.address)
 
-      const finishPublication = async (response: BroadcastVoteResponse, operationIsMask: boolean): Promise<void> => {
+      const finishCommitment = async (response: BroadcastVoteResponse, operationIsMask: boolean): Promise<boolean> => {
         if (response.status === 'failed_broadcast') {
           throw new Error(extractCleanErrorMessage(response.message ?? undefined))
         }
-        if (response.status === 'pending_availability') {
-          throw new Error('The data-availability job did not reach a terminal state.')
+
+        if (response.status === 'pending_commitment') {
+          setVotingStep('confirming')
+          setStepMessage('Your proof is queued for commitment. You can safely leave and check again later.')
+          showToast({
+            type: 'success',
+            message: 'Vote proof queued. The relay will keep retrying it.',
+          })
+          return false
         }
 
         let txHash: string | undefined = response.tx_hash ?? undefined
-        if (response.status === 'ready_for_submission') {
+        if (response.status === 'ready_for_commitment') {
           if (!walletClient || !publicClient) {
-            throw new Error('No wallet available to submit the vote directly')
+            throw new Error('No wallet available to commit the vote proof')
           }
 
           setStepMessage('Please confirm the transaction in your wallet...')
@@ -426,13 +433,24 @@ export const useVoteCasting = (customRoundState?: VoteStateLite | null, customVo
           const e3Id = BigInt(roundState.id)
           const crispProgram = await getCrispProgramAddress(publicClient, roundState.interfold_address as `0x${string}`, e3Id)
           if (!response.encoded_proof) {
-            throw new Error('Availability job is missing the final proof payload')
+            throw new Error('Availability job is missing the input commitment payload')
           }
-          txHash = await submitVoteDirectly(walletClient, publicClient, crispProgram, e3Id, response.encoded_proof as `0x${string}`)
+          txHash = await submitInputCommitmentDirectly(
+            walletClient,
+            publicClient,
+            crispProgram,
+            e3Id,
+            response.encoded_proof as `0x${string}`,
+          )
         }
 
         setVotingStep('complete')
-        setStepMessage(`${operationIsMask ? 'Masking' : 'Vote'} submitted successfully!`)
+        const finalized = response.status === 'success'
+        setStepMessage(
+          finalized
+            ? `${operationIsMask ? 'Masking' : 'Vote'} finalized successfully!`
+            : `${operationIsMask ? 'Masking' : 'Vote'} committed. Availability will finalize in the background.`,
+        )
 
         const url = txHash ? txExplorerUrl(txHash) : undefined
         setTxUrl(url)
@@ -441,10 +459,17 @@ export const useVoteCasting = (customRoundState?: VoteStateLite | null, customVo
 
         showToast({
           type: 'success',
-          message: operationIsMask ? 'Slot masked successfully' : 'Vote submitted successfully!',
+          message: finalized
+            ? operationIsMask
+              ? 'Slot masked successfully'
+              : 'Vote finalized successfully!'
+            : operationIsMask
+              ? 'Mask committed. You can safely leave this page.'
+              : 'Vote committed. You can safely leave this page.',
           linkUrl: url,
         })
         navigate(`/result/${roundState.id}/confirmation`)
+        return true
       }
 
       try {
@@ -454,13 +479,14 @@ export const useVoteCasting = (customRoundState?: VoteStateLite | null, customVo
           setIsVoting(!pendingJob.isMask)
           setVotingStep('broadcasting')
           setLastActiveStep('broadcasting')
-          setStepMessage('Resuming data-availability proof...')
+          setStepMessage('Checking the durable vote job...')
 
-          const resumed = await waitForVoteAvailability(pendingJob.jobId)
+          const resumed = await getVoteAvailability(pendingJob.jobId)
           if (!resumed) throw new Error('Could not read the pending data-availability job.')
           if (resumed.status === 'failed_broadcast') clearAvailabilityJob(pendingJobKey)
-          await finishPublication(resumed, pendingJob.isMask)
-          clearAvailabilityJob(pendingJobKey)
+          if (await finishCommitment(resumed, pendingJob.isMask)) {
+            clearAvailabilityJob(pendingJobKey)
+          }
           return
         }
 
@@ -547,8 +573,9 @@ export const useVoteCasting = (customRoundState?: VoteStateLite | null, customVo
           throw new Error('Received no response after publishing vote data.')
         }
         if (broadcastVoteResponse.status === 'failed_broadcast') clearAvailabilityJob(pendingJobKey)
-        await finishPublication(broadcastVoteResponse, isAMask)
-        clearAvailabilityJob(pendingJobKey)
+        if (await finishCommitment(broadcastVoteResponse, isAMask)) {
+          clearAvailabilityJob(pendingJobKey)
+        }
       } catch (error) {
         setVotingStep('error')
         console.error('Vote processing failed:', error)
@@ -576,7 +603,7 @@ export const useVoteCasting = (customRoundState?: VoteStateLite | null, customVo
       handleMask,
       handleVote,
       getMerkleLeaves,
-      waitForVoteAvailability,
+      getVoteAvailability,
       chainId,
     ],
   )

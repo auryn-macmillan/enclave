@@ -579,7 +579,12 @@ describe("Interfold", function () {
         .withArgs(ethers.ZeroAddress);
     });
     it("instantiates a new E3", async function () {
-      const { interfold, request, usdcToken } = await loadFixture(setup);
+      const {
+        interfold,
+        request,
+        usdcToken,
+        mocks: { e3Program },
+      } = await loadFixture(setup);
       await usdcToken.approve(await interfold.getAddress(), ethers.MaxUint256);
       const requestAt = BigInt((await time.latest()) + 1);
       const freshRequest = {
@@ -604,6 +609,9 @@ describe("Interfold", function () {
       // bonding registry / token checkpoints across L2s with variable block
       // production.
       expect(e3.requestBlock).to.equal(block.timestamp);
+      expect(await e3Program.validationRequestTimes(firstE3Id)).to.equal(
+        block.timestamp,
+      );
       expect(e3.decryptionVerifier).to.equal(
         abiCoder.decode(["address"], request.computeProviderParams)[0],
       );
@@ -638,7 +646,12 @@ describe("Interfold", function () {
 
       await expect(
         publishAvailableCiphertextOutput(
-          interfold,0, "0x", ethers.ZeroHash, "0x"),
+          interfold,
+          0,
+          "0x",
+          ethers.ZeroHash,
+          "0x",
+        ),
       )
         .to.be.revertedWithCustomError(interfold, "E3DoesNotExist")
         .withArgs(0);
@@ -675,7 +688,6 @@ describe("Interfold", function () {
       await mine(2, { interval: inputWindowDuration });
 
       await publishAvailableCiphertextOutput(
-
         interfold,
         e3Id,
         data,
@@ -758,7 +770,12 @@ describe("Interfold", function () {
       await mine(2, { interval: inputWindowDuration });
       await expect(
         publishAvailableCiphertextOutput(
-          interfold,e3Id, "0x", ethers.ZeroHash, "0x"),
+          interfold,
+          e3Id,
+          "0x",
+          ethers.ZeroHash,
+          "0x",
+        ),
       ).to.be.revertedWithCustomError(interfold, "InvalidOutput");
     });
     it("does not assign an unverified ciphertext to the committee", async function () {

@@ -381,9 +381,9 @@ export const encodeSolidityProof = ({ publicInputs, proof, encryptedVote, parent
   const encryptedVoteBytes = bytesToHex(encryptedVote)
   const encryptedVoteHash = keccak256(encryptedVoteBytes)
 
-  // The last field is a staging availability proof. Local development uses the raw bytes as its
-  // deterministic mock proof. A production availability service publishes those exact bytes to
-  // Avail and replaces this field with the VectorX proof before it calls `publishInput`.
+  // The last field contains the ciphertext only while the availability service stages the job.
+  // The service removes it from the proof-commitment transaction, publishes it to Avail, and
+  // later supplies the VectorX proof to `finalizeInput`.
   return encodeAbiParameters(parseAbiParameters('bytes, address, bytes32, bytes32, uint40, bytes'), [
     bytesToHex(proof),
     slotAddress,

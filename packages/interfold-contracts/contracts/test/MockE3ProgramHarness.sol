@@ -7,7 +7,9 @@ pragma solidity 0.8.28;
 
 import { IE3Program } from "../interfaces/IE3Program.sol";
 import { IInterfold } from "../interfaces/IInterfold.sol";
-import { IDataAvailabilityVerifier } from "../interfaces/IDataAvailabilityVerifier.sol";
+import {
+    IDataAvailabilityVerifier
+} from "../interfaces/IDataAvailabilityVerifier.sol";
 
 /// @dev Test-only E3 program with controls used to exercise failure and reentrancy paths.
 contract MockE3ProgramHarness is IE3Program {
@@ -23,6 +25,7 @@ contract MockE3ProgramHarness is IE3Program {
     bytes public reentrantProof;
 
     mapping(uint256 e3Id => bytes32 paramsHash) public paramsHashes;
+    mapping(uint256 e3Id => uint256 requestTime) public validationRequestTimes;
     mapping(uint256 e3Id => bytes32 commitment)
         public expectedCiphertextCommitments;
 
@@ -59,6 +62,11 @@ contract MockE3ProgramHarness is IE3Program {
         );
 
         require(paramsHashes[e3Id] == bytes32(0), E3AlreadyInitialized());
+        if (address(interfold) != address(0)) {
+            // Production programs can inspect the provisional E3 while validating the request.
+            // This assertion prevents fixtures from hiding a different production call order.
+            validationRequestTimes[e3Id] = interfold.getE3(e3Id).requestBlock;
+        }
         paramsHashes[e3Id] = keccak256(e3ProgramParams);
         return ENCRYPTION_SCHEME_ID;
     }
