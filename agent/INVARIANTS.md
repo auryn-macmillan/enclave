@@ -513,11 +513,12 @@ design citation alone does not establish current runtime behavior.
   padded ciphertext would otherwise share a commitment with its two-component prefix while threshold
   decryption rejects it, failing the round as a `DecryptionTimeout` billed to the ciphernodes. —
   `flow-trace/04`
-- **Client PK commitment binding (C-01):** serialized PK event bytes are an untrusted transport
-  hint; indexers store the decoded key only when its recomputed commitment equals the on-chain
-  (C5-proven) value. Proof-backed committee publication never accepts key bytes. Public-key
-  candidates are bounded, permissionless, and repeatable, so an invalid candidate cannot block a
-  later valid one. — INDEX concerns #33, Z-31
+- **Client PK commitment binding (C-01):** Serialized PK event bytes are an untrusted transport
+  hint. Consumers decode the bytes with the request-time threshold BFV parameters. Consumers store
+  the key only when its recomputed commitment equals the on-chain (C5-proven) value. Proof-backed
+  committee publication never accepts key bytes. Public-key candidates are bounded, permissionless,
+  and repeatable. An invalid candidate cannot block a later valid candidate. — INDEX concerns #33,
+  Z-31
 - **No proof-disabled bypass (C-02):** both final verifier calls are mandatory in production;
   `skip_proof_aggregation` works only under the `test-only-skip-proof-aggregation` Cargo feature;
   production verifiers reject placeholder C5/C7 proofs. — INDEX concern #32

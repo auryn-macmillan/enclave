@@ -4056,6 +4056,7 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "bloom",
+ "e3-bfv-client",
  "e3-ciphernode-builder",
  "e3-config",
  "e3-crypto",

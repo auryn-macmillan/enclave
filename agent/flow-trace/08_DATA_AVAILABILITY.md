@@ -12,6 +12,9 @@ uses three different transports:
 - The aggregate ciphertext uses the same Avail and VectorX receipt, after RISC Zero proves the
   computation.
 
+Consumers assemble a complete public-key candidate and check its content hash. They decode the key
+with the E3 threshold parameters and compare its C5 commitment with the proven on-chain value.
+
 The application content address is `keccak256(exact serialized bytes)`. Avail's proof API returns
 that value as `leaf`. The official bridge hashes `leaf` once more when it checks the submitted-data
 Merkle root. The Solidity adapter first requires `leaf == contentHash`, then calls the bridge. Every

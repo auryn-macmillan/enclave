@@ -6,6 +6,7 @@ use actix::{
     Actor, ActorContext, ActorFutureExt, AsyncContext, Context, Handler, Message, WrapFuture,
 };
 use alloy::primitives::keccak256;
+use e3_bfv_client::validate_pk_commitment;
 use e3_config::chain_config::{DataAvailabilityConfig, DataAvailabilityMode};
 use e3_data_availability::{AvailReader, DataAvailabilityReader, DataReference, HttpObjectReader};
 use e3_events::{
@@ -13,9 +14,8 @@ use e3_events::{
     CommitteePublicKeyChunkPublished, CommitteePublished, E3id, EventContext, EventPublisher,
     EventType, InterfoldEvent, InterfoldEventData, Sequenced,
 };
-use e3_fhe_params::BfvPreset;
+use e3_fhe_params::{BfvParamSet, BfvPreset};
 use e3_utils::{ArcBytes, MAILBOX_LIMIT};
-use e3_zk_helpers::compute_dkg_pk_commitment_from_public_key_bytes;
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -28,6 +28,23 @@ const MAX_PUBLIC_KEY_BYTES: usize = 512 * 1024;
 const PUBLIC_KEY_CHUNK_BYTES: usize = 90 * 1024;
 
 type CandidateKey = (E3id, String, [u8; 32]);
+
+fn validate_committee_public_key(
+    public_key: &[u8],
+    expected_commitment: [u8; 32],
+    preset: BfvPreset,
+) -> anyhow::Result<()> {
+    // The final committee key uses threshold parameters. DKG parameters apply only to temporary
+    // share-transport keys.
+    let params = BfvParamSet::from(preset);
+    validate_pk_commitment(
+        public_key,
+        expected_commitment,
+        params.degree,
+        params.plaintext_modulus,
+        params.moduli.to_vec(),
+    )
+}
 
 #[derive(Clone)]
 struct OutputReference {
@@ -189,16 +206,10 @@ impl DataAvailabilityCoordinator {
                 self.invalid_candidates.insert(key);
                 continue;
             }
-            let commitment = match compute_dkg_pk_commitment_from_public_key_bytes(&bytes, preset) {
-                Ok(commitment) => commitment,
-                Err(error) => {
-                    warn!(e3_id = %key.0, publisher = %key.1, %error, "Rejecting an invalid serialized committee public key");
-                    self.invalid_candidates.insert(key);
-                    continue;
-                }
-            };
-            if commitment != assembly.pk_commitment {
-                warn!(e3_id = %key.0, publisher = %key.1, "Rejecting a committee public key that does not match the proven DKG commitment");
+            if let Err(error) =
+                validate_committee_public_key(&bytes, assembly.pk_commitment, preset)
+            {
+                warn!(e3_id = %key.0, publisher = %key.1, %error, "Rejecting a committee public key that does not match its proven C5 commitment");
                 self.invalid_candidates.insert(key);
                 continue;
             }
@@ -388,6 +399,7 @@ impl Handler<RetrieveOutput> for DataAvailabilityCoordinator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use e3_bfv_client::{client::generate_public_key, compute_pk_commitment};
 
     fn chunk_event(bytes: &[u8], chunk_index: u16) -> CommitteePublicKeyChunkPublished {
         let chunk_count = bytes.len().div_ceil(PUBLIC_KEY_CHUNK_BYTES) as u16;
@@ -438,5 +450,28 @@ mod tests {
         let mut conflicting = first;
         conflicting.chunk = ArcBytes::from_bytes(&vec![4; PUBLIC_KEY_CHUNK_BYTES]);
         assert!(!assembly.insert(&conflicting));
+    }
+
+    #[test]
+    fn threshold_public_key_is_validated_with_threshold_parameters() {
+        let preset = BfvPreset::InsecureThreshold512;
+        let params = BfvParamSet::from(preset);
+        let public_key = generate_public_key(
+            params.degree,
+            params.plaintext_modulus,
+            params.moduli.to_vec(),
+        )
+        .expect("generate threshold public key");
+        let commitment = compute_pk_commitment(
+            public_key.clone(),
+            params.degree,
+            params.plaintext_modulus,
+            params.moduli.to_vec(),
+        )
+        .expect("compute C5 commitment");
+
+        validate_committee_public_key(&public_key, commitment, preset)
+            .expect("validate threshold public key");
+        assert!(validate_committee_public_key(&public_key, [0x55; 32], preset).is_err());
     }
 }
