@@ -194,11 +194,15 @@ const VoteManagementProvider = ({ children }: VoteManagementProviderProps) => {
       if (cancelled) return
 
       if (currentRound) {
-        setCurrentRoundId(currentRound.id)
-        setDisplayedRoundIsFallback(false)
-
         const fetched = await getRoundStateLiteRequestRef.current(currentRound.id)
         if (cancelled) return
+
+        // Fetch the state before storing the round ID. Storing the ID reruns this
+        // effect and cancels the current request. If we store it first, a round
+        // that becomes active after page load can discard its successful state
+        // response and leave the page in the preparing state permanently.
+        setCurrentRoundId(currentRound.id)
+        setDisplayedRoundIsFallback(false)
 
         if (fetched) {
           applyRoundState(fetched)
