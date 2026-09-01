@@ -265,6 +265,7 @@ mod tests {
         failure_settlement_error_is_terminal, failure_stage_code, requested_failure_deadline,
     };
     use crate::contracts::IInterfold;
+    use alloy::sol_types::SolError;
     use e3_events::E3Stage;
 
     #[test]
