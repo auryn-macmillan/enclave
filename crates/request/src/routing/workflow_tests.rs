@@ -64,7 +64,7 @@ fn completed_request_is_an_error() {
     let id = e3id();
     let mut completed = HashSet::new();
     completed.insert(id.clone());
-    let msg = with_e3_id("late", id.clone());
+    let msg = with_e3_id("late", id.clone()).with_source(EventSource::Local);
     assert_eq!(
         RequestRouter::route(&msg, &completed),
         RoutingDecision::AlreadyCompleted(id)
