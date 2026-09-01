@@ -45,9 +45,18 @@ use tokio::time::sleep;
 
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
 
+fn is_configured_e3_program(event_program: Address, configured_program: Address) -> bool {
+    event_program == configured_program
+}
+
 pub async fn register_e3_requested(
     indexer: InterfoldIndexer<impl DataStore, ReadWrite>,
 ) -> Result<InterfoldIndexer<impl DataStore, ReadWrite>> {
+    let configured_program: Address = CONFIG
+        .e3_program_address
+        .parse()
+        .with_context(|| "Invalid configured E3 program address")?;
+
     // E3Requested
     indexer
         .add_event_handler(move |event: E3Requested, ctx| {
@@ -56,10 +65,17 @@ pub async fn register_e3_requested(
             let mut repo = CrispE3Repository::new(store.clone(), &e3_id);
 
             let contract = ctx.contract();
-
-            info!("[e3_id={}] E3Requested: {:?}", e3_id, event);
-
             async move {
+                if !is_configured_e3_program(event.e3.e3Program, configured_program) {
+                    info!(
+                        "[e3_id={}] Ignoring E3Requested for unrelated program {}",
+                        e3_id, event.e3.e3Program
+                    );
+                    return Ok(());
+                }
+
+                info!("[e3_id={}] E3Requested: {:?}", e3_id, event);
+
                 // 0xcd6f4a4f = E3DoesNotExist()
                 let e3 = call_with_retry("get_e3", &["0xcd6f4a4f"], || {
                     let contract = contract.clone();
@@ -1475,7 +1491,7 @@ pub async fn start_indexer(
 
 #[cfg(test)]
 mod custom_params_decoding_tests {
-    use super::deadline_attempt_times;
+    use super::{deadline_attempt_times, is_configured_e3_program};
     use crate::server::models::CensusMode;
     use alloy::dyn_abi::SolType;
     use alloy::primitives::{Address, U256};
@@ -1560,6 +1576,17 @@ mod custom_params_decoding_tests {
         // keeps testing an unknown mode rather than silently becoming a valid one.
         let decoded = <CustomParamsTuple as SolType>::abi_decode(&encode(3)).unwrap();
         assert!(CensusMode::try_from(decoded.5.to::<u64>()).is_err());
+    }
+
+    #[test]
+    fn e3_requests_only_match_the_configured_program() {
+        let configured = Address::repeat_byte(0x11);
+
+        assert!(is_configured_e3_program(configured, configured));
+        assert!(!is_configured_e3_program(
+            Address::repeat_byte(0x22),
+            configured
+        ));
     }
 
     #[test]
