@@ -190,25 +190,23 @@ const VoteManagementProvider = ({ children }: VoteManagementProviderProps) => {
     const poll = async () => {
       if (cancelled) return
 
-      if (typeof document === 'undefined' || !document.hidden) {
-        const currentRound = await getCurrentRoundRef.current()
+      const currentRound = await getCurrentRoundRef.current()
+      if (cancelled) return
+
+      if (currentRound) {
+        setCurrentRoundId(currentRound.id)
+        setDisplayedRoundIsFallback(false)
+
+        const fetched = await getRoundStateLiteRequestRef.current(currentRound.id)
         if (cancelled) return
 
-        if (currentRound) {
-          setCurrentRoundId(currentRound.id)
-          setDisplayedRoundIsFallback(false)
-
-          const fetched = await getRoundStateLiteRequestRef.current(currentRound.id)
-          if (cancelled) return
-
-          if (fetched) {
-            applyRoundState(fetched)
-            setPendingCurrentRoundId(null)
-          } else {
-            setPendingCurrentRoundId(currentRound.id)
-          }
-          return
+        if (fetched) {
+          applyRoundState(fetched)
+          setPendingCurrentRoundId(null)
+        } else {
+          setPendingCurrentRoundId(currentRound.id)
         }
+        return
       }
 
       timer = setTimeout(poll, 10_000)
@@ -230,14 +228,12 @@ const VoteManagementProvider = ({ children }: VoteManagementProviderProps) => {
     const poll = async () => {
       if (cancelled) return
 
-      if (typeof document === 'undefined' || !document.hidden) {
-        const fetched = await getRoundStateLiteRequestRef.current(pendingCurrentRoundId)
-        if (cancelled) return
-        if (fetched) {
-          applyRoundState(fetched)
-          setPendingCurrentRoundId(null)
-          return
-        }
+      const fetched = await getRoundStateLiteRequestRef.current(pendingCurrentRoundId)
+      if (cancelled) return
+      if (fetched) {
+        applyRoundState(fetched)
+        setPendingCurrentRoundId(null)
+        return
       }
 
       timer = setTimeout(poll, 10_000)

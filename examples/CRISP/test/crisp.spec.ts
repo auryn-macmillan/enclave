@@ -340,6 +340,7 @@ test('CRISP smoke test', async ({ context, metamaskPage, extensionId }) => {
   await page.waitForLoadState('load')
   log(`ensuring local anvil network after reload...`)
   await metamask.switchNetwork('localwallet')
+  await page.bringToFront()
   await reconnectWalletIfNeeded(page, metamask)
   await waitForDemoPollReady(page)
   await waitForWalletSession(page)
