@@ -813,6 +813,7 @@ mod tests {
         E3Crisp {
             emojis: ["one".to_string(), "two".to_string()],
             start_time: 0,
+            voting_end_time: 100,
             end_time: 100,
             status: status.to_string(),
             tally: vec![],
@@ -929,12 +930,12 @@ mod tests {
         };
 
         round
-            .initialize_round(params(), "requester".to_string(), 100, 1)
+            .initialize_round(params(), "requester".to_string(), 100, 100, 1)
             .await
             .unwrap();
         round.update_status("Finished").await.unwrap();
         round
-            .initialize_round(params(), "requester".to_string(), 200, 2)
+            .initialize_round(params(), "requester".to_string(), 200, 200, 2)
             .await
             .unwrap();
 
