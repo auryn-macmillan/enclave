@@ -583,6 +583,10 @@ design citation alone does not establish current runtime behavior.
   from its missing EventStore suffix, and the final snapshot drain preserves event order. An older
   contextual write must never replace newer admission state or move a covered-prefix cursor
   backward. — INDEX concern #43
+- Before actor hydration, startup checks each persisted request context against finalized Ethereum
+  lifecycle state. A complete E3 or a non-slashing failed E3 must not resume local protocol work.
+  A failed E3 that requires accusation or slashing work must retain its context. An unavailable or
+  unknown canonical result must fail startup. — INDEX concern #48
 - EventStore replay preserves durable sequence inside each aggregate. It uses HLC order only to
   choose between the next events of different aggregates. A late event can have an older remote HLC
   and must not move ahead of an earlier local sequence from the same aggregate. — INDEX concern #43

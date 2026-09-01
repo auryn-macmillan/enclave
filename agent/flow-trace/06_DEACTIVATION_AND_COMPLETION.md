@@ -259,6 +259,13 @@ On restart:
 │        writes arrive out of HLC or sequence order
 │      → If the checkpoint trails the snapshot cut, only the missing EventStore suffix is applied
 │        to the existing admission state
+│      → For each persisted context, read the E3 stage and failure reason from Ethereum's
+│        finalized block before actor hydration
+│      → Remove a complete E3 or a non-slashing failed E3 from the active context set
+│      → Retain a failed E3 that still requires accusation or slashing work
+│      → Abort startup after a bounded read failure, an unknown on-chain value, or an
+│        unconfigured chain reference
+│      → Persist the lifecycle map before the checkpoint, so a stopped write retries safely
 │   2. Backfill missing versioned recovery records from the EventStore
 │      → Sortition inputs, committee-finalizer inputs/tickets, and slash intents are reconstructed
 │      → Existing versioned records are not replaced
@@ -515,6 +522,11 @@ then records that version. This repairs stale terminal state without deleting th
 repeating the full rebuild on later starts. It also removes failed `NoInputsReceived` and external
 compute-provider contexts, which have no ciphernode accusation work and must not restart DKG or
 proof jobs.
+
+The finalized Ethereum lifecycle is the canonical terminal authority. Startup checks every active
+context against that state before actor hydration. This check repairs a node that did not record the
+terminal EVM event. The check removes only complete E3s and failures that require no slashing work.
+It retains failures that still require accusation or slashing work. A read failure stops startup.
 
 ---
 

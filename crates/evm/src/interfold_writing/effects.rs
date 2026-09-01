@@ -287,8 +287,9 @@ mod tests {
     #[test]
     fn settled_failure_stops_retries() {
         let error = anyhow::anyhow!(
-            "execution reverted: 0x{}",
-            hex::encode(IInterfold::NoPaymentToRefund::SELECTOR)
+            "execution reverted: 0x{}{}",
+            hex::encode(IInterfold::NoPaymentToRefund::SELECTOR),
+            "00".repeat(32)
         );
         assert!(failure_settlement_error_is_terminal(&error));
         assert!(!failure_settlement_error_is_terminal(&anyhow::anyhow!(

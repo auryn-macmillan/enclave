@@ -27,7 +27,7 @@ fn ticket_gas_limit(estimate: u64) -> u64 {
     estimate.saturating_mul(TICKET_GAS_SAFETY_MULTIPLIER)
 }
 
-/// Report whether a contract call contains this exact parameterless custom error.
+/// Report whether a contract call contains this custom-error selector.
 fn reverts_with(error: &anyhow::Error, selector: [u8; 4]) -> bool {
     contains_error_selector(&format!("{error:?}"), selector)
 }
