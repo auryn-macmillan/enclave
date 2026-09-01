@@ -21,11 +21,12 @@ use e3_events::{
     E3Requested, E3id, EffectsEnabled, Event, EventContext, EventPublisher, EventStoreQueryBy,
     EventStoreQueryResponse, EventSubscriber, EventType, EvmEventConfig,
     HistoricalEvmEventsReceived, HistoricalEvmSyncStart, HistoricalNetSyncStart, InterfoldEvent,
-    InterfoldEventData, Seed, SeqAgg, Sequenced, SlashExecuted, StoreKeys, SyncEffect, SyncEnded,
-    TicketGenerated, TypedEvent, Unsequenced,
+    InterfoldEventData, RequestRouterCheckpoint, Seed, SeqAgg, Sequenced, SlashExecuted, StoreKeys,
+    SyncEffect, SyncEnded, TicketGenerated, TypedEvent, Unsequenced,
 };
 #[cfg(test)]
-use e3_events::{EventBusBarrier, EventBusFanout, EventContextAccessors, RequestRouterCheckpoint};
+use e3_events::{EventBusBarrier, EventBusFanout, EventContextAccessors};
+use e3_request::{E3LifecycleRepositoryFactory, E3LifecycleService};
 use e3_utils::actix::channel as actix_toolbox;
 use std::{
     collections::{HashMap, HashSet},
@@ -37,6 +38,8 @@ use tracing::info;
 
 #[cfg(test)]
 const REPLAY_PROGRESS_INTERVAL: usize = 10_000;
+
+const REQUEST_ROUTER_PROJECTION_VERSION: u8 = 1;
 
 /// Advance the request-router checkpoint when it trails aggregate snapshots.
 ///
@@ -62,6 +65,70 @@ pub async fn reconcile_request_router_checkpoint(
         .read()
         .await?
         .context("request-router checkpoint is missing after storage preflight")?;
+    let projection_version_store = repositories.request_router_projection_version();
+    let projection_version = projection_version_store.read().await?.unwrap_or_default();
+
+    if projection_version < REQUEST_ROUTER_PROJECTION_VERSION {
+        info!(
+            previous_version = projection_version,
+            current_version = REQUEST_ROUTER_PROJECTION_VERSION,
+            "Rebuilding request-router and lifecycle recovery projections"
+        );
+        let start_cursors = target_cursors
+            .keys()
+            .copied()
+            .map(|aggregate_id| (aggregate_id, 0))
+            .collect();
+        let mut rebuilt = RequestRouterCheckpoint {
+            contexts: Vec::new(),
+            completed: HashSet::new(),
+            replay_cursors: start_cursors,
+        };
+        let mut lifecycle = E3LifecycleService::new();
+        let spool = ReplaySpool::load_between(
+            eventstore,
+            rebuilt.replay_cursors.clone(),
+            target_cursors.clone(),
+        )
+        .await?;
+        let projected = spool.project(|event| {
+            e3_request::project_request_router_event(&mut rebuilt, event);
+            lifecycle.observe(event.get_data());
+            Ok(())
+        })?;
+
+        for (aggregate_id, target) in &target_cursors {
+            let cursor = rebuilt
+                .replay_cursors
+                .get(aggregate_id)
+                .copied()
+                .unwrap_or_default();
+            ensure!(
+                cursor >= *target,
+                "request-router projection rebuild stopped at sequence {} for aggregate {}, before required sequence {}",
+                cursor,
+                aggregate_id,
+                target
+            );
+        }
+
+        checkpoint_store.write_sync(&rebuilt).await?;
+        repositories
+            .e3_lifecycle()
+            .write_sync(&lifecycle.snapshot())
+            .await?;
+        projection_version_store
+            .write_sync(&REQUEST_ROUTER_PROJECTION_VERSION)
+            .await?;
+        info!(
+            projected_events = projected,
+            active_contexts = rebuilt.contexts.len(),
+            completed_contexts = rebuilt.completed.len(),
+            "Request-router and lifecycle recovery projections rebuilt"
+        );
+        checkpoint = rebuilt;
+    }
+
     let needs_advance = target_cursors.iter().any(|(aggregate_id, target)| {
         checkpoint
             .replay_cursors

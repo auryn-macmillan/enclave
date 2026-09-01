@@ -15,12 +15,13 @@ use e3_data::Repositories;
 use e3_events::{
     hlc::{Hlc, HlcTimestamp},
     AccusationOutcome, AccusationQuorumReached, AggregateId, CommitteeMemberExcluded,
-    CommitteeRequested, E3Requested, E3Stage, E3StageChanged, E3id, EffectsEnabled, Event,
-    EventContextAccessors, EventPublisher, EventSubscriber, EventType, EvmEventConfig,
-    EvmEventConfigChain, GetEvents, HistoricalEvmEventsReceived, HistoricalEvmSyncStart,
-    HistoricalNetSyncEventsReceived, HistoricalNetSyncStart, InterfoldEvent, InterfoldEventData,
-    NetReady, ProofType, RequestRouterCheckpoint, Seed, SlashExecuted, StoreKeys, SyncEffect,
-    SyncEnded, TakeEvents, TicketGenerated, TicketId, Unsequenced,
+    CommitteeRequested, E3Failed, E3Requested, E3Stage, E3StageChanged, E3id, EffectsEnabled,
+    Event, EventContextAccessors, EventPublisher, EventSubscriber, EventType, EvmEventConfig,
+    EvmEventConfigChain, FailureReason, GetEvents, HistoricalEvmEventsReceived,
+    HistoricalEvmSyncStart, HistoricalNetSyncEventsReceived, HistoricalNetSyncStart,
+    InterfoldEvent, InterfoldEventData, NetReady, ProofType, RequestRouterCheckpoint, Seed,
+    SlashExecuted, StoreKeys, SyncEffect, SyncEnded, TakeEvents, TicketGenerated, TicketId,
+    Unsequenced,
 };
 use e3_utils::MAILBOX_LIMIT_LARGE;
 use std::collections::BTreeMap;

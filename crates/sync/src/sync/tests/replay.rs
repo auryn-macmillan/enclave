@@ -49,6 +49,10 @@ async fn router_checkpoint_advances_without_losing_state() -> anyhow::Result<()>
             ..Default::default()
         })
         .await?;
+    repositories
+        .request_router_projection_version()
+        .write_sync(&REQUEST_ROUTER_PROJECTION_VERSION)
+        .await?;
 
     reconcile_request_router_checkpoint(
         &repositories,
@@ -64,6 +68,88 @@ async fn router_checkpoint_advances_without_losing_state() -> anyhow::Result<()>
         .expect("the advanced checkpoint should exist");
     assert_eq!(checkpoint.replay_cursors.get(&aggregate_id), Some(&2));
     assert!(checkpoint.contexts.contains(&active_e3));
+    Ok(())
+}
+
+#[actix::test]
+async fn router_projection_rebuild_prunes_terminal_non_slashing_failure() -> anyhow::Result<()> {
+    let aggregate_id = AggregateId::new(1);
+    let system =
+        EventSystem::new()
+            .with_fresh_bus()
+            .with_aggregate_config(e3_events::AggregateConfig::new(
+                std::collections::HashMap::from([(aggregate_id, std::time::Duration::ZERO)]),
+            ));
+    let bus = system.handle()?.enable("test-router-projection-rebuild");
+    let e3_id = E3id::new("7", 1);
+
+    bus.naked_dispatch_async(
+        InterfoldEvent::<Unsequenced>::test_event("admitted request")
+            .id(1)
+            .e3_id(e3_id.clone())
+            .aggregate_id(1)
+            .build(),
+    )
+    .await?;
+    bus.naked_dispatch_async(
+        InterfoldEvent::<Unsequenced>::test_event("no inputs")
+            .id(2)
+            .aggregate_id(1)
+            .data(E3Failed {
+                e3_id: e3_id.clone(),
+                failed_at_stage: E3Stage::KeyPublished,
+                reason: FailureReason::NoInputsReceived,
+            })
+            .build(),
+    )
+    .await?;
+    bus.flush_event_pipeline().await?;
+
+    let store = system.store()?;
+    let repositories = Repositories::from(&store);
+    repositories
+        .aggregate_seq(aggregate_id)
+        .write_sync(&2)
+        .await?;
+    repositories
+        .request_router_checkpoint()
+        .write_sync(&RequestRouterCheckpoint {
+            contexts: vec![e3_id.clone()],
+            replay_cursors: std::collections::HashMap::from([(aggregate_id, 2)]),
+            ..Default::default()
+        })
+        .await?;
+
+    reconcile_request_router_checkpoint(
+        &repositories,
+        [aggregate_id],
+        &system.eventstore_reader()?.seq(),
+    )
+    .await?;
+
+    let checkpoint = repositories
+        .request_router_checkpoint()
+        .read()
+        .await?
+        .expect("the rebuilt checkpoint should exist");
+    assert!(!checkpoint.contexts.contains(&e3_id));
+    assert!(checkpoint.completed.contains(&e3_id));
+    assert_eq!(
+        repositories
+            .e3_lifecycle()
+            .read()
+            .await?
+            .expect("the rebuilt lifecycle should exist")
+            .get(&e3_id),
+        Some(&E3Stage::Failed)
+    );
+    assert_eq!(
+        repositories
+            .request_router_projection_version()
+            .read()
+            .await?,
+        Some(REQUEST_ROUTER_PROJECTION_VERSION)
+    );
     Ok(())
 }
 

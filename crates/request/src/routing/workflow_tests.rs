@@ -325,6 +325,25 @@ fn requester_cancellation_publishes_complete() {
 }
 
 #[test]
+fn requester_and_provider_failures_publish_complete() {
+    for reason in [
+        FailureReason::NoInputsReceived,
+        FailureReason::ComputeProviderExpired,
+        FailureReason::ComputeProviderFailed,
+    ] {
+        let id = e3id();
+        let msg = e3_failed(id.clone(), reason);
+        assert_eq!(
+            RequestRouter::route(&msg, &HashSet::new()),
+            RoutingDecision::Process {
+                e3_id: id,
+                post_forward: PostForward::PublishComplete,
+            }
+        );
+    }
+}
+
+#[test]
 fn e3_failed_invalid_shares_does_not_complete() {
     // Slashable failures must NOT trigger E3RequestComplete — the accusation/slashing
     // lifecycle must be allowed to finish first.

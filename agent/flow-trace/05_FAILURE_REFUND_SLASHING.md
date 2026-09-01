@@ -1298,16 +1298,18 @@ When CommitteeMemberExpelled event arrives from EVM:
 │   └─ Stores the expelled node as `alloy::Address` and removes/blocks keyshares by parsed
 │       address, so differently cased self-reported node strings cannot bypass expulsion
 │
-└─ When E3Failed(timeout) / E3StageChanged(Complete) arrives:
+└─ When a terminal non-slashing E3Failed / E3StageChanged(Complete) arrives:
     │
     ├─ E3Router (central cleanup orchestrator):
-    │   ├─ E3Failed with a timeout reason (CommitteeFormationTimeout, DKGTimeout,
-    │   │   ComputeTimeout, DecryptionTimeout) → publishes E3RequestComplete
+    │   ├─ E3Failed with a timeout, requester, or external-provider reason
+    │   │   (CommitteeFormationTimeout, DKGTimeout, ComputeTimeout,
+    │   │   DecryptionTimeout, NoInputsReceived, ComputeProviderExpired,
+    │   │   ComputeProviderFailed, RequesterCancelled) → publishes E3RequestComplete
     │   │   → Single cleanup signal for all per-E3 actors
     │   │   NOTE: E3Failed with a misbehaviour reason (DKGInvalidShares, etc.) does
     │   │   NOT trigger E3RequestComplete — the accusation/slashing lifecycle must
     │   │   complete first.
-    │   └─ E3StageChanged(Failed) and E3Failed(timeout) arriving after context teardown
+    │   └─ E3StageChanged(Failed) and the same non-slashing E3Failed arriving after teardown
     │       are silently ignored (expected on-chain lag)
     │
     ├─ CommitteeFinalizer (direct handler — semantic work):

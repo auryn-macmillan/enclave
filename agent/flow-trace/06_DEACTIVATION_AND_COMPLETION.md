@@ -251,6 +251,10 @@ On restart:
 ├─ Builder recovery before actors start:
 │   1. Check the storage schema and repair the request-router admission projection
 │      → The checkpoint is stored at the canonical root key, not below a router-local namespace
+│      → When the projection policy changes, rebuild its active/completed sets and the lifecycle
+│        map once from the durable EventStore before any per-E3 actor can hydrate
+│      → A terminal failure with no ciphernode accusation flow is projected directly as complete;
+│        recovery does not depend on an older binary having stored a derived E3RequestComplete
 │      → Each aggregate cursor keeps the highest sequence observed, even when contextual snapshot
 │        writes arrive out of HLC or sequence order
 │      → If the checkpoint trails the snapshot cut, only the missing EventStore suffix is applied
@@ -504,6 +508,13 @@ into hydrated protocol actors. A checkpoint that already covers the snapshot vec
 backward. Replay preserves durable sequence inside each aggregate and uses HLC order between
 aggregate heads. The final snapshot drain writes open cross-aggregate batches in their original
 event order, so an older batch cannot overwrite the newest checkpoint during shutdown.
+
+The projection policy has a separate version marker. A node that first starts with a newer policy
+rebuilds the checkpoint and lifecycle map from the bounded EventStore prefix before actor hydration,
+then records that version. This repairs stale terminal state without deleting the event log or
+repeating the full rebuild on later starts. It also removes failed `NoInputsReceived` and external
+compute-provider contexts, which have no ciphernode accusation work and must not restart DKG or
+proof jobs.
 
 ---
 
