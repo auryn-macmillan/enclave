@@ -678,16 +678,16 @@ mod tests {
 
         persistable.try_mutate(&ec, |_| Ok("Liz".to_string()))?;
         info!("Mutation complete");
-        // SnapshotBuffer is not cleared unless new events are published
+        // Flush through sequence 2 before the next event opens sequence 3. Timelock behavior has
+        // separate mock-clock tests; this integration test must not depend on wall-clock timing.
+        buffer.send(FlushPendingSnapshots).await??;
 
         // Get a timestamp for the events below
         let ts = handle.ts()?;
 
         // Push a few other events seq 3
-        // This sends the previous batch for seq2 to the timelock queue
         handle.publish_without_context(TestEvent::new("yellow", 1))?;
         handle.flush_event_pipeline().await?;
-        buffer.send(FlushPendingSnapshots).await??;
 
         // Check now
         info!("Reading from /foo/name and expecting it to be correct.");
