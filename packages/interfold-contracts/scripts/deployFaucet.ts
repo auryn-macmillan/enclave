@@ -8,7 +8,7 @@ import hre from "hardhat";
 import {
   Faucet__factory as FaucetFactory,
   InterfoldToken__factory as InterfoldTokenFactory,
-  MockUSDC__factory as MockUSDCFactory,
+  MockFeeOnTransferToken__factory as MockFeeOnTransferTokenFactory,
 } from "../types";
 import {
   getDeploymentChain,
@@ -49,13 +49,23 @@ const main = async () => {
   const feeTokenAddress = readDeploymentArgs("MockUSDC", chain)?.address;
   if (!foldAddress || !feeTokenAddress) {
     throw new Error(
-      "InterfoldToken (FOLD) and/or MockUSDC fee token not found in deployed_contracts.json. " +
+      "InterfoldToken (FOLD) and/or rehearsal fee token not found in deployed_contracts.json. " +
         "Run the full deploy first.",
     );
   }
 
   const fold = InterfoldTokenFactory.connect(foldAddress, signer);
-  const feeToken = MockUSDCFactory.connect(feeTokenAddress, signer);
+  const feeToken = MockFeeOnTransferTokenFactory.connect(
+    feeTokenAddress,
+    signer,
+  );
+  const feeBps = await feeToken.feeBps();
+  if (feeBps !== 0n) {
+    throw new Error(
+      `The rehearsal fee token charges ${feeBps} basis points. ` +
+        "Set feeBps to zero before funding the faucet.",
+    );
+  }
 
   // Phase 0 == Virtual. mint() reverts (MintingClosed) once CCA_START passes.
   const phase = await fold.phase();

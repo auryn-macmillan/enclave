@@ -57,7 +57,7 @@ mod erc20 {
 use erc20::IERC20;
 use faucet_contract::FaucetContract;
 
-/// Calls `faucet()` on the configured Faucet contract, sending FOLD + the configured test token to
+/// Calls `faucet()` on the configured Faucet contract, sending FOLD and the configured fee token to
 /// the operator's signing address. Testnet only.
 pub async fn execute(out: Console, config: &AppConfig, selection: Option<&str>) -> Result<()> {
     let chain = select_chain(config, selection)?;

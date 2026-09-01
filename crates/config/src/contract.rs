@@ -50,7 +50,7 @@ pub struct ContractAddresses {
     pub fee_token: Option<Contract>,
     pub slashing_manager: Option<Contract>,
     pub dkg_fold_attestation_verifier: Option<Contract>,
-    /// Testnet faucet (sepolia). Distributes FOLD + the configured test token to callers.
+    /// Testnet faucet (sepolia). Distributes FOLD and the configured fee token to callers.
     pub faucet: Option<Contract>,
 }
 

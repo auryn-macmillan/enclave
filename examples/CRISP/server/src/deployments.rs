@@ -8,7 +8,10 @@
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+const EMBEDDED_DEPLOYMENTS_JSON: &str =
+    include_str!("../../packages/crisp-contracts/deployed_contracts.json");
 
 #[derive(Debug, Deserialize)]
 struct DeploymentEntry {
@@ -43,15 +46,18 @@ fn deployments_json_path() -> Result<PathBuf> {
 
 fn read_deployments() -> Result<DeployedContractsFile> {
     let path = deployments_json_path()?;
-    if !path.exists() {
-        return Ok(DeployedContractsFile {
-            localhost: None,
-            sepolia: None,
-            mainnet: None,
-        });
+    read_deployments_from_path(&path)
+}
+
+fn read_deployments_from_path(path: &Path) -> Result<DeployedContractsFile> {
+    if path.exists() {
+        let raw =
+            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+        return serde_json::from_str(&raw).with_context(|| format!("parse {}", path.display()));
     }
-    let raw = std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-    serde_json::from_str(&raw).with_context(|| format!("parse {}", path.display()))
+
+    serde_json::from_str(EMBEDDED_DEPLOYMENTS_JSON)
+        .context("parse embedded CRISP deployment addresses")
 }
 
 fn chain_deployments(file: &DeployedContractsFile, chain_id: u64) -> Option<&ChainDeployments> {
@@ -96,4 +102,19 @@ pub fn localhost_crisp_program() -> Result<Option<String>> {
         .localhost
         .and_then(|c| c.crisp_program)
         .map(|e| e.address))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedded_deployments_cover_a_runtime_without_the_source_tree() {
+        let file = read_deployments_from_path(Path::new("missing-deployed-contracts.json"))
+            .expect("embedded deployment data must parse");
+
+        assert!(chain_deployments(&file, 11_155_111)
+            .and_then(|chain| chain.self_registry.as_ref())
+            .is_some());
+    }
 }

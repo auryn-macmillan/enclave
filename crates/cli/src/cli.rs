@@ -357,7 +357,7 @@ pub enum Commands {
         command: ConfigCommands,
     },
 
-    /// Request testnet tokens (FOLD + ticket collateral) from the configured faucet
+    /// Request testnet tokens (FOLD + fee token) from the configured faucet
     Faucet {
         #[command(flatten)]
         chain: ChainArgs,

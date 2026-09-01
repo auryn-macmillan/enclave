@@ -20,9 +20,9 @@ contract Faucet {
     }
 
     function faucet() external {
-        // Top up each token independently: a tester who spent ticket
-        // collateral but still holds FOLD must still be able to replenish the
-        // ticket collateral (and vice versa).
+        // Top up each token independently: a tester who spent fee tokens but
+        // still holds FOLD must still be able to replenish the fee token, and
+        // vice versa.
         bool needsFold = fold.balanceOf(msg.sender) < AMOUNT_FOLD;
         bool needsFeeToken = feeToken.balanceOf(msg.sender) < AMOUNT_FEE_TOKEN;
 

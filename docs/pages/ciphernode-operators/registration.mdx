@@ -30,12 +30,12 @@ single-wallet setup. Ensure the selected bond-owner wallet has:
 | **sUSDS** | Mainnet: `1,000 sUSDS` shares per ticket | Ticket balance for sortition |
 | **ETH**   | Sufficient for gas                       | Transaction fees             |
 
-> **Testnet tokens:** on Sepolia you can self-serve test FOLD and ticket collateral from the faucet
-> with `interfold faucet` (requires the `faucet` contract address in your config — see
+> **Testnet tokens:** on Sepolia you can self-serve test FOLD and fee tokens from the faucet with
+> `interfold faucet` (requires the `faucet` contract address in your config — see
 > [Running a Node → Contract Addresses](/ciphernode-operators/running#contract-addresses)). Each
-> call tops up FOLD and the ticket-collateral token independently, only when your balance for that
-> token is below the faucet threshold. One call dispenses enough FOLD and ticket collateral to meet
-> the default Sepolia ciphernode requirements. If the faucet runs dry, reach out in the
+> call tops up FOLD and the fee token independently when your balance is below the faucet threshold.
+> The faucet does not dispense ticket collateral. To register a Sepolia ciphernode, get the separate
+> test ticket-collateral token from the Interfold team. If the faucet runs dry, reach out in the
 > [Interfold technical chat](https://t.me/interfoldhq_technical).
 
 ## Registration Steps

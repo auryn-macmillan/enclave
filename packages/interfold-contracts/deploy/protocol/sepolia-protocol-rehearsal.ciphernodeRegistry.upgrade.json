@@ -7,5 +7,5 @@
   "sortitionLibrary": "0xD2803B55649A7131e3bA4b7BD8735A4d0b55bf67",
   "operator": "0x8837e47c4Bb520ADE83AAB761C3B60679443af1B",
   "protocolOwner": "0x8837e47c4Bb520ADE83AAB761C3B60679443af1B",
-  "safeTransactions": "/Users/hmza/Code/work/interfold/packages/interfold-contracts/deploy/protocol/sepolia-protocol-rehearsal.ciphernodeRegistry.upgrade.safe.json"
+  "safeTransactions": "packages/interfold-contracts/deploy/protocol/sepolia-protocol-rehearsal.ciphernodeRegistry.upgrade.safe.json"
 }

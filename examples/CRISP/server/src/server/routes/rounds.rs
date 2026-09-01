@@ -294,12 +294,15 @@ async fn request_new_round(data: web::Json<RoundRequest>) -> impl Responder {
         });
     }
 
-    let self_registry = deployments::self_registry_for_chain_id(CONFIG.chain_id)
-        .map_err(|e| {
+    let self_registry = match deployments::self_registry_for_chain_id(CONFIG.chain_id) {
+        Ok(address) => address,
+        Err(e) => {
             error!("Failed to read CRISP deployment addresses: {e}");
-        })
-        .ok()
-        .flatten();
+            return HttpResponse::InternalServerError().json(JsonResponse {
+                response: "Failed to read CRISP deployment configuration".to_string(),
+            });
+        }
+    };
 
     let census_mode = match resolve_request_census_mode(
         &data.token_address,
