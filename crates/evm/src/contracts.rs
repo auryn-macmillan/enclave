@@ -67,6 +67,8 @@ sol! {
 
         function getE3Stage(uint256 e3Id) external view returns (uint8 stage);
 
+        function getFailureReason(uint256 e3Id) external view returns (uint8 reason);
+
         function getDeadlines(uint256 e3Id) external view returns (E3Deadlines memory deadlines);
 
         function getE3TimeoutConfig(

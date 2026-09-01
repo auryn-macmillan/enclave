@@ -6,7 +6,8 @@
 
 use crate::{
     recovery::{
-        backfill_restart_state, reconcile_committee_snapshots, recovered_ciphernode_selections,
+        backfill_restart_state, reconcile_committee_snapshots,
+        reconcile_finalized_request_contexts, recovered_ciphernode_selections,
     },
     CiphernodeHandle, EventSystem, EvmSystemChainBuilder, NetInterfaceKind, ProviderCache,
     WriteEnabled,
@@ -591,6 +592,8 @@ impl CiphernodeBuilder {
             &seq_eventstore,
         )
         .await?;
+        reconcile_finalized_request_contexts(&repositories, &self.chains, &mut provider_cache)
+            .await?;
         let committee_finalizer_recovery = backfill_restart_state(
             &repositories,
             &seq_eventstore,

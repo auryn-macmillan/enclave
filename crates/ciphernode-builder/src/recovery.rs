@@ -6,22 +6,128 @@
 
 //! Restart-state migration and reconciliation.
 
-use anyhow::{ensure, Result};
+use crate::ProviderCache;
+use anyhow::{ensure, Context, Result};
 use e3_aggregator::{
     CommitteeFinalizerRecoveryState, CommitteeFinalizerRepositoryFactory,
     RecoveredCommitteeRequest as FinalizerRecoveredCommitteeRequest,
     COMMITTEE_FINALIZER_RECOVERY_SCHEMA_VERSION,
 };
-use e3_events::{AggregateId, CiphernodeSelected, Committee, E3Stage, E3id};
-use e3_evm::{SlashingWriterRepositoryFactory, SLASHING_WRITER_RECOVERY_SCHEMA_VERSION};
-use e3_request::E3LifecycleRepositoryFactory;
+use e3_config::chain_config::ChainConfig;
+use e3_events::{
+    AggregateId, CiphernodeSelected, Committee, E3Stage, E3id, RequestRouterCheckpoint,
+};
+use e3_evm::{
+    fetch_finalized_e3_lifecycle, CanonicalE3Lifecycle, SlashingWriterRepositoryFactory,
+    SLASHING_WRITER_RECOVERY_SCHEMA_VERSION,
+};
+use e3_request::{E3LifecycleRepositoryFactory, RouterRepositoryFactory};
 use e3_sortition::{
     CiphernodeSelectorFactory, CiphernodeSelectorState, FinalizedCommitteesRepositoryFactory,
     SortitionRecoveryRepositoryFactory, SORTITION_RECOVERY_SCHEMA_VERSION,
 };
 use e3_sync::{project_restart_state_backfill, SyncRepositoryFactory};
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
+use tokio::time::timeout;
 use tracing::{info, warn};
+
+const FINALIZED_LIFECYCLE_READ_TIMEOUT: Duration = Duration::from_secs(15);
+
+fn apply_canonical_terminal_state(
+    checkpoint: &mut RequestRouterCheckpoint,
+    lifecycle: &mut HashMap<E3id, E3Stage>,
+    e3_id: &E3id,
+    canonical: &CanonicalE3Lifecycle,
+) -> bool {
+    if !matches!(canonical.stage, E3Stage::Complete | E3Stage::Failed) {
+        return false;
+    }
+
+    let mut changed = lifecycle.get(e3_id) != Some(&canonical.stage);
+    lifecycle.insert(e3_id.clone(), canonical.stage.clone());
+
+    let ends_without_context = canonical.stage == E3Stage::Complete
+        || canonical
+            .failure_reason
+            .as_ref()
+            .is_some_and(|reason| reason.ends_without_slashing());
+    if ends_without_context && checkpoint.contexts.contains(e3_id) {
+        checkpoint.contexts.retain(|context| context != e3_id);
+        checkpoint.completed.insert(e3_id.clone());
+        changed = true;
+    }
+    changed
+}
+
+/// Reconcile persisted request contexts against finalized Ethereum state before actor hydration.
+pub(crate) async fn reconcile_finalized_request_contexts(
+    repositories: &e3_data::Repositories,
+    chains: &[ChainConfig],
+    provider_cache: &mut ProviderCache,
+) -> Result<()> {
+    let checkpoint_store = repositories.request_router_checkpoint();
+    let Some(mut checkpoint) = checkpoint_store.read().await? else {
+        return Ok(());
+    };
+    let persisted_contexts = checkpoint.contexts.clone();
+    if persisted_contexts.is_empty() {
+        return Ok(());
+    }
+
+    let lifecycle_store = repositories.e3_lifecycle();
+    let mut lifecycle = lifecycle_store.read().await?.unwrap_or_default();
+    let mut checked = HashSet::new();
+    let mut changed = false;
+
+    for chain in chains.iter().filter(|chain| chain.enabled.unwrap_or(true)) {
+        let provider = provider_cache.ensure_read_provider(chain).await?;
+        let chain_id = provider.chain_id();
+        let interfold_address = chain.contracts.interfold.address()?;
+        for e3_id in persisted_contexts
+            .iter()
+            .filter(|e3_id| e3_id.chain_id() == chain_id)
+        {
+            let canonical = timeout(
+                FINALIZED_LIFECYCLE_READ_TIMEOUT,
+                fetch_finalized_e3_lifecycle(&provider, interfold_address, e3_id),
+            )
+            .await
+            .with_context(|| {
+                format!("timed out reading finalized lifecycle state for E3 {e3_id}")
+            })??;
+            checked.insert(e3_id.clone());
+            changed |=
+                apply_canonical_terminal_state(&mut checkpoint, &mut lifecycle, e3_id, &canonical);
+        }
+    }
+
+    let unchecked = persisted_contexts
+        .iter()
+        .filter(|e3_id| !checked.contains(*e3_id))
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    ensure!(
+        unchecked.is_empty(),
+        "persisted request contexts reference disabled or unconfigured chains: {}",
+        unchecked.join(", ")
+    );
+
+    if changed {
+        // Write lifecycle first. If the process stops between these writes, the still-present
+        // router context causes the same finalized check to run again on the next start.
+        lifecycle_store.write_sync(&lifecycle).await?;
+        checkpoint_store.write_sync(&checkpoint).await?;
+        info!(
+            checked_contexts = checked.len(),
+            active_contexts = checkpoint.contexts.len(),
+            completed_contexts = checkpoint.completed.len(),
+            "Reconciled request contexts with finalized on-chain lifecycle state"
+        );
+    }
+
+    Ok(())
+}
 
 fn backfill_missing_seeds(
     current: &mut HashMap<E3id, e3_events::Seed>,
@@ -399,7 +505,7 @@ fn committees_match(left: &Committee, right: &Committee) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use e3_events::Seed;
+    use e3_events::{FailureReason, Seed};
 
     #[test]
     fn existing_seed_is_authoritative() {
@@ -418,5 +524,55 @@ mod tests {
         let upper = Committee::new(vec!["0xABCDEFABCDEFABCDEFABCDEFABCDEFABCDEFABCD".to_owned()]);
 
         assert!(committees_match(&lower, &upper));
+    }
+
+    #[test]
+    fn canonical_terminal_state_prunes_only_contexts_without_slashing() {
+        let no_inputs = E3id::new("1", 1);
+        let invalid_shares = E3id::new("2", 1);
+        let complete = E3id::new("3", 1);
+        let mut checkpoint = RequestRouterCheckpoint {
+            contexts: vec![no_inputs.clone(), invalid_shares.clone(), complete.clone()],
+            ..Default::default()
+        };
+        let mut lifecycle = HashMap::from([
+            (no_inputs.clone(), E3Stage::KeyPublished),
+            (invalid_shares.clone(), E3Stage::CommitteeFinalized),
+            (complete.clone(), E3Stage::CiphertextReady),
+        ]);
+
+        apply_canonical_terminal_state(
+            &mut checkpoint,
+            &mut lifecycle,
+            &no_inputs,
+            &CanonicalE3Lifecycle {
+                stage: E3Stage::Failed,
+                failure_reason: Some(FailureReason::NoInputsReceived),
+            },
+        );
+        apply_canonical_terminal_state(
+            &mut checkpoint,
+            &mut lifecycle,
+            &invalid_shares,
+            &CanonicalE3Lifecycle {
+                stage: E3Stage::Failed,
+                failure_reason: Some(FailureReason::DKGInvalidShares),
+            },
+        );
+        apply_canonical_terminal_state(
+            &mut checkpoint,
+            &mut lifecycle,
+            &complete,
+            &CanonicalE3Lifecycle {
+                stage: E3Stage::Complete,
+                failure_reason: None,
+            },
+        );
+
+        assert_eq!(checkpoint.contexts, vec![invalid_shares.clone()]);
+        assert!(checkpoint.completed.contains(&no_inputs));
+        assert!(checkpoint.completed.contains(&complete));
+        assert!(!checkpoint.completed.contains(&invalid_shares));
+        assert_eq!(lifecycle.get(&invalid_shares), Some(&E3Stage::Failed));
     }
 }
