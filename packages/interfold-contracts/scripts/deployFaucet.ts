@@ -8,7 +8,7 @@ import hre from "hardhat";
 import {
   Faucet__factory as FaucetFactory,
   InterfoldToken__factory as InterfoldTokenFactory,
-  MockUSDC__factory as MockUSDCFactory,
+  MockFeeOnTransferToken__factory as MockFeeOnTransferTokenFactory,
 } from "../types";
 import {
   getDeploymentChain,
@@ -22,7 +22,7 @@ import {
  * Force-deploys a fresh Faucet (the deployAndSave guard is idempotent on the
  * constructor args, so it would otherwise return the existing address),
  * overwrites the `Faucet` entry in deployed_contracts.json, whitelists it in
- * FOLD and funds it with FOLD + mock USDC.
+ * FOLD and funds it with FOLD + the configured Sepolia fee token.
  *
  * FOLD funding uses `mint()`, which is only valid while FOLD is in the Virtual
  * phase (before CCA_START). The deployer holds no FOLD of its own, so there is
@@ -49,13 +49,23 @@ const main = async () => {
   const feeTokenAddress = readDeploymentArgs("MockUSDC", chain)?.address;
   if (!foldAddress || !feeTokenAddress) {
     throw new Error(
-      "InterfoldToken (FOLD) and/or MockUSDC not found in deployed_contracts.json. " +
+      "InterfoldToken (FOLD) and/or rehearsal fee token not found in deployed_contracts.json. " +
         "Run the full deploy first.",
     );
   }
 
   const fold = InterfoldTokenFactory.connect(foldAddress, signer);
-  const feeToken = MockUSDCFactory.connect(feeTokenAddress, signer);
+  const feeToken = MockFeeOnTransferTokenFactory.connect(
+    feeTokenAddress,
+    signer,
+  );
+  const feeBps = await feeToken.feeBps();
+  if (feeBps !== 0n) {
+    throw new Error(
+      `The rehearsal fee token charges ${feeBps} basis points. ` +
+        "Set feeBps to zero before funding the faucet.",
+    );
+  }
 
   // Phase 0 == Virtual. mint() reverts (MintingClosed) once CCA_START passes.
   const phase = await fold.phase();
@@ -79,7 +89,8 @@ const main = async () => {
   // Derive supply from the contract's per-claim amounts so it covers the
   // target number of mints regardless of how the amounts are configured.
   const foldSupply = (await faucet.AMOUNT_FOLD()) * FAUCET_TARGET_MINTS;
-  const usdcSupply = (await faucet.AMOUNT_FEE_TOKEN()) * FAUCET_TARGET_MINTS;
+  const feeTokenSupply =
+    (await faucet.AMOUNT_FEE_TOKEN()) * FAUCET_TARGET_MINTS;
 
   storeDeploymentArgs(
     {
@@ -103,8 +114,9 @@ const main = async () => {
     )
   ).wait();
 
-  console.log("Minting mock USDC to Faucet...");
-  await (await feeToken.mint(faucetAddress, usdcSupply)).wait();
+  console.log("Minting fee token to Faucet...");
+  await (await feeToken.mint(faucetAddress, feeTokenSupply)).wait();
+  const fundedFeeToken = await feeToken.balanceOf(faucetAddress);
 
   console.log(`
     ============================================
@@ -113,7 +125,7 @@ const main = async () => {
     Faucet:  ${faucetAddress}
     Block:   ${blockNumber}
     FOLD:    ${ethers.formatEther(foldSupply)}
-    USDC:    ${ethers.formatUnits(usdcSupply, 6)}
+    Fee:     ${ethers.formatEther(fundedFeeToken)}
     ============================================
   `);
 };

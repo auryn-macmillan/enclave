@@ -25,6 +25,28 @@ chains:
         address: "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
         deploy_block: 6
 
+  - name: "sepolia"
+    enabled: false
+    rpc_url: "ws://localhost:8545"
+    contracts:
+      interfold:
+        address: "0xE755Ef6c18897C76F3E71C9eA92CA67C5e73e6E3"
+        deploy_block: 11594970
+      ciphernode_registry:
+        address: "0x37A409FfB1858a91AE27f4A609970EEA10818dA6"
+        deploy_block: 11594970
+      bonding_registry:
+        address: "0xbfBCF1F9aBc929992008d787420e58198e17B73A"
+        deploy_block: 11594970
+      slashing_manager:
+        address: "0x05f005e2F8121b67e646A8ad7e8C76141A55380B"
+        deploy_block: 11594970
+      fee_token:
+        address: "0x4c3CBA2C57A8F56e765738D55Bb1450eA8d1560e"
+        deploy_block: 11594970
+      faucet:
+        address: "0x6ecAA2dcCd6837A85360131D31564Aa2F9Be00F3"
+        deploy_block: 11597330
 program:
   dev: true
   # risc0:

@@ -17,6 +17,7 @@ import {
   governanceSafeBuilderPath,
   protocolDir,
   readJson,
+  repoRelativePath,
   repoRoot,
   resolvePath,
   writeJson,
@@ -719,8 +720,8 @@ export async function prepareSecureCrispUpgrade(): Promise<void> {
     availBridge: avail.bridge,
     vectorx: avail.vectorx,
     bfvVerifierRoutes: verifierDeployment.bfvVerifierRoutes,
-    safeTransactions: rawBatchFile,
-    governanceSafeBuilder: safeBuilderFile,
+    safeTransactions: repoRelativePath(rawBatchFile),
+    governanceSafeBuilder: repoRelativePath(safeBuilderFile),
   };
   if (hasFlag("propose-safe")) {
     plan.safeProposal = config.governance

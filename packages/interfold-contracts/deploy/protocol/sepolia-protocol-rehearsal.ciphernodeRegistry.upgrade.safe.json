@@ -1,0 +1,20 @@
+{
+  "version": "1.0",
+  "chainId": "11155111",
+  "createdAt": 1788081434066,
+  "meta": {
+    "name": "sepolia-protocol-rehearsal ciphernodeRegistry upgrade",
+    "description": "Upgrade ciphernodeRegistry implementation through its Safe-owned ProxyAdmin.",
+    "executor": "0x8837e47c4Bb520ADE83AAB761C3B60679443af1B"
+  },
+  "transactions": [
+    {
+      "to": "0xAB4a119B34233B8d1169DB17D4f1d674532A9dab",
+      "value": "0",
+      "data": "0x9623609d00000000000000000000000037a409ffb1858a91ae27f4a609970eea10818da6000000000000000000000000f44e0ecb453e1a505520412d71debd730a4da7c300000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000000",
+      "operation": 0,
+      "contractMethod": null,
+      "contractInputsValues": null
+    }
+  ]
+}

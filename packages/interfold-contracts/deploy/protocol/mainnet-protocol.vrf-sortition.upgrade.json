@@ -39,6 +39,6 @@
   },
   "randomnessFlatFee": "5000000000000000000",
   "randomnessProviderOwnershipAcceptanceRequired": true,
-  "safeTransactions": "/Users/hmza/Code/work/interfold/packages/interfold-contracts/deploy/protocol/mainnet-protocol.vrf-sortition.upgrade.safe.json",
-  "governanceSafeBuilder": "/Users/hmza/Code/work/interfold/packages/interfold-contracts/deploy/protocol/mainnet-protocol.vrf-sortition.upgrade.governance.safe-builder.json"
+  "safeTransactions": "packages/interfold-contracts/deploy/protocol/mainnet-protocol.vrf-sortition.upgrade.safe.json",
+  "governanceSafeBuilder": "packages/interfold-contracts/deploy/protocol/mainnet-protocol.vrf-sortition.upgrade.governance.safe-builder.json"
 }

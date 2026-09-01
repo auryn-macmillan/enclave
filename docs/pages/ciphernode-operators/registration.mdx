@@ -8,9 +8,9 @@ description: 'Authorize a bond owner, fund an operator, and register the node'
 This guide walks you through the complete registration process to become an active ciphernode
 operator. Make sure your node is already [running](./running) before proceeding.
 
-> **Browser-based setup:** the dashboard can do every step on this page in your browser. It
-> shows the live bond size, ticket price, and operator status, and it sends each transaction from
-> the connected wallet. Open [Run a ciphernode](https://dashboard.theinterfold.com/#operator). The
+> **Browser-based setup:** the dashboard can do every step on this page in your browser. It shows
+> the live bond size, ticket price, and operator status, and it sends each transaction from the
+> connected wallet. Open [Run a ciphernode](https://dashboard.theinterfold.com/#operator). The
 > commands below remain the reference path for automated or headless setups.
 
 ## Prerequisites
@@ -30,12 +30,13 @@ single-wallet setup. Ensure the selected bond-owner wallet has:
 | **sUSDS** | Mainnet: `1,000 sUSDS` shares per ticket | Ticket balance for sortition |
 | **ETH**   | Sufficient for gas                       | Transaction fees             |
 
-> **Testnet tokens:** on Sepolia you can self-serve test FOLD and mock USDC from the faucet with
+> **Testnet tokens:** on Sepolia you can self-serve test FOLD and fee tokens from the faucet with
 > `interfold faucet` (requires the `faucet` contract address in your config — see
 > [Running a Node → Contract Addresses](/ciphernode-operators/running#contract-addresses)). Each
-> call tops up FOLD and the fee token independently, only when your balance for that token is below
-> the faucet threshold. One call dispenses enough FOLD to meet the default Sepolia ciphernode bond.
-> If the faucet runs dry, reach out in the [Interfold technical chat](https://t.me/interfoldhq_technical).
+> call tops up FOLD and the fee token independently when your balance is below the faucet threshold.
+> The faucet does not dispense ticket collateral. To register a Sepolia ciphernode, get the separate
+> test ticket-collateral token from the Interfold team. If the faucet runs dry, reach out in the
+> [Interfold technical chat](https://t.me/interfoldhq_technical).
 
 ## Registration Steps
 
@@ -251,7 +252,7 @@ status changes due to balance or bond updates.
 | ------------------------- | ---------------------------------------------- | ------------------------------------------------------- |
 | `isActive` is false       | Below minimum ciphernode bond (80%) or tickets | Add more FOLD or tickets                                |
 | Registration fails        | Already registered, banned, or unbonded        | Check `isRegistered()`, ban status, and ciphernode bond |
-| Ticket purchase fails     | Insufficient stablecoin or allowance           | Ensure balance and approve spending                     |
+| Ticket purchase fails     | Insufficient ticket collateral or allowance    | Ensure balance and approve spending                     |
 | "NodeNotEligible" in logs | Not registered before E3 request               | Register before requests are made                       |
 
 ## Next Steps

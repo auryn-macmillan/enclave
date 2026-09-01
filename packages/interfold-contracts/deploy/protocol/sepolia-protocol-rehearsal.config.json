@@ -1,0 +1,95 @@
+{
+  "name": "sepolia-protocol-rehearsal",
+  "chainId": 11155111,
+  "protocolOwner": "0x8837e47c4Bb520ADE83AAB761C3B60679443af1B",
+  "fold": "0xa799b10Ac36cdb9633FB9af7007e8C16248064c6",
+  "bondingRegistryProxy": "0xbfBCF1F9aBc929992008d787420e58198e17B73A",
+  "bondingRegistryProxyAdmin": "0xD56a588BB69e133b6d6D9768ee927fF85e6b67fa",
+  "feeToken": "0x4c3CBA2C57A8F56e765738D55Bb1450eA8d1560e",
+  "feeTokenDecimals": 18,
+  "ticketUnderlyingToken": "0x4B7a61E871dA121070ea56f61c978F7D795533D2",
+  "protocolTreasury": "0x8837e47c4Bb520ADE83AAB761C3B60679443af1B",
+  "slashedFundsTreasury": "0x8837e47c4Bb520ADE83AAB761C3B60679443af1B",
+  "slasher": "0x0000000000000000000000000000000000000000",
+  "randomness": {
+    "coordinator": "0x9DdfaCa8183c41ad55329BdeeD9F6A8d53168B1B",
+    "subscriptionId": "68475570197186622747725579713231483360545746156730899555624157381286514435070",
+    "keyHash": "0x787d74caea10b2b357790d5b5247c2f63d1d91572a9846f780606e4d953677ae",
+    "requestConfirmations": 3,
+    "callbackGasLimit": 150000,
+    "nativePayment": true,
+    "minimumSubscriptionBalance": "100000000000000000",
+    "requestTimeout": "3600"
+  },
+  "ticketToken": {
+    "lockRegistry": true
+  },
+  "bonding": {
+    "ticketPrice": "1000000000000000000000",
+    "requiredCiphernodeBond": "32000000000000000000000",
+    "ticketTokenDecimals": 18,
+    "ciphernodeBondTokenDecimals": 18,
+    "minTicketBalance": "1",
+    "exitDelay": "2592000"
+  },
+  "registry": {
+    "sortitionSubmissionWindow": "600"
+  },
+  "slashing": {
+    "initialDelay": "172800"
+  },
+  "interfold": {
+    "maxDuration": "2592000",
+    "markFailedGracePeriod": "3600",
+    "timeoutConfig": {
+      "dkgWindow": "21600",
+      "computeWindow": "604800",
+      "decryptionWindow": "21600"
+    },
+    "pricing": {
+      "randomnessFlatFee": "1000000000000000000",
+      "keyGenFixedPerNode": "100000000000000000",
+      "keyGenPerEncryptionProof": "100000000000000000",
+      "coordinationPerPair": "10000000000000000",
+      "availabilityPerNodePerSec": "10000000000000",
+      "decryptionPerNode": "300000000000000000",
+      "publicationBase": "1000000000000000000",
+      "verificationPerProof": "5000000000000000",
+      "protocolTreasury": "0x8837e47c4Bb520ADE83AAB761C3B60679443af1B",
+      "marginBps": "1000",
+      "protocolShareBps": "182",
+      "dkgUtilizationBps": "3000",
+      "computeUtilizationBps": "4000",
+      "decryptUtilizationBps": "3000",
+      "minCommitteeSize": "3",
+      "minThreshold": "2"
+    },
+    "committeeThresholds": [
+      {
+        "size": "0",
+        "quorum": "2",
+        "total": "3"
+      },
+      {
+        "size": "1",
+        "quorum": "5",
+        "total": "9"
+      },
+      {
+        "size": "2",
+        "quorum": "10",
+        "total": "19"
+      }
+    ],
+    "registerActiveBfvParamSet": true,
+    "allowFeeToken": true
+  },
+  "verifiers": {
+    "deploy": true
+  },
+  "ciphertextVerifier": "0x1A5DBaC0B140289683996913Afbc31e57B9Eb416",
+  "bindInitialE3Program": true,
+  "e3Programs": [
+    "0x70254B956D87Be536453eDA42684bD7b6db96aB5"
+  ]
+}

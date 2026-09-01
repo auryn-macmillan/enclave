@@ -11,8 +11,8 @@ contract Faucet {
     IERC20 public fold;
     IERC20 public feeToken;
 
-    uint256 public constant AMOUNT_FOLD = 200e18;
-    uint256 public constant AMOUNT_FEE_TOKEN = 200e6;
+    uint256 public constant AMOUNT_FOLD = 32_000e18;
+    uint256 public constant AMOUNT_FEE_TOKEN = 1_000e18;
 
     constructor(address _fold, address _feeToken) payable {
         fold = IERC20(_fold);
@@ -20,9 +20,9 @@ contract Faucet {
     }
 
     function faucet() external {
-        // Top up each token independently: a tester who spent their fee
-        // tokens but still holds FOLD must still be able to replenish the
-        // fee token (and vice versa).
+        // Top up each token independently: a tester who spent fee tokens but
+        // still holds FOLD must still be able to replenish the fee token, and
+        // vice versa.
         bool needsFold = fold.balanceOf(msg.sender) < AMOUNT_FOLD;
         bool needsFeeToken = feeToken.balanceOf(msg.sender) < AMOUNT_FEE_TOKEN;
 
