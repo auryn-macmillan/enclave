@@ -1368,20 +1368,24 @@ lookup uses the request record, so a round remains visible while its key is pend
 the round only when both records exist. Either handler can complete the activation after their
 records converge, and deferred checks cover slow live-handler ordering. Duplicate request and
 committee events do not reset the round, replace indexed output, or resubmit an already-matching
-Merkle root. Startup rebuilds deadline callbacks for active and expired rounds and releases an
-interrupted compute submission for retry. The compute transition is atomic, and a synchronous
-program-server request error releases the claim to `Expired` so a later deadline callback can retry
-it. Compute submission is at-least-once across a restart because the HTTP response or webhook can
-be lost. A retry can repeat proof work, but it cannot publish a second result: `Interfold` accepts
-ciphertext output only from `KeyPublished`, and the callback treats an E3 that already reached
+Merkle root. The shared Interfold contract also emits requests for other E3 programs. The CRISP
+indexer ignores those requests before it creates a round or makes a program-specific RPC call. An
+old program's historical round therefore cannot stop a fresh CRISP backfill.
+
+Startup rebuilds deadline callbacks for active and expired rounds and releases an interrupted
+compute submission for retry. The compute transition is atomic, and a synchronous program-server
+request error releases the claim to `Expired` so a later deadline callback can retry it. Compute
+submission is at-least-once across a restart because the HTTP response or webhook can be lost. A
+retry can repeat proof work, but it cannot publish a second result: `Interfold` accepts ciphertext
+output only from `KeyPublished`, and the callback treats an E3 that already reached
 `CiphertextReady` or `Complete` as success.
 
-Operator constraint: the Sepolia contract byte limit does not bypass an RPC transaction-size
-limit. The observed secure-8192 public key transaction is rejected before Solidity executes. Until
-a separate node, client, and indexer release provides a verifiable transport that fits the RPC
-path, use the current small-key parameters only as a Sepolia E2E plumbing workaround. That
-workaround does not validate secure-8192 and is not a mainnet security substitute. Do not interpret
-`KeyPublished` as proof that CRISP has usable key bytes.
+Secure-8192 committee public-key bytes do not use one oversized transaction. `publishCommittee`
+first records the proof-backed commitment. The selected publisher then sends the bytes through
+bounded `publishCommitteePublicKey` chunks. Readers assemble one canonical chunk set and accept the
+key only when its recomputed commitment equals the value already stored on chain. `KeyPublished`
+alone therefore does not mean that a client has usable key bytes. The application becomes ready
+only after the complete key publication arrives and passes that commitment check.
 
 ### What the compute-provider crate guarantees, and what an E3 program decides
 
