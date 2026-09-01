@@ -59,6 +59,7 @@ impl<P: Provider + WalletProvider + Clone + 'static> InterfoldSolWriter<P> {
     }
 
     fn clear_failure_watch(&mut self, e3_id: &E3id, ctx: &mut actix::Context<Self>) {
+        self.failure_stage_discoveries.invalidate(e3_id);
         self.failure_stages.remove(e3_id);
         if let Some(handle) = self.failure_timers.remove(e3_id) {
             ctx.cancel_future(handle);
@@ -359,6 +360,7 @@ impl<P: Provider + WalletProvider + Clone + 'static> Handler<E3StageChanged>
 
     fn handle(&mut self, msg: E3StageChanged, ctx: &mut Self::Context) -> Self::Result {
         let e3_id = msg.e3_id.clone();
+        self.failure_stage_discoveries.invalidate(&e3_id);
         match &msg.new_stage {
             E3Stage::Requested
             | E3Stage::CommitteeFinalized
@@ -461,22 +463,28 @@ impl<P: Provider + WalletProvider + Clone + 'static> Handler<DiscoverFailureStag
         let provider = self.provider.clone();
         let contract_address = self.contract_address;
         let e3_id = msg.e3_id;
+        let generation = self.failure_stage_discoveries.start(e3_id.clone());
         Box::pin(
             async move {
                 let result =
                     read_watched_failure_stage(provider, contract_address, e3_id.clone()).await;
-                (e3_id, result)
+                (e3_id, generation, result)
             }
             .into_actor(self)
-            .map(|(e3_id, result), actor, ctx| match result {
-                Ok(Some(stage)) => {
-                    actor.failure_stages.insert(e3_id.clone(), stage);
-                    actor.try_start_failure_watch(&e3_id, ctx);
+            .map(|(e3_id, generation, result), actor, ctx| {
+                if !actor.failure_stage_discoveries.complete(&e3_id, generation) {
+                    return;
                 }
-                Ok(None) => actor.clear_failure_watch(&e3_id, ctx),
-                Err(error) => {
-                    actor.bus.err(EType::Evm, error);
-                    ctx.notify_later(DiscoverFailureStage { e3_id }, FAILURE_RETRY_DELAY);
+                match result {
+                    Ok(Some(stage)) => {
+                        actor.failure_stages.insert(e3_id.clone(), stage);
+                        actor.try_start_failure_watch(&e3_id, ctx);
+                    }
+                    Ok(None) => actor.clear_failure_watch(&e3_id, ctx),
+                    Err(error) => {
+                        actor.bus.err(EType::Evm, error);
+                        ctx.notify_later(DiscoverFailureStage { e3_id }, FAILURE_RETRY_DELAY);
+                    }
                 }
             }),
         )

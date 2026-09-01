@@ -32,8 +32,9 @@ durable lifecycle map and restores the request-time registry from the DKG contex
 committee member staggers its attempt by canonical party ID. A `Requested` E3 has no active
 committee yet, so every node waits until the failure grace period ends and uses the permissionless
 path. Before submission, the writer confirms that the stage and failure condition still match. A
-canonical stage change cancels the old watch. After a restart, finalized members keep their party-ID
-stagger and non-members remain outside the protected grace window.
+canonical stage change cancels the old watch and invalidates any older stage-discovery RPC. After a
+restart, finalized members keep their party-ID stagger and non-members remain outside the protected
+grace window.
 
 If an honest-node allocation is smaller than the node count, the refund manager credits it to the
 request-time treasury instead of creating zero-value claims.

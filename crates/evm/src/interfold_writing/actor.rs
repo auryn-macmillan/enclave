@@ -9,7 +9,9 @@
 use crate::contracts::{ICiphernodeRegistry, IInterfold};
 use crate::domain::error_decoder::format_evm_error;
 use crate::domain::plaintext_publication::validate_plaintext_output;
-use crate::domain::plaintext_publication::{failure_watch_delay, failure_watch_party_id};
+use crate::domain::plaintext_publication::{
+    failure_watch_delay, failure_watch_party_id, FailureStageDiscoveryGate,
+};
 use crate::domain::publication_replay::ReplaySubmissionGate;
 use crate::helpers::{encode_zk_proof, transaction_nonce_guard, EthProvider};
 use crate::send_tx_with_retry;
@@ -48,6 +50,7 @@ pub struct InterfoldSolWriter<P> {
     request_registries: HashMap<E3id, Address>,
     failure_stages: HashMap<E3id, E3Stage>,
     failure_timers: HashMap<E3id, SpawnHandle>,
+    failure_stage_discoveries: FailureStageDiscoveryGate,
 }
 
 impl<P: Provider + WalletProvider + Clone + 'static> InterfoldSolWriter<P> {
@@ -87,6 +90,7 @@ impl<P: Provider + WalletProvider + Clone + 'static> InterfoldSolWriter<P> {
             request_registries,
             failure_stages,
             failure_timers: HashMap::new(),
+            failure_stage_discoveries: FailureStageDiscoveryGate::default(),
         })
     }
 

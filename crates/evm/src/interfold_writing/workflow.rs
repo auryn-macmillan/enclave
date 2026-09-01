@@ -12,6 +12,7 @@
 
 use e3_events::{E3Stage, E3id, Proof};
 use e3_utils::utility_types::ArcBytes;
+use std::collections::HashMap;
 use std::time::Duration;
 
 #[cfg(test)]
@@ -94,6 +95,34 @@ pub(crate) fn failure_watch_party_id(stage: &E3Stage, party_id: Option<u64>) -> 
     }
 }
 
+/// Reject stage-discovery results that a newer lifecycle event has superseded.
+#[derive(Debug, Default)]
+pub(crate) struct FailureStageDiscoveryGate {
+    next_generation: u64,
+    active: HashMap<E3id, u64>,
+}
+
+impl FailureStageDiscoveryGate {
+    pub(crate) fn start(&mut self, e3_id: E3id) -> u64 {
+        self.next_generation = self.next_generation.wrapping_add(1);
+        let generation = self.next_generation;
+        self.active.insert(e3_id, generation);
+        generation
+    }
+
+    pub(crate) fn invalidate(&mut self, e3_id: &E3id) {
+        self.active.remove(e3_id);
+    }
+
+    pub(crate) fn complete(&mut self, e3_id: &E3id, generation: u64) -> bool {
+        if self.active.get(e3_id) != Some(&generation) {
+            return false;
+        }
+        self.active.remove(e3_id);
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,5 +197,20 @@ mod tests {
             failure_watch_party_id(&E3Stage::CommitteeFinalized, Some(2)),
             Some(2)
         );
+    }
+
+    #[test]
+    fn stage_discovery_ignores_superseded_results() {
+        let e3_id = E3id::new("7", 1);
+        let mut gate = FailureStageDiscoveryGate::default();
+
+        let first = gate.start(e3_id.clone());
+        let second = gate.start(e3_id.clone());
+        assert!(!gate.complete(&e3_id, first));
+        assert!(gate.complete(&e3_id, second));
+
+        let invalidated = gate.start(e3_id.clone());
+        gate.invalidate(&e3_id);
+        assert!(!gate.complete(&e3_id, invalidated));
     }
 }
