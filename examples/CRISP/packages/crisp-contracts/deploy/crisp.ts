@@ -50,6 +50,11 @@ export const deployCRISPContracts = async (): Promise<CRISPDeploymentResult> => 
     throw new Error("USE_MOCKS must be 'true', 'false', or unset")
   }
   const useMocks = rawUseMocks === 'true'
+  const rawDeferProtocolWiring = process.env.DEFER_PROTOCOL_WIRING?.trim().toLowerCase()
+  if (rawDeferProtocolWiring && rawDeferProtocolWiring !== 'true' && rawDeferProtocolWiring !== 'false') {
+    throw new Error("DEFER_PROTOCOL_WIRING must be 'true', 'false', or unset")
+  }
+  const deferProtocolWiring = rawDeferProtocolWiring === 'true'
   const configuredAvailabilitySigner = process.env.INPUT_AVAILABILITY_SIGNER
   const inputAvailabilitySigner = configuredAvailabilitySigner
     ? ethers.getAddress(configuredAvailabilitySigner)
@@ -220,7 +225,7 @@ export const deployCRISPContracts = async (): Promise<CRISPDeploymentResult> => 
 
   let governanceComplete = false
   const interfoldAddress = readDeploymentArgs('Interfold', chain)?.address
-  if (interfoldAddress && (await ethers.provider.getCode(interfoldAddress)) !== '0x') {
+  if (interfoldAddress && (await ethers.provider.getCode(interfoldAddress)) !== '0x' && !deferProtocolWiring) {
     const interfold = InterfoldFactory.connect(interfoldAddress, owner)
     const interfoldOwner = await interfold.owner()
     const registered = await interfold.e3Programs(crispAddress)
@@ -244,6 +249,8 @@ export const deployCRISPContracts = async (): Promise<CRISPDeploymentResult> => 
         'CRISP integration is incomplete. Protocol governance must set the ciphertext verifier, register the program, and bind Interfold.',
       )
     }
+  } else if (interfoldAddress && deferProtocolWiring) {
+    console.log('CRISP protocol wiring was deferred for the governance upgrade batch.')
   }
 
   let tokenAddress
