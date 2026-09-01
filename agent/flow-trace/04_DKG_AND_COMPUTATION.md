@@ -694,7 +694,10 @@ phase.
   └─ Splits the serialized key into deterministic 90 KiB chunks and calls
      contract.publishCommitteePublicKey(e3_id, candidateHash, index, count,
      totalLength, chunk) for every chunk after the commitment is available
-     → A terminal result clears the intent; a retryable failure keeps it and retries after 30s
+     → A terminal result clears the in-memory intent; a retryable failure keeps it and retries
+       after 30s
+     → RPC request-size rejection and permanent contract or payload errors are terminal for the
+       running writer. They produce one final error instead of an unbounded 30-second retry loop
      → A restart replays the intent, so an unfinished publication still reaches the chain.
        E3RequestComplete that arrives before EffectsEnabled comes from that same replay and
        drops the intent: a completed request published its candidate in an earlier run, and
@@ -1358,6 +1361,27 @@ keeps retryable failures for a later attempt. `E3RequestComplete` does not erase
 publication, and only an active aggregator can start a retained submission. `PlaintextAggregated` is
 not gossiped or returned by historical peer sync; only the producing node can create this EVM write
 intent.
+
+The CRISP server writes its request record at `E3Requested` and writes the generic E3 record only
+after the indexer verifies the committee public key against the on-chain commitment. Current-round
+lookup uses the request record, so a round remains visible while its key is pending. CRISP activates
+the round only when both records exist. Either handler can complete the activation after their
+records converge, and deferred checks cover slow live-handler ordering. Duplicate request and
+committee events do not reset the round, replace indexed output, or resubmit an already-matching
+Merkle root. Startup rebuilds deadline callbacks for active and expired rounds and releases an
+interrupted compute submission for retry. The compute transition is atomic, and a synchronous
+program-server request error releases the claim to `Expired` so a later deadline callback can retry
+it. Compute submission is at-least-once across a restart because the HTTP response or webhook can
+be lost. A retry can repeat proof work, but it cannot publish a second result: `Interfold` accepts
+ciphertext output only from `KeyPublished`, and the callback treats an E3 that already reached
+`CiphertextReady` or `Complete` as success.
+
+Operator constraint: the Sepolia contract byte limit does not bypass an RPC transaction-size
+limit. The observed secure-8192 public key transaction is rejected before Solidity executes. Until
+a separate node, client, and indexer release provides a verifiable transport that fits the RPC
+path, use the current small-key parameters only as a Sepolia E2E plumbing workaround. That
+workaround does not validate secure-8192 and is not a mainnet security substitute. Do not interpret
+`KeyPublished` as proof that CRISP has usable key bytes.
 
 ### What the compute-provider crate guarantees, and what an E3 program decides
 

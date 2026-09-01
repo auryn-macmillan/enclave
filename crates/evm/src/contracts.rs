@@ -45,6 +45,12 @@ sol! {
             uint256 decryptionDeadline;
         }
 
+        struct E3TimeoutConfig {
+            uint256 dkgWindow;
+            uint256 computeWindow;
+            uint256 decryptionWindow;
+        }
+
         // ── Write functions ─────────────────────────────────────────────────
         function publishPlaintextOutput(
             uint256 e3Id,
@@ -63,9 +69,15 @@ sol! {
 
         function getDeadlines(uint256 e3Id) external view returns (E3Deadlines memory deadlines);
 
+        function getE3TimeoutConfig(
+            uint256 e3Id
+        ) external view returns (E3TimeoutConfig memory config);
+
         function checkFailureCondition(
             uint256 e3Id
         ) external view returns (bool canFail, uint8 reason);
+
+        function markFailedGracePeriod() external view returns (uint256);
 
         function nodeReleaseRegistry() external view returns (address);
         function bondingRegistry() external view returns (address);
@@ -102,6 +114,7 @@ sol! {
         error E3AlreadyFailed(uint256 e3Id);
         error E3AlreadyComplete(uint256 e3Id);
         error MarkE3FailedInGracePeriod(uint256 e3Id, uint256 gracePeriodEnds);
+        error DKGDeadlinePassed(uint256 e3Id, uint256 deadline);
     }
 }
 
@@ -212,6 +225,10 @@ sol! {
 
         // ── View functions ──────────────────────────────────────────────────
         function isOpen(uint256 e3Id) external view returns (bool);
+
+        function committeeThresholdMet(uint256 e3Id) external view returns (bool);
+
+        function getCommitteeDeadline(uint256 e3Id) external view returns (uint256);
 
         function committeePublicKey(uint256 e3Id) external view returns (bytes32 publicKeyHash);
 
@@ -385,6 +402,17 @@ sol! {
         error DkgProofRequired();
         error InvalidDkgProof();
         error FoldAttestationsRequired();
+        error FoldAttestationVerifierNotSet();
+        error InvalidFoldAttestation();
+        error PartyIdNotInProof();
+        error AttestationBindingCountMismatch();
+        error PartyIdOutOfBounds(uint256 partyId, uint256 committeeSize);
+        error InvalidProof();
+        error InvalidPublicInputsLength();
+        error VkHashMismatch();
+        error PkCommitmentMismatch();
+        error DomainBindingMismatch();
+        error InvalidPublicKeyLength(uint256 supplied, uint256 maximum);
     }
 }
 

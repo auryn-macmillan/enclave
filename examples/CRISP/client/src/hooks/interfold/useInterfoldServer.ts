@@ -39,7 +39,8 @@ export const useInterfoldServer = () => {
     InterfoldEndpoints
   const { fetchData, isLoading } = useApi()
   const getCurrentRound = () => fetchData<CurrentRound, { requesters: string[] }>(GetCurrentRound, 'post', { requesters: ROUND_REQUESTERS })
-  const getRoundStateLite = (round_id: string) => fetchData<VoteStateLite, { round_id: string }>(GetRoundStateLite, 'post', { round_id })
+  const getRoundStateLite = (round_id: string) =>
+    fetchData<VoteStateLite, { round_id: string }>(GetRoundStateLite, 'post', { round_id }, { suppressNotFound: true })
   const getVoteAvailability = (jobId: string) => fetchData<BroadcastVoteResponse>(`${GetVoteAvailability}/${encodeURIComponent(jobId)}`)
   const broadcastVote = async (
     vote: BroadcastVoteRequest,

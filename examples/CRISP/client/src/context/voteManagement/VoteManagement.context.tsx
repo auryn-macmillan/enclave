@@ -6,7 +6,7 @@
 
 import { createGenericContext } from '@/utils/create-generic-context'
 import { VoteManagementContextType, VoteManagementProviderProps } from '@/context/voteManagement'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAccount, useChainId } from 'wagmi'
 import { VoteStateLite, VotingRound } from '@/model/vote.model'
 import { useInterfoldServer } from '@/hooks/interfold/useInterfoldServer'
@@ -47,6 +47,7 @@ const VoteManagementProvider = ({ children }: VoteManagementProviderProps) => {
   const [txUrl, setTxUrl] = useState<string | undefined>(undefined)
   const [pollResult, setPollResult] = useState<PollResult | null>(null)
   const [currentRoundId, setCurrentRoundId] = useState<string | null>(null)
+  const [pendingCurrentRoundId, setPendingCurrentRoundId] = useState<string | null>(null)
   const [displayedRoundIsFallback, setDisplayedRoundIsFallback] = useState<boolean>(false)
   const [hasVotedInCurrentRound, setHasVotedInCurrentRound] = useState<boolean>(false)
 
@@ -103,6 +104,21 @@ const VoteManagementProvider = ({ children }: VoteManagementProviderProps) => {
     [chainId, userAddress, currentRoundId],
   )
 
+  const applyRoundState = useCallback((fetchedRoundState: VoteStateLite) => {
+    if (fetchedRoundState.committee_public_key.length === 1 && fetchedRoundState.committee_public_key[0] === 0) {
+      handleGenericError('getRoundStateLite', {
+        message: 'Interfold server failed generating the necessary pk bytes',
+        name: 'getRoundStateLite',
+      })
+    }
+
+    const startBlockNumber = Number(fetchedRoundState.start_block)
+    setRoundState({ ...fetchedRoundState, start_block: startBlockNumber })
+    setVotingRound({ round_id: fetchedRoundState.id, pk_bytes: fetchedRoundState.committee_public_key })
+    setPollOptions(generatePoll({ round_id: fetchedRoundState.id, emojis: fetchedRoundState.emojis }))
+    setRoundEndDate(convertTimestampToDate(fetchedRoundState.end_time))
+  }, [])
+
   const initialLoad = async () => {
     const currentRound = await getCurrentRound()
     if (!currentRound) return
@@ -112,7 +128,11 @@ const VoteManagementProvider = ({ children }: VoteManagementProviderProps) => {
     // otherwise sit forever in "Over · Tallying…". Fall back to the latest past
     // round that does have a tally so the user sees something useful.
     const fetched = await getRoundStateLiteRequest(currentRound.id)
-    if (!fetched) return
+    if (!fetched) {
+      setPendingCurrentRoundId(currentRound.id)
+      return
+    }
+    setPendingCurrentRoundId(null)
 
     const ended = Number(fetched.end_time) <= nowInSeconds()
     let fallbackRoundId: string | null = null
@@ -136,27 +156,54 @@ const VoteManagementProvider = ({ children }: VoteManagementProviderProps) => {
     }
 
     setDisplayedRoundIsFallback(fallbackRoundId !== null)
-    await getRoundStateLite(fallbackRoundId ?? currentRound.id)
+    if (fallbackRoundId) {
+      await getRoundStateLite(fallbackRoundId)
+    } else {
+      applyRoundState(fetched)
+    }
   }
 
   const getRoundStateLite = async (roundId: string) => {
     const fetchedRoundState = await getRoundStateLiteRequest(roundId)
 
-    if (fetchedRoundState?.committee_public_key.length === 1 && fetchedRoundState.committee_public_key[0] === 0) {
-      handleGenericError('getRoundStateLite', {
-        message: 'Interfold server failed generating the necessary pk bytes',
-        name: 'getRoundStateLite',
-      })
-    }
     if (fetchedRoundState) {
-      const startBlockNumber = Number(fetchedRoundState.start_block)
-      setRoundState({ ...fetchedRoundState, start_block: startBlockNumber })
-      setVotingRound({ round_id: fetchedRoundState.id, pk_bytes: fetchedRoundState.committee_public_key })
-      setPollOptions(generatePoll({ round_id: fetchedRoundState.id, emojis: fetchedRoundState.emojis }))
-      setRoundEndDate(convertTimestampToDate(fetchedRoundState.end_time))
-      setCurrentRoundId(fetchedRoundState.id)
+      applyRoundState(fetchedRoundState)
     }
   }
+
+  const getRoundStateLiteRequestRef = useRef(getRoundStateLiteRequest)
+  useEffect(() => {
+    getRoundStateLiteRequestRef.current = getRoundStateLiteRequest
+  }, [getRoundStateLiteRequest])
+
+  useEffect(() => {
+    if (!pendingCurrentRoundId) return
+
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    const poll = async () => {
+      if (cancelled) return
+
+      if (typeof document === 'undefined' || !document.hidden) {
+        const fetched = await getRoundStateLiteRequestRef.current(pendingCurrentRoundId)
+        if (cancelled) return
+        if (fetched) {
+          applyRoundState(fetched)
+          setPendingCurrentRoundId(null)
+          return
+        }
+      }
+
+      timer = setTimeout(poll, 10_000)
+    }
+
+    timer = setTimeout(poll, 10_000)
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [pendingCurrentRoundId, applyRoundState])
 
   const getPastPolls = async () => {
     try {

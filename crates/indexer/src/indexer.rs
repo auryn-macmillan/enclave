@@ -469,7 +469,7 @@ async fn store_committee_public_key<S: DataStore, R: ProviderType>(
             decoded_params.moduli().to_vec(),
         ) {
             if ignore_invalid_candidate {
-                warn!("Ignoring unbound chunked committee public key for E3 {e3_id}: {error}");
+                warn!("Ignoring unbound committee public-key candidate for E3 {e3_id}: {error}");
                 return Ok(false);
             }
             return Err(eyre!(
@@ -506,8 +506,11 @@ async fn store_committee_public_key<S: DataStore, R: ProviderType>(
     };
 
     let mut repo = E3Repository::new(db, &e3_id);
-    repo.set_e3(e3_obj).await?;
-    info!("E3 {} created and stored", e3_id);
+    if repo.set_e3_if_absent(e3_obj).await? {
+        info!("E3 {} created and stored", e3_id);
+    } else {
+        info!("E3 {} already has a verified committee key", e3_id);
+    }
     Ok(true)
 }
 
@@ -1089,6 +1092,15 @@ impl<S: DataStore, R: ProviderType> InterfoldIndexer<S, R> {
 
     pub fn get_store(&self) -> SharedStore<S> {
         self.ctx.store.clone()
+    }
+
+    /// Schedule a timestamp callback without requiring an event-handler context.
+    pub fn schedule_at<F, Fut>(&self, timestamp: u64, callback: F)
+    where
+        F: Fn(u64, Arc<IndexerContext<S, R>>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<()>> + Send + 'static,
+    {
+        self.ctx.do_later(timestamp, callback);
     }
 }
 
