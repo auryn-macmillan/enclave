@@ -56,6 +56,11 @@ impl<P: Provider + WalletProvider + Clone + 'static> InterfoldSolWriter<P> {
         for e3_id in discovery_ids {
             ctx.notify(DiscoverFailureStage { e3_id });
         }
+        for e3_id in &self.pending_failure_settlements {
+            ctx.notify(ProcessFailedE3 {
+                e3_id: e3_id.clone(),
+            });
+        }
     }
 
     fn clear_failure_watch(&mut self, e3_id: &E3id, ctx: &mut actix::Context<Self>) {
@@ -356,7 +361,7 @@ impl<P: Provider + WalletProvider + Clone + 'static> Handler<Shutdown> for Inter
 impl<P: Provider + WalletProvider + Clone + 'static> Handler<E3StageChanged>
     for InterfoldSolWriter<P>
 {
-    type Result = ResponseFuture<()>;
+    type Result = ();
 
     fn handle(&mut self, msg: E3StageChanged, ctx: &mut Self::Context) -> Self::Result {
         let e3_id = msg.e3_id.clone();
@@ -373,33 +378,53 @@ impl<P: Provider + WalletProvider + Clone + 'static> Handler<E3StageChanged>
             _ => self.clear_failure_watch(&e3_id, ctx),
         }
 
-        if !self.effects_enabled || msg.new_stage != E3Stage::Failed {
-            return Box::pin(async {});
+        if msg.new_stage == E3Stage::Failed {
+            self.pending_failure_settlements.insert(e3_id.clone());
+            if self.effects_enabled {
+                ctx.notify(ProcessFailedE3 { e3_id });
+            }
+        }
+    }
+}
+
+impl<P: Provider + WalletProvider + Clone + 'static> Handler<ProcessFailedE3>
+    for InterfoldSolWriter<P>
+{
+    type Result = ResponseActFuture<Self, ()>;
+
+    fn handle(&mut self, msg: ProcessFailedE3, _ctx: &mut Self::Context) -> Self::Result {
+        if !self.effects_enabled || !self.pending_failure_settlements.contains(&msg.e3_id) {
+            return Box::pin(async {}.into_actor(self));
         }
 
-        Box::pin({
-            let contract_address = self.contract_address;
-            let provider = self.provider.clone();
+        let provider = self.provider.clone();
+        let contract_address = self.contract_address;
+        let e3_id = msg.e3_id;
+        Box::pin(
             async move {
                 let result = process_e3_failure(provider, contract_address, e3_id.clone()).await;
-                match result {
-                    Ok(receipt) => {
-                        info!(
-                            tx=%receipt.transaction_hash,
-                            e3_id = %e3_id,
-                            "Called processE3Failure"
-                        );
-                    }
-                    Err(err) => {
-                        info!(
-                            e3_id = %e3_id,
-                            "processE3Failure did not succeed (may already be processed): {}",
-                            format_evm_error(&err)
-                        );
-                    }
-                }
+                (e3_id, result)
             }
-        })
+            .into_actor(self)
+            .map(|(e3_id, result), actor, ctx| match result {
+                Ok(receipt) => {
+                    actor.pending_failure_settlements.remove(&e3_id);
+                    info!(
+                        tx = %receipt.transaction_hash,
+                        e3_id = %e3_id,
+                        "Called processE3Failure"
+                    );
+                }
+                Err(error) if failure_settlement_error_is_terminal(&error) => {
+                    actor.pending_failure_settlements.remove(&e3_id);
+                    info!(e3_id = %e3_id, "Failure settlement was already processed");
+                }
+                Err(error) => {
+                    actor.bus.err(EType::Evm, error);
+                    ctx.notify_later(ProcessFailedE3 { e3_id }, FAILURE_RETRY_DELAY);
+                }
+            }),
+        )
     }
 }
 

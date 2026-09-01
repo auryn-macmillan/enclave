@@ -1288,6 +1288,11 @@ async fn setup_evm_system(
                 })
                 .map(|(e3_id, stage)| (e3_id.clone(), stage.clone()))
                 .collect();
+            let chain_failure_settlements = lifecycle_stages
+                .iter()
+                .filter(|(e3_id, stage)| e3_id.chain_id() == chain_id && **stage == E3Stage::Failed)
+                .map(|(e3_id, _)| e3_id.clone())
+                .collect();
             InterfoldSolWriter::attach_with_recovery(
                 bus,
                 write_provider.clone(),
@@ -1296,6 +1301,7 @@ async fn setup_evm_system(
                 chain_party_ids,
                 chain_request_registries,
                 chain_failure_stages,
+                chain_failure_settlements,
             );
             system.with_contract(contract.address()?, move |next| {
                 InterfoldSolReader::setup(&next).recipient()

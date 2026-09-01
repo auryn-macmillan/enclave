@@ -7,7 +7,7 @@
 //! Interfold contract publication boundary.
 
 use crate::contracts::{ICiphernodeRegistry, IInterfold};
-use crate::domain::error_decoder::format_evm_error;
+use crate::domain::error_decoder::{contains_error_selector, format_evm_error};
 use crate::domain::plaintext_publication::validate_plaintext_output;
 use crate::domain::plaintext_publication::{
     failure_watch_delay, failure_watch_party_id, FailureStageDiscoveryGate,
@@ -29,7 +29,7 @@ use e3_events::{
     Shutdown, DKG_FOLD_ATTESTATION_CONTEXT_SCHEMA_VERSION,
 };
 use e3_utils::{require_successful_receipt, NotifySync, MAILBOX_LIMIT};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::info;
 
@@ -51,6 +51,7 @@ pub struct InterfoldSolWriter<P> {
     failure_stages: HashMap<E3id, E3Stage>,
     failure_timers: HashMap<E3id, SpawnHandle>,
     failure_stage_discoveries: FailureStageDiscoveryGate,
+    pending_failure_settlements: HashSet<E3id>,
 }
 
 impl<P: Provider + WalletProvider + Clone + 'static> InterfoldSolWriter<P> {
@@ -67,6 +68,7 @@ impl<P: Provider + WalletProvider + Clone + 'static> InterfoldSolWriter<P> {
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
+            HashSet::new(),
         )
     }
 
@@ -78,6 +80,7 @@ impl<P: Provider + WalletProvider + Clone + 'static> InterfoldSolWriter<P> {
         committee_party_ids: HashMap<E3id, u64>,
         request_registries: HashMap<E3id, Address>,
         failure_stages: HashMap<E3id, E3Stage>,
+        pending_failure_settlements: HashSet<E3id>,
     ) -> Result<Self> {
         Ok(Self {
             provider,
@@ -91,6 +94,7 @@ impl<P: Provider + WalletProvider + Clone + 'static> InterfoldSolWriter<P> {
             failure_stages,
             failure_timers: HashMap::new(),
             failure_stage_discoveries: FailureStageDiscoveryGate::default(),
+            pending_failure_settlements,
         })
     }
 
@@ -103,6 +107,7 @@ impl<P: Provider + WalletProvider + Clone + 'static> InterfoldSolWriter<P> {
             HashMap::new(),
             HashMap::new(),
             HashMap::new(),
+            HashSet::new(),
         );
     }
 
@@ -114,6 +119,7 @@ impl<P: Provider + WalletProvider + Clone + 'static> InterfoldSolWriter<P> {
         committee_party_ids: HashMap<E3id, u64>,
         request_registries: HashMap<E3id, Address>,
         failure_stages: HashMap<E3id, E3Stage>,
+        pending_failure_settlements: HashSet<E3id>,
     ) {
         let addr = InterfoldSolWriter::new_with_recovery(
             bus,
@@ -123,6 +129,7 @@ impl<P: Provider + WalletProvider + Clone + 'static> InterfoldSolWriter<P> {
             committee_party_ids,
             request_registries,
             failure_stages,
+            pending_failure_settlements,
         )
         .expect("failed to create InterfoldSolWriter")
         .start();
@@ -171,6 +178,12 @@ struct DiscoverFailureStage {
 struct MarkFailedAtDeadline {
     e3_id: E3id,
     stage: E3Stage,
+}
+
+#[derive(Message, Debug, Clone)]
+#[rtype(result = "()")]
+struct ProcessFailedE3 {
+    e3_id: E3id,
 }
 
 impl<P: Provider + WalletProvider + Clone + 'static> Actor for InterfoldSolWriter<P> {

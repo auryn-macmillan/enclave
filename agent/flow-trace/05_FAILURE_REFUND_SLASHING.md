@@ -152,7 +152,9 @@ charge the protocol-funded subscription.
 Runtime note: `processE3Failure()` is a permissionless cleanup path. The Rust `InterfoldSolWriter`
 may auto-submit it from any effects-enabled node on the same chain, and it must not depend on
 active-aggregator designation because failures can happen before committee finalization or while the
-current aggregator is offline.
+current aggregator is offline. A restart restores failed E3 IDs from the durable lifecycle map. The
+writer retries transient failures and treats `NoPaymentToRefund` as proof that another account has
+already processed the escrow.
 
 ```text
 Anyone calls: Interfold.processE3Failure(e3Id)

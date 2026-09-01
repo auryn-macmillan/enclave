@@ -3,6 +3,7 @@
 //! Interfold contract reads and transaction effects.
 
 use super::*;
+use alloy::sol_types::SolError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::actors::interfold_sol_writer) enum MarkFailureOutcome {
@@ -249,9 +250,21 @@ pub(in crate::actors::interfold_sol_writer) async fn process_e3_failure<
     Ok(receipt)
 }
 
+pub(in crate::actors::interfold_sol_writer) fn failure_settlement_error_is_terminal(
+    error: &anyhow::Error,
+) -> bool {
+    contains_error_selector(
+        &format!("{error:?}"),
+        IInterfold::NoPaymentToRefund::SELECTOR,
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{failure_stage_code, requested_failure_deadline};
+    use super::{
+        failure_settlement_error_is_terminal, failure_stage_code, requested_failure_deadline,
+    };
+    use crate::contracts::IInterfold;
     use e3_events::E3Stage;
 
     #[test]
@@ -268,5 +281,17 @@ mod tests {
         assert_eq!(requested_failure_deadline(100, false, 50).unwrap(), 100);
         assert_eq!(requested_failure_deadline(100, true, 50).unwrap(), 150);
         assert!(requested_failure_deadline(u64::MAX, true, 1).is_err());
+    }
+
+    #[test]
+    fn settled_failure_stops_retries() {
+        let error = anyhow::anyhow!(
+            "execution reverted: 0x{}",
+            hex::encode(IInterfold::NoPaymentToRefund::SELECTOR)
+        );
+        assert!(failure_settlement_error_is_terminal(&error));
+        assert!(!failure_settlement_error_is_terminal(&anyhow::anyhow!(
+            "RPC connection reset"
+        )));
     }
 }
