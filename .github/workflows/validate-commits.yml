@@ -7,7 +7,7 @@ on:
 jobs:
   validate-pr-title:
     name: Validate PR Title
-    runs-on: ubuntu-latest
+    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
     steps:
       - name: Checkout
         uses: actions/checkout@v6
