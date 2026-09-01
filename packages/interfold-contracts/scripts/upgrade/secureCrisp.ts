@@ -598,7 +598,11 @@ export async function prepareSecureCrispUpgrade(): Promise<void> {
     );
   }
   for (const threshold of config.interfold.committeeThresholds) {
-    const current = await interfold.committeeThresholds(BigInt(threshold.size));
+    const size = BigInt(threshold.size);
+    const current = await Promise.all([
+      interfold.committeeThresholds(size, 0n),
+      interfold.committeeThresholds(size, 1n),
+    ]);
     if (
       current[0] !== BigInt(threshold.quorum) ||
       current[1] !== BigInt(threshold.total)

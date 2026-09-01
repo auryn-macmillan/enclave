@@ -302,7 +302,11 @@ export async function validateSecureCrispUpgrade(): Promise<void> {
     "secure BFV parameter set",
   );
   for (const threshold of config.interfold.committeeThresholds) {
-    const actual = await interfold.committeeThresholds(BigInt(threshold.size));
+    const size = BigInt(threshold.size);
+    const actual = await Promise.all([
+      interfold.committeeThresholds(size, 0n),
+      interfold.committeeThresholds(size, 1n),
+    ]);
     equalValue(
       actual[0],
       BigInt(threshold.quorum),
