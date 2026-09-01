@@ -28,12 +28,12 @@ through its absolute DKG deadline. It can fail if it remains unfinalized after t
 
 The Interfold writer watches every stage that `failureCondition` supports: `Requested`,
 `CommitteeFinalized`, `KeyPublished`, and `CiphertextReady`. Startup restores the stage from the
-durable lifecycle map and restores the request-time registry from the DKG context. A selected
-committee member staggers its attempt by canonical party ID. A node without a party ID waits until
-the failure grace period is over, then uses the permissionless path. Before submission, the writer
-confirms that the stage and failure condition still match. A canonical stage change cancels the old
-watch. After a restart, selected members keep their party-ID stagger and non-members remain outside
-the protected grace window.
+durable lifecycle map and restores the request-time registry from the DKG context. A finalized
+committee member staggers its attempt by canonical party ID. A `Requested` E3 has no active
+committee yet, so every node waits until the failure grace period ends and uses the permissionless
+path. Before submission, the writer confirms that the stage and failure condition still match. A
+canonical stage change cancels the old watch. After a restart, finalized members keep their party-ID
+stagger and non-members remain outside the protected grace window.
 
 If an honest-node allocation is smaller than the node count, the refund manager credits it to the
 request-time treasury instead of creating zero-value claims.

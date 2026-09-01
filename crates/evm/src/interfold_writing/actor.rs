@@ -8,8 +8,8 @@
 
 use crate::contracts::{ICiphernodeRegistry, IInterfold};
 use crate::domain::error_decoder::format_evm_error;
-use crate::domain::plaintext_publication::failure_watch_delay;
 use crate::domain::plaintext_publication::validate_plaintext_output;
+use crate::domain::plaintext_publication::{failure_watch_delay, failure_watch_party_id};
 use crate::domain::publication_replay::ReplaySubmissionGate;
 use crate::helpers::{encode_zk_proof, transaction_nonce_guard, EthProvider};
 use crate::send_tx_with_retry;

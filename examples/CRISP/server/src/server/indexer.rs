@@ -16,6 +16,7 @@ use crate::server::{
     token_holders::{build_tree, compute_token_holder_hashes},
     CONFIG,
 };
+use alloy::providers::{Provider, ProviderBuilder};
 use alloy::sol_types::{sol_data, SolType};
 use alloy_primitives::{Address, U256};
 use crisp_utils::decode_tally;
@@ -586,6 +587,63 @@ fn schedule_round_activation_retries<S: DataStore>(
     }
 }
 
+async fn restore_round_deadline_callback<S: DataStore>(
+    indexer: &InterfoldIndexer<S, ReadWrite>,
+    store: SharedStore<S>,
+    e3_id: String,
+    now: u64,
+) -> Result<()> {
+    let mut repo = CrispE3Repository::new(store.clone(), &e3_id);
+    let mut status = repo.get_status().await?;
+    let has_indexed_public_key = repo.has_indexed_public_key().await?;
+    if status == "Active" && !has_indexed_public_key {
+        repo.update_status("Requested").await?;
+        status = "Requested".to_string();
+        warn!(
+            "[e3_id={}] Reset an active round to pending because no verified public key is indexed",
+            e3_id
+        );
+    }
+    if status == "Requested"
+        && has_indexed_public_key
+        && repo.try_start_round().await?
+    {
+        let mut current_round_repo = CurrentRoundRepository::new(store.clone());
+        current_round_repo
+            .set_current_round(CurrentRound { id: e3_id.clone() })
+            .await?;
+        status = "Active".to_string();
+        info!(
+            "[e3_id={}] Activated a requested round whose verified key was indexed before restart",
+            e3_id
+        );
+    }
+    if status == "Computing" || status == "PublishingCiphertext" {
+        repo.update_status("Expired").await?;
+        status = "Expired".to_string();
+        warn!(
+            "[e3_id={}] Reset an interrupted compute submission so it can be retried",
+            e3_id
+        );
+    }
+    if status != "Active" && status != "Expired" {
+        return Ok(());
+    }
+
+    let expiration = repo.get_input_deadline().await?;
+    for at in deadline_attempt_times(expiration, now) {
+        let e3_id = e3_id.clone();
+        indexer.schedule_at(at, move |_, ctx| {
+            handle_e3_input_deadline_expiration_logged(e3_id.clone(), ctx.store())
+        });
+    }
+    info!(
+        "[e3_id={}] Restored deadline callbacks for CRISP round in status {}",
+        e3_id, status
+    );
+    Ok(())
+}
+
 async fn restore_round_deadline_callbacks<S: DataStore>(
     indexer: &InterfoldIndexer<S, ReadWrite>,
 ) -> Result<()> {
@@ -596,53 +654,14 @@ async fn restore_round_deadline_callbacks<S: DataStore>(
     let now = chrono::Utc::now().timestamp().max(0) as u64;
 
     for e3_id in round_ids {
-        let mut repo = CrispE3Repository::new(store.clone(), &e3_id);
-        let mut status = repo.get_status().await?;
-        let has_indexed_public_key = repo.has_indexed_public_key().await?;
-        if status == "Active" && !has_indexed_public_key {
-            repo.update_status("Requested").await?;
-            status = "Requested".to_string();
-            warn!(
-                "[e3_id={}] Reset an active round to pending because no verified public key is indexed",
-                e3_id
+        if let Err(error) =
+            restore_round_deadline_callback(indexer, store.clone(), e3_id.clone(), now).await
+        {
+            error!(
+                "[e3_id={}] Could not restore CRISP deadline callbacks: {}",
+                e3_id, error
             );
         }
-        if status == "Requested" && has_indexed_public_key {
-            if repo.try_start_round().await? {
-                let mut current_round_repo = CurrentRoundRepository::new(store.clone());
-                current_round_repo
-                    .set_current_round(CurrentRound { id: e3_id.clone() })
-                    .await?;
-                status = "Active".to_string();
-                info!(
-                    "[e3_id={}] Activated a requested round whose verified key was indexed before restart",
-                    e3_id
-                );
-            }
-        }
-        if status == "Computing" || status == "PublishingCiphertext" {
-            repo.update_status("Expired").await?;
-            status = "Expired".to_string();
-            warn!(
-                "[e3_id={}] Reset an interrupted compute submission so it can be retried",
-                e3_id
-            );
-        }
-        if status != "Active" && status != "Expired" {
-            continue;
-        }
-
-        let expiration = repo.get_input_deadline().await?;
-        for at in deadline_attempt_times(expiration, now) {
-            let e3_id = e3_id.clone();
-            indexer.schedule_at(at, move |_, ctx| {
-                handle_e3_input_deadline_expiration_logged(e3_id.clone(), ctx.store())
-            });
-        }
-        info!(
-            "[e3_id={}] Restored deadline callbacks for CRISP round in status {}",
-            e3_id, status
-        );
     }
 
     Ok(())
@@ -877,6 +896,16 @@ pub async fn register_committee_published(
         })
         .await;
     Ok(indexer)
+}
+
+pub async fn get_current_timestamp_rpc() -> eyre::Result<u64> {
+    let provider = ProviderBuilder::new().connect(&CONFIG.http_rpc_url).await?;
+    let block = provider
+        .get_block_by_number(alloy::eips::BlockNumberOrTag::Latest)
+        .await?
+        .ok_or_else(|| eyre::eyre!("Latest block not found"))?;
+
+    Ok(block.header.timestamp)
 }
 
 pub async fn register_input_published(

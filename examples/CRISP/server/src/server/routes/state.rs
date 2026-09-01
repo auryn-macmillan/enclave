@@ -304,8 +304,8 @@ async fn get_all_round_results(
     let requesters = incoming.requesters;
 
     for e3_id in round_ids {
-        match store.e3(&e3_id).get_web_result_request().await {
-            Ok(w) => {
+        match store.e3(&e3_id).try_get_web_result_request().await {
+            Ok(Some(w)) => {
                 if !requesters.is_empty() {
                     // if we have any requesters to filter by, do it
                     if requesters.contains(&w.requester) {
@@ -315,15 +315,16 @@ async fn get_all_round_results(
                     states.push(w);
                 }
             }
-            Err(e) => {
-                // Expected until a verified public-key byte event creates the `_e3:` record. See
-                // the note in
-                // `get_current_round_for_requester`.
+            Ok(None) => {
                 info!(
-                    "Round {} has no verified public-key bytes yet — skipping: {:?}",
-                    e3_id, e
+                    "Round {} has no verified public-key bytes yet; skipping it",
+                    e3_id
                 );
-                continue;
+            }
+            Err(error) => {
+                error!("Could not read round {e3_id} from the store: {error:?}");
+                return HttpResponse::InternalServerError()
+                    .body("Failed to retrieve round state");
             }
         }
     }

@@ -79,10 +79,12 @@ impl<P: Provider + WalletProvider + Clone + 'static> InterfoldSolWriter<P> {
             ctx.cancel_future(handle);
         }
 
+        let party_id =
+            failure_watch_party_id(&stage, self.committee_party_ids.get(&e3_id).copied());
         let delay = failure_watch_delay(
             Self::now_unix_secs(),
             schedule.deadline,
-            self.committee_party_ids.get(&e3_id).copied(),
+            party_id,
             schedule.permissionless_grace,
             FAILURE_PARTY_STAGGER_SECS,
         );

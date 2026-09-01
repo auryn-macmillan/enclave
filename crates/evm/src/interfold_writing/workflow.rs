@@ -10,7 +10,7 @@
 //! invariants hold; rejecting a malformed result is safer than a partial
 //! on-chain write.
 
-use e3_events::{E3id, Proof};
+use e3_events::{E3Stage, E3id, Proof};
 use e3_utils::utility_types::ArcBytes;
 use std::time::Duration;
 
@@ -82,6 +82,18 @@ pub(crate) fn failure_watch_delay(
     Duration::from_secs(delay)
 }
 
+/// Return the finalized committee party that can act during the protected grace window.
+///
+/// A `Requested` E3 has only provisional ticket candidates. The registry does not consider those
+/// candidates active committee members, so they must wait for permissionless failure marking.
+pub(crate) fn failure_watch_party_id(stage: &E3Stage, party_id: Option<u64>) -> Option<u64> {
+    if *stage == E3Stage::Requested {
+        None
+    } else {
+        party_id
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,5 +159,14 @@ mod tests {
         assert_eq!(failure_watch_delay(200, 160, None, 90, 15).as_secs(), 50);
         assert_eq!(failure_watch_delay(250, 160, None, 90, 15).as_secs(), 0);
         assert_eq!(failure_watch_delay(160, 160, None, 0, 15).as_secs(), 1);
+    }
+
+    #[test]
+    fn requested_stage_ignores_provisional_party_id() {
+        assert_eq!(failure_watch_party_id(&E3Stage::Requested, Some(2)), None);
+        assert_eq!(
+            failure_watch_party_id(&E3Stage::CommitteeFinalized, Some(2)),
+            Some(2)
+        );
     }
 }

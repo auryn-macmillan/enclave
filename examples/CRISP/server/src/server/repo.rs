@@ -137,6 +137,7 @@ impl<S: DataStore> CrispE3Repository<S> {
         }
     }
 
+    #[cfg(test)]
     async fn set_crisp(&mut self, value: E3Crisp) -> Result<()> {
         let key = self.crisp_key();
         self.store
@@ -502,12 +503,6 @@ impl<S: DataStore> CrispE3Repository<S> {
     pub async fn get_committee_public_key(&self) -> Result<Vec<u8>> {
         let e3 = self.get_e3().await?;
         Ok(e3.committee_public_key)
-    }
-
-    pub async fn get_web_result_request(&self) -> Result<WebResultRequest> {
-        self.try_get_web_result_request()
-            .await?
-            .ok_or_else(|| eyre::eyre!("No state stored for round {}", self.e3_id))
     }
 
     /// The round's result, or `None` when the round is not in the store. See
