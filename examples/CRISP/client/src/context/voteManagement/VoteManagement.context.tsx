@@ -176,6 +176,51 @@ const VoteManagementProvider = ({ children }: VoteManagementProviderProps) => {
     getRoundStateLiteRequestRef.current = getRoundStateLiteRequest
   }, [getRoundStateLiteRequest])
 
+  const getCurrentRoundRef = useRef(getCurrentRound)
+  useEffect(() => {
+    getCurrentRoundRef.current = getCurrentRound
+  }, [getCurrentRound])
+
+  useEffect(() => {
+    if (currentRoundId !== null) return
+
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+
+    const poll = async () => {
+      if (cancelled) return
+
+      if (typeof document === 'undefined' || !document.hidden) {
+        const currentRound = await getCurrentRoundRef.current()
+        if (cancelled) return
+
+        if (currentRound) {
+          setCurrentRoundId(currentRound.id)
+          setDisplayedRoundIsFallback(false)
+
+          const fetched = await getRoundStateLiteRequestRef.current(currentRound.id)
+          if (cancelled) return
+
+          if (fetched) {
+            applyRoundState(fetched)
+            setPendingCurrentRoundId(null)
+          } else {
+            setPendingCurrentRoundId(currentRound.id)
+          }
+          return
+        }
+      }
+
+      timer = setTimeout(poll, 10_000)
+    }
+
+    timer = setTimeout(poll, 10_000)
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [currentRoundId, applyRoundState])
+
   useEffect(() => {
     if (!pendingCurrentRoundId) return
 
