@@ -721,7 +721,9 @@ export async function prepareSecureCrispUpgrade(): Promise<void> {
     vectorx: avail.vectorx,
     bfvVerifierRoutes: verifierDeployment.bfvVerifierRoutes,
     safeTransactions: repoRelativePath(rawBatchFile),
-    governanceSafeBuilder: repoRelativePath(safeBuilderFile),
+    governanceSafeBuilder: safeBuilderFile
+      ? repoRelativePath(safeBuilderFile)
+      : undefined,
   };
   if (hasFlag("propose-safe")) {
     plan.safeProposal = config.governance
