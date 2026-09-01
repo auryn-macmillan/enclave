@@ -66,7 +66,7 @@ pub(crate) async fn reconcile_finalized_request_contexts(
     chains: &[ChainConfig],
     provider_cache: &mut ProviderCache,
 ) -> Result<()> {
-    let checkpoint_store = repositories.request_router_checkpoint();
+    let checkpoint_store = RouterRepositoryFactory::request_router_checkpoint(repositories);
     let Some(mut checkpoint) = checkpoint_store.read().await? else {
         return Ok(());
     };
