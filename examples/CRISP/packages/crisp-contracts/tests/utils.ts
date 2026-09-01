@@ -26,6 +26,11 @@ export async function latestTimestamp(): Promise<number> {
 
 /** Advance the same in-memory chain used by the contracts under test. */
 export async function increaseTimeTo(timestamp: number): Promise<void> {
+  const current = await latestTimestamp()
+  if (timestamp < current) {
+    throw new Error(`Cannot move test time backwards from ${current} to ${timestamp}`)
+  }
+  if (timestamp === current) return
   await connection.networkHelpers.time.increaseTo(timestamp)
 }
 
