@@ -710,7 +710,7 @@ jobs:
     # Per leg, because they are not remotely the same size. Anything that generates a ballot proves
     # five Noir circuits, which a two-vCPU runner takes minutes to do; everything else is seconds.
     timeout-minutes: ${{ matrix.timeout }}
-    runs-on: 'ubuntu-latest'
+    runs-on: runs-on=${{ github.run_id }}-${{ matrix['test-suite'] }}/runner=2cpu-linux-x64
     strategy:
       matrix:
         include:

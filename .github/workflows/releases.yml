@@ -144,7 +144,8 @@ jobs:
 
   build-binaries:
     name: Build Binaries (${{ matrix.os_name }}-${{ matrix.arch }})
-    runs-on: ${{ matrix.os }}
+    # RunsOn does not support macOS. The macos-latest leg stays on a GitHub-hosted runner.
+    runs-on: ${{ matrix.os == 'macos-latest' && 'macos-latest' || format('runs-on={0}-linux-x64/runner=2cpu-linux-x64', github.run_id) }}
     needs: validate-and-prepare
     strategy:
       matrix:
