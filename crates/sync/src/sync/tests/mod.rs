@@ -8,6 +8,7 @@ use super::{
     collect_historical_evm_events, has_schema_governed_kv_state, preflight_schema_version,
     project_restart_state_backfill, publish_reconciled_history,
     reconcile_request_router_checkpoint, replay_eventstore_events,
+    REQUEST_ROUTER_PROJECTION_VERSION,
 };
 use crate::{SyncRepositoryFactory, SCHEMA_VERSION};
 use e3_ciphernode_builder::EventSystem;
@@ -23,6 +24,7 @@ use e3_events::{
     SlashExecuted, StoreKeys, SyncEffect, SyncEnded, TakeEvents, TicketGenerated, TicketId,
     Unsequenced,
 };
+use e3_request::E3LifecycleRepositoryFactory;
 use e3_utils::MAILBOX_LIMIT_LARGE;
 use std::collections::BTreeMap;
 
