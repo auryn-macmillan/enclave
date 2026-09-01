@@ -1351,7 +1351,10 @@ committee events do not reset the round, replace indexed output, or resubmit an 
 Merkle root. Startup rebuilds deadline callbacks for active and expired rounds and releases an
 interrupted compute submission for retry. The compute transition is atomic, and a synchronous
 program-server request error releases the claim to `Expired` so a later deadline callback can retry
-it.
+it. Compute submission is at-least-once across a restart because the HTTP response or webhook can
+be lost. A retry can repeat proof work, but it cannot publish a second result: `Interfold` accepts
+ciphertext output only from `KeyPublished`, and the callback treats an E3 that already reached
+`CiphertextReady` or `Complete` as success.
 
 Operator constraint: the Sepolia contract byte limit does not bypass an RPC transaction-size
 limit. The observed secure-8192 public key transaction is rejected before Solidity executes. Until

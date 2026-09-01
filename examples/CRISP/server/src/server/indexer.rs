@@ -619,6 +619,11 @@ async fn restore_round_deadline_callback<S: DataStore>(
         );
     }
     if status == "Computing" || status == "PublishingCiphertext" {
+        // Submission is intentionally at-least-once across the CRISP and program-server process
+        // boundary. A crash can lose the HTTP response or webhook, so keeping this claim would
+        // strand the round. A retry can repeat proof work, but it cannot publish a second result:
+        // Interfold accepts ciphertext output only from KeyPublished, and the callback treats an
+        // already-published output as success.
         repo.update_status("Expired").await?;
         status = "Expired".to_string();
         warn!(
@@ -737,9 +742,10 @@ async fn handle_e3_input_deadline_expiration(
             votes.len(),
             voter_count
         );
-        // The barrier. Two passes can be inside the indexer wait at once, and `run_compute` is
-        // one-shot, so the transition to "Computing" has to be the thing that decides which one
-        // proceeds — in a single store operation, not a read followed by a write.
+        // The local concurrency barrier. Two passes can be inside the indexer wait at once, so the
+        // transition to "Computing" has to decide which one proceeds. It must use one store
+        // operation, not a read followed by a write. Restart recovery remains at-least-once because
+        // the contract, not this process, is the durable idempotency boundary.
         //
         // Claimed here rather than before the wait: a pass that gives up on a short index leaves
         // the round "Expired" so a later pass can still take it, and claiming earlier would pin it

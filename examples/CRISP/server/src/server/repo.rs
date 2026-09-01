@@ -372,7 +372,9 @@ impl<S: DataStore> CrispE3Repository<S> {
     /// Returns whether this caller made the transition. One store operation, because `modify` is a
     /// read-modify-write under a single write lock: reading the status and writing it back as two
     /// separate awaits leaves a window where two deadline passes both observe "Expired" and both
-    /// start the one-shot `run_compute`, publishing two results for one round.
+    /// submit `run_compute` concurrently. Restart recovery can submit again because the remote
+    /// response might have been lost; Interfold is the durable idempotency boundary and accepts
+    /// only the first valid ciphertext output.
     pub async fn try_claim_computing(&mut self) -> Result<bool> {
         let key = self.crisp_key();
         let mut claimed = false;
