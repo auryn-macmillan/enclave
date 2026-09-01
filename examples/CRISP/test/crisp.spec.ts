@@ -338,8 +338,9 @@ test('CRISP smoke test', async ({ context, metamaskPage, extensionId }) => {
   log(`forcing page reload...`)
   await page.reload()
   await page.waitForLoadState('load')
-  log(`ensuring local anvil network after reload...`)
-  await metamask.switchNetwork('localwallet')
+  // The wallet fixture starts on localwallet, and reloading the application does
+  // not change the wallet network. Opening the extension here steals focus from
+  // the application while its round state is being restored.
   await page.bringToFront()
   await reconnectWalletIfNeeded(page, metamask)
   await waitForDemoPollReady(page)
