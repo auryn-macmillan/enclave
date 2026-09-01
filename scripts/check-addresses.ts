@@ -61,6 +61,8 @@ const FILES: Record<string, Role> = {
   'packages/interfold-contracts/deploy/protocol/sepolia-protocol-rehearsal.ciphernodeRegistry.upgrade.safe.json': 'record',
   'packages/interfold-contracts/deploy/protocol/sepolia-protocol-rehearsal.deployment.json': 'record',
   'packages/interfold-contracts/deploy/protocol/sepolia-protocol-rehearsal.safe-transactions.json': 'record',
+  'packages/interfold-contracts/deploy/protocol/sepolia-protocol-rehearsal.secure-crisp.upgrade.json': 'record',
+  'packages/interfold-contracts/deploy/protocol/sepolia-protocol-rehearsal.secure-crisp.upgrade.safe.json': 'record',
   'examples/CRISP/packages/crisp-contracts/deployed_contracts.json': 'record',
   'dappnode/tests/test-hardening.sh': 'record',
 
@@ -88,7 +90,7 @@ const ALLOWED: Record<string, string> = {
 
   // An E3 program belongs to its application, not to the protocol. See the
   // comment on `CONTRACT_KEYS` in packages/interfold-contracts/scripts/genManifest.ts.
-  '0x70254b956d87be536453eda42684bd7b6db96ab5': 'CRISPProgram, sepolia',
+  '0xd9e4f9fec8dca86b32d186730c5bf7c4a66892ed': 'CRISPProgram, sepolia',
 
   // Sepolia ticket collateral is a mock ERC20 that backs InterfoldTicketToken.
   // It is not a manifest top-level contract, but operator docs name it directly
