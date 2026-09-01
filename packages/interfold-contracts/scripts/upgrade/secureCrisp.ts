@@ -25,6 +25,7 @@ import {
 import {
   currentNodeRelease,
   requiredCircuitsVersion,
+  requiresNodeReleasePolicyUpdate,
 } from "../protocol/nodeRelease";
 import {
   aragonAdminSafeBatch,
@@ -341,16 +342,11 @@ export async function prepareSecureCrispUpgrade(): Promise<void> {
     releases.requiredProtocolVersion(),
     releases.requiredNodeGeneration(),
   ]);
-  if (BigInt(nodeRelease.protocolVersion) <= requiredProtocolVersion) {
-    throw new Error(
-      `Secure CRISP requires a new protocol_version above ${requiredProtocolVersion}; this release declares ${nodeRelease.protocolVersion}`,
-    );
-  }
-  if (BigInt(nodeRelease.nodeGeneration) < requiredNodeGeneration) {
-    throw new Error(
-      `node_generation cannot move backwards from ${requiredNodeGeneration} to ${nodeRelease.nodeGeneration}`,
-    );
-  }
+  const updateNodeReleasePolicy = requiresNodeReleasePolicyUpdate(
+    nodeRelease,
+    requiredProtocolVersion,
+    requiredNodeGeneration,
+  );
   const liveImplementation = await proxyImplementation(
     ethers,
     deployment.interfold,
@@ -669,15 +665,17 @@ export async function prepareSecureCrispUpgrade(): Promise<void> {
       ),
     );
   }
-  txs.push(
-    safeTx(
-      deployment.nodeReleaseRegistry,
-      releases.interface.encodeFunctionData("setRequiredNodeRelease", [
-        nodeRelease.protocolVersion,
-        nodeRelease.nodeGeneration,
-      ]),
-    ),
-  );
+  if (updateNodeReleasePolicy) {
+    txs.push(
+      safeTx(
+        deployment.nodeReleaseRegistry,
+        releases.interface.encodeFunctionData("setRequiredNodeRelease", [
+          nodeRelease.protocolVersion,
+          nodeRelease.nodeGeneration,
+        ]),
+      ),
+    );
+  }
 
   const rawBatchFile = batchPath(config);
   const batch = governanceBatch(config, txs);
