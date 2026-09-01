@@ -1,0 +1,76 @@
+{
+  "version": "1.0",
+  "chainId": "11155111",
+  "createdAt": 1788234038519,
+  "meta": {
+    "name": "sepolia-protocol-rehearsal secure CRISP activation",
+    "description": "Install secure BFV routes, bind CRISP, and require the matching ciphernode protocol while requests remain paused.",
+    "executor": "0x8837e47c4Bb520ADE83AAB761C3B60679443af1B"
+  },
+  "transactions": [
+    {
+      "to": "0xAB4a119B34233B8d1169DB17D4f1d674532A9dab",
+      "value": "0",
+      "data": "0x9623609d00000000000000000000000037a409ffb1858a91ae27f4a609970eea10818da6000000000000000000000000cc7b2bf759ae33e34ed21c50832ae50ce45fb5ce00000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000000",
+      "operation": 0,
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0xA706288E0E767C68cFc13d472f1Eb55558ef2282",
+      "value": "0",
+      "data": "0x9623609d000000000000000000000000e755ef6c18897c76f3e71c9ea92ca67c5e73e6e30000000000000000000000005c98ca5e8efaf85fdb8ab5d30db11178c116a82e00000000000000000000000000000000000000000000000000000000000000600000000000000000000000000000000000000000000000000000000000000000",
+      "operation": 0,
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0xE755Ef6c18897C76F3E71C9eA92CA67C5e73e6E3",
+      "value": "0",
+      "data": "0x7c8c3b4d2c2a814a0495f913a3a312fc4771e37552bc14f8a2d4075a08122d356f0849c6000000000000000000000000b380deec9eef5f6711e7314c5e53d1452464fab3",
+      "operation": 0,
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0xE755Ef6c18897C76F3E71C9eA92CA67C5e73e6E3",
+      "value": "0",
+      "data": "0xcbd168722c2a814a0495f913a3a312fc4771e37552bc14f8a2d4075a08122d356f0849c6000000000000000000000000a9e0ec81790769189935008c140782a41d3782db",
+      "operation": 0,
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0xE755Ef6c18897C76F3E71C9eA92CA67C5e73e6E3",
+      "value": "0",
+      "data": "0xc6abe4fa2c2a814a0495f913a3a312fc4771e37552bc14f8a2d4075a08122d356f0849c6000000000000000000000000bd50e5dea9177580ba486c4681068d725e178790",
+      "operation": 0,
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0xE755Ef6c18897C76F3E71C9eA92CA67C5e73e6E3",
+      "value": "0",
+      "data": "0x09a3a814000000000000000000000000d9e4f9fec8dca86b32d186730c5bf7c4a66892ed",
+      "operation": 0,
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0xD9e4f9fec8dCa86B32d186730c5BF7c4a66892ED",
+      "value": "0",
+      "data": "0x6dc70858000000000000000000000000e755ef6c18897c76f3e71c9ea92ca67c5e73e6e3",
+      "operation": 0,
+      "contractMethod": null,
+      "contractInputsValues": null
+    },
+    {
+      "to": "0xd5205463DB59D83b61FbBeB548ADC76F3aa081Cb",
+      "value": "0",
+      "data": "0x056e400800000000000000000000000000000000000000000000000000000000000000030000000000000000000000000000000000000000000000000000000000000001",
+      "operation": 0,
+      "contractMethod": null,
+      "contractInputsValues": null
+    }
+  ]
+}

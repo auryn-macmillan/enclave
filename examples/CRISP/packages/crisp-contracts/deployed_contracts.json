@@ -293,11 +293,11 @@
       "blockNumber": 11594753
     },
     "Risc0BfvCiphertextVerifier": {
-      "address": "0x1A5DBaC0B140289683996913Afbc31e57B9Eb416",
-      "blockNumber": 11594754,
+      "address": "0xBD50E5Dea9177580BA486C4681068d725e178790",
+      "blockNumber": 11609993,
       "constructorArgs": {
         "verifier": "0x8E98bb4b72112670598C10A47dDC31c9d0784A1c",
-        "imageId": "0x7ed0ddeb0cafa64228b51399dff5ea00696c2617f28636b05bd67e6c1506eac3"
+        "imageId": "0xd39da4f3d8944740fa787691c941d40aa9762a6156f025a425e414f9a5ff49c0"
       }
     },
     "PoseidonT3": {
@@ -305,27 +305,38 @@
       "blockNumber": 11594755
     },
     "HonkVerifier": {
-      "address": "0xbFf4ff05831730d15DEdb7Ab46c00ba86A3F733d",
-      "blockNumber": 11594759
+      "address": "0x4A613cF2124f5D1e50ED00f729B3aAD75626E68B",
+      "blockNumber": 11609996
     },
     "OnchainHonkVerifier": {
-      "address": "0xAFd51e7Aee5432B696FA869BCEc4d932366bedC9",
-      "blockNumber": 11594762
+      "address": "0x49B7317A29464adC80BAa8ee9CdE0D710f6f71A0",
+      "blockNumber": 11610000
     },
     "CRISPProgram": {
-      "address": "0x70254B956D87Be536453eDA42684bD7b6db96aB5",
-      "blockNumber": 11594764,
+      "address": "0xD9e4f9fec8dCa86B32d186730c5BF7c4a66892ED",
+      "blockNumber": 11610002,
       "constructorArgs": {
         "initialOwner": "0x8837e47c4Bb520ADE83AAB761C3B60679443af1B",
         "verifierAddress": "0x8E98bb4b72112670598C10A47dDC31c9d0784A1c",
-        "honkVerifierAddress": "0xbFf4ff05831730d15DEdb7Ab46c00ba86A3F733d",
-        "onchainHonkVerifierAddress": "0xAFd51e7Aee5432B696FA869BCEc4d932366bedC9",
-        "imageId": "0x7ed0ddeb0cafa64228b51399dff5ea00696c2617f28636b05bd67e6c1506eac3"
+        "honkVerifierAddress": "0x4A613cF2124f5D1e50ED00f729B3aAD75626E68B",
+        "onchainHonkVerifierAddress": "0x49B7317A29464adC80BAa8ee9CdE0D710f6f71A0",
+        "dataAvailabilityVerifierAddress": "0x721dB9680e21A4ad63428426311384DB30af14f5",
+        "availabilityFinalizationWindow": 10800,
+        "inputAvailabilitySigner": "0x3fe47e11F85a78AFA23F66768a439d0cf5FcA042",
+        "imageId": "0xd39da4f3d8944740fa787691c941d40aa9762a6156f025a425e414f9a5ff49c0"
       }
     },
     "SelfRegistry": {
-      "address": "0x00a2Aaf566593b28EDEb614b81B2Ada01327db7e",
-      "blockNumber": 11594765
+      "address": "0x2b63Da362D8Ca8B5B81EBB1058C5ba94A2a33bF5",
+      "blockNumber": 11610004
+    },
+    "AvailVectorXDataAvailabilityVerifier": {
+      "address": "0x721dB9680e21A4ad63428426311384DB30af14f5",
+      "blockNumber": 11610001,
+      "constructorArgs": {
+        "bridge": "0x967F7DdC4ec508462231849AE81eeaa68Ad01389",
+        "vectorx": "0xe542db219a7e2b29c7aeaeace242c9a2cd528f96"
+      }
     }
   }
 }

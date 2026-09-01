@@ -67,12 +67,12 @@ const NETWORKS: Record<string, NetworkProfile> = {
     explorer: 'https://sepolia.etherscan.io',
     interfold: '0xE755Ef6c18897C76F3E71C9eA92CA67C5e73e6E3',
     ciphernodeRegistry: '0x37A409FfB1858a91AE27f4A609970EEA10818dA6',
-    crispProgram: '0x70254B956D87Be536453eDA42684bD7b6db96aB5',
+    crispProgram: '0xD9e4f9fec8dCa86B32d186730c5BF7c4a66892ED',
     bondingRegistry: '0xbfBCF1F9aBc929992008d787420e58198e17B73A',
     faucet: '0x6ecAA2dcCd6837A85360131D31564Aa2F9Be00F3',
-    // Earliest of the Interfold/CiphernodeRegistry/CRISPProgram deploy blocks
-    // (CRISPProgram) — a later value silently drops early application events.
-    deployBlock: '11594764',
+    // Earliest of the Interfold/CiphernodeRegistry/CRISPProgram deploy blocks.
+    // A later value silently drops early protocol events.
+    deployBlock: '11594970',
     // Mock fee token on the Sepolia deployment.
     feeSymbol: 'FoT',
     feeDecimals: 18,
