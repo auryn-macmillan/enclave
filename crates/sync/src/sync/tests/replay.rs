@@ -88,6 +88,7 @@ async fn router_projection_rebuild_prunes_terminal_non_slashing_failure() -> any
             .id(1)
             .e3_id(e3_id.clone())
             .aggregate_id(1)
+            .ts(100)
             .build(),
     )
     .await?;
@@ -95,6 +96,7 @@ async fn router_projection_rebuild_prunes_terminal_non_slashing_failure() -> any
         InterfoldEvent::<Unsequenced>::test_event("no inputs")
             .id(2)
             .aggregate_id(1)
+            .ts(200)
             .data(E3Failed {
                 e3_id: e3_id.clone(),
                 failed_at_stage: E3Stage::KeyPublished,
