@@ -51,7 +51,7 @@ pub struct InterfoldSolWriter<P> {
     failure_stages: HashMap<E3id, E3Stage>,
     failure_timers: HashMap<E3id, SpawnHandle>,
     failure_stage_discoveries: FailureStageDiscoveryGate,
-    pending_failure_settlements: HashSet<E3id>,
+    failure_settlements: ReplaySubmissionGate<E3id, ()>,
 }
 
 impl<P: Provider + WalletProvider + Clone + 'static> InterfoldSolWriter<P> {
@@ -82,6 +82,11 @@ impl<P: Provider + WalletProvider + Clone + 'static> InterfoldSolWriter<P> {
         failure_stages: HashMap<E3id, E3Stage>,
         pending_failure_settlements: HashSet<E3id>,
     ) -> Result<Self> {
+        let mut failure_settlements = ReplaySubmissionGate::new();
+        for e3_id in pending_failure_settlements {
+            failure_settlements.record(e3_id, ());
+        }
+
         Ok(Self {
             provider,
             contract_address,
@@ -94,7 +99,7 @@ impl<P: Provider + WalletProvider + Clone + 'static> InterfoldSolWriter<P> {
             failure_stages,
             failure_timers: HashMap::new(),
             failure_stage_discoveries: FailureStageDiscoveryGate::default(),
-            pending_failure_settlements,
+            failure_settlements,
         })
     }
 

@@ -56,10 +56,8 @@ impl<P: Provider + WalletProvider + Clone + 'static> InterfoldSolWriter<P> {
         for e3_id in discovery_ids {
             ctx.notify(DiscoverFailureStage { e3_id });
         }
-        for e3_id in &self.pending_failure_settlements {
-            ctx.notify(ProcessFailedE3 {
-                e3_id: e3_id.clone(),
-            });
+        for e3_id in self.failure_settlements.pending_keys() {
+            ctx.notify(ProcessFailedE3 { e3_id });
         }
     }
 
@@ -151,6 +149,7 @@ impl<P: Provider + WalletProvider + Clone + 'static> Handler<EffectsEnabled>
     fn handle(&mut self, _: EffectsEnabled, ctx: &mut Self::Context) -> Self::Result {
         self.effects_enabled = true;
         self.publication.enable_effects();
+        self.failure_settlements.enable_effects();
         self.try_start_pending_plaintexts(ctx);
         self.try_start_failure_watches(ctx);
     }
@@ -379,7 +378,7 @@ impl<P: Provider + WalletProvider + Clone + 'static> Handler<E3StageChanged>
         }
 
         if msg.new_stage == E3Stage::Failed {
-            self.pending_failure_settlements.insert(e3_id.clone());
+            self.failure_settlements.record(e3_id.clone(), ());
             if self.effects_enabled {
                 ctx.notify(ProcessFailedE3 { e3_id });
             }
@@ -393,7 +392,7 @@ impl<P: Provider + WalletProvider + Clone + 'static> Handler<ProcessFailedE3>
     type Result = ResponseActFuture<Self, ()>;
 
     fn handle(&mut self, msg: ProcessFailedE3, _ctx: &mut Self::Context) -> Self::Result {
-        if !self.effects_enabled || !self.pending_failure_settlements.contains(&msg.e3_id) {
+        if self.failure_settlements.start(&msg.e3_id).is_none() {
             return Box::pin(async {}.into_actor(self));
         }
 
@@ -406,22 +405,28 @@ impl<P: Provider + WalletProvider + Clone + 'static> Handler<ProcessFailedE3>
                 (e3_id, result)
             }
             .into_actor(self)
-            .map(|(e3_id, result), actor, ctx| match result {
-                Ok(receipt) => {
-                    actor.pending_failure_settlements.remove(&e3_id);
-                    info!(
-                        tx = %receipt.transaction_hash,
-                        e3_id = %e3_id,
-                        "Called processE3Failure"
-                    );
-                }
-                Err(error) if failure_settlement_error_is_terminal(&error) => {
-                    actor.pending_failure_settlements.remove(&e3_id);
-                    info!(e3_id = %e3_id, "Failure settlement was already processed");
-                }
-                Err(error) => {
-                    actor.bus.err(EType::Evm, error);
-                    ctx.notify_later(ProcessFailedE3 { e3_id }, FAILURE_RETRY_DELAY);
+            .map(|(e3_id, result), actor, ctx| {
+                let terminal = match &result {
+                    Ok(_) => true,
+                    Err(error) => failure_settlement_error_is_terminal(error),
+                };
+                actor.failure_settlements.finish(&e3_id, terminal);
+
+                match result {
+                    Ok(receipt) => {
+                        info!(
+                            tx = %receipt.transaction_hash,
+                            e3_id = %e3_id,
+                            "Called processE3Failure"
+                        );
+                    }
+                    Err(_) if terminal => {
+                        info!(e3_id = %e3_id, "Failure settlement was already processed");
+                    }
+                    Err(error) => {
+                        actor.bus.err(EType::Evm, error);
+                        ctx.notify_later(ProcessFailedE3 { e3_id }, FAILURE_RETRY_DELAY);
+                    }
                 }
             }),
         )
