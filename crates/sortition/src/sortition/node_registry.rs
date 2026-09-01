@@ -16,7 +16,7 @@
 use alloy::primitives::U256;
 use e3_events::E3id;
 use serde::{Deserialize, Serialize};
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::{hash_map::Entry, HashMap, HashSet};
 use tracing::{info, warn};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -158,6 +158,48 @@ pub fn committee_key(e3_id: &E3id) -> String {
 pub struct NodeRegistry;
 
 impl NodeRegistry {
+    /// Rebuild cached active-job counters from the persisted committee map.
+    ///
+    /// `active_jobs` is derived state. Older binaries could increment it more
+    /// than once while replaying the same committee. Rebuilding it on startup
+    /// prevents that stale cache from suppressing valid ticket submissions.
+    pub fn reconcile_active_jobs(store: &mut HashMap<u64, NodeStateStore>) -> usize {
+        let mut corrected_nodes = 0;
+
+        for (chain_id, chain_state) in store {
+            let mut expected = HashMap::<String, u64>::new();
+            for members in chain_state.e3_committees.values() {
+                let unique_members = members.iter().map(String::as_str).collect::<HashSet<_>>();
+                for member in unique_members {
+                    *expected.entry(member.to_owned()).or_default() += 1;
+                }
+            }
+
+            for member in expected.keys() {
+                chain_state.nodes.entry(member.clone()).or_default();
+            }
+
+            for (address, node) in &mut chain_state.nodes {
+                let expected_jobs = expected.get(address).copied().unwrap_or_default();
+                if node.active_jobs == expected_jobs {
+                    continue;
+                }
+
+                warn!(
+                    address = %address,
+                    chain_id = *chain_id,
+                    cached_active_jobs = node.active_jobs,
+                    expected_active_jobs = expected_jobs,
+                    "Repaired stale active-job counter from persisted committees"
+                );
+                node.active_jobs = expected_jobs;
+                corrected_nodes += 1;
+            }
+        }
+
+        corrected_nodes
+    }
+
     /// Register a node on a chain, creating chain/node entries as needed.
     pub fn add_node(store: &mut HashMap<u64, NodeStateStore>, chain_id: u64, address: String) {
         let chain_state = store.entry(chain_id).or_default();

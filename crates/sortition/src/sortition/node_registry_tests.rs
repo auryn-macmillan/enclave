@@ -136,6 +136,43 @@ fn duplicate_committee_publication_increments_jobs_once() {
 }
 
 #[test]
+fn startup_rebuilds_stale_active_job_counters() {
+    let mut store = HashMap::new();
+    let first = e3(1, "17");
+    let second = e3(1, "18");
+    NodeRegistry::record_committee_published(&mut store, &first, &["0xabc".into(), "0xdef".into()]);
+    NodeRegistry::record_committee_published(&mut store, &second, &["0xabc".into()]);
+
+    store
+        .get_mut(&1)
+        .unwrap()
+        .nodes
+        .get_mut("0xabc")
+        .unwrap()
+        .active_jobs = 9;
+    store
+        .get_mut(&1)
+        .unwrap()
+        .nodes
+        .get_mut("0xdef")
+        .unwrap()
+        .active_jobs = 4;
+    store.get_mut(&1).unwrap().nodes.insert(
+        "0xstale".into(),
+        NodeState {
+            active_jobs: 7,
+            ..Default::default()
+        },
+    );
+
+    assert_eq!(NodeRegistry::reconcile_active_jobs(&mut store), 3);
+    assert_eq!(store[&1].nodes["0xabc"].active_jobs, 2);
+    assert_eq!(store[&1].nodes["0xdef"].active_jobs, 1);
+    assert_eq!(store[&1].nodes["0xstale"].active_jobs, 0);
+    assert_eq!(NodeRegistry::reconcile_active_jobs(&mut store), 0);
+}
+
+#[test]
 fn conflicting_committee_replay_preserves_the_first_committee() {
     let mut store = HashMap::new();
     let id = e3(1, "18");

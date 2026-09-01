@@ -200,7 +200,11 @@ impl Sortition {
             address,
         } = params;
         let mut backends = backends_store.load_or_default(HashMap::new()).await?;
-        let node_state = node_state_store.load_or_default(HashMap::new()).await?;
+        let mut node_state = node_state_store.load_or_default(HashMap::new()).await?;
+        node_state.try_mutate_without_context(|mut state| {
+            NodeRegistry::reconcile_active_jobs(&mut state);
+            Ok(state)
+        })?;
         let recovery = recovery_store
             .load_or_default(SortitionRecoveryState::default())
             .await?;
