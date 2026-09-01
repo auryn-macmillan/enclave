@@ -72,6 +72,32 @@ fn completed_request_is_an_error() {
 }
 
 #[test]
+fn canonical_evm_history_for_completed_request_is_ignored() {
+    let id = e3id();
+    let mut completed = HashSet::new();
+    completed.insert(id.clone());
+    let msg = with_e3_id("historical-chain-event", id).with_source(EventSource::Evm);
+
+    assert_eq!(
+        RequestRouter::route(&msg, &completed),
+        RoutingDecision::Ignore
+    );
+}
+
+#[test]
+fn checkpoint_covered_history_for_completed_request_is_ignored() {
+    let id = e3id();
+    let mut completed = HashSet::new();
+    completed.insert(id.clone());
+    let msg = with_e3_id("checkpoint-covered-event", id);
+
+    assert_eq!(
+        RequestRouter::route_with_recovery_context(&msg, &completed, false, true),
+        RoutingDecision::Ignore
+    );
+}
+
+#[test]
 fn settlement_receipt_is_not_routed_to_completed_context() {
     let id = e3id();
     let mut completed = HashSet::new();

@@ -76,11 +76,16 @@ impl Handler<InterfoldEvent> for E3Router {
                 return result.and(checkpoint_result);
             }
             let event_context = msg.get_ctx().clone();
-            let result = match RequestRouter::route_with_context(
+            let checkpoint_covers_event = self
+                .replay_cursors
+                .get(&event_context.aggregate_id())
+                .is_some_and(|cursor| *cursor >= event_context.seq());
+            let result = match RequestRouter::route_with_recovery_context(
                 &msg,
                 &self.completed,
                 msg.get_e3_id()
                     .is_some_and(|e3_id| self.contexts.contains_key(&e3_id)),
+                checkpoint_covers_event,
             ) {
                 RoutingDecision::Broadcast => {
                     for context in self.contexts.values() {

@@ -60,6 +60,16 @@ impl RequestRouter {
         completed: &HashSet<E3id>,
         has_context: bool,
     ) -> RoutingDecision {
+        Self::route_with_recovery_context(msg, completed, has_context, false)
+    }
+
+    /// Decide how an incoming event should be routed during checkpoint recovery.
+    pub fn route_with_recovery_context(
+        msg: &InterfoldEvent,
+        completed: &HashSet<E3id>,
+        has_context: bool,
+        checkpoint_covers_event: bool,
+    ) -> RoutingDecision {
         // Broadcast non-E3-scoped lifecycle signals to every active context:
         //   * `Shutdown` so children can tear themselves down, and
         //   * `EffectsEnabled` so a hydrated request can re-drive its own in-flight work
@@ -118,6 +128,12 @@ impl RequestRouter {
                 _ => false,
             };
             if is_late_terminal {
+                return RoutingDecision::Ignore;
+            }
+            // Finalized chain reconciliation can mark an E3 complete before startup replays its
+            // earlier events. Canonical EVM observations and events already covered by the
+            // request-router checkpoint cannot reopen the completed context.
+            if msg.source() == EventSource::Evm || checkpoint_covers_event {
                 return RoutingDecision::Ignore;
             }
             return RoutingDecision::AlreadyCompleted(e3_id);

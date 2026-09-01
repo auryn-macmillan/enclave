@@ -263,6 +263,7 @@ On restart:
 │        finalized block before actor hydration
 │      → Remove a complete E3 or a non-slashing failed E3 from the active context set
 │      → Retain a failed E3 that still requires accusation or slashing work
+│      → Ignore earlier canonical EVM observations and checkpoint-covered events for a removed E3
 │      → Abort startup after a bounded read failure, an unknown on-chain value, or an
 │        unconfigured chain reference
 │      → Persist the lifecycle map before the checkpoint, so a stopped write retries safely
