@@ -26,10 +26,11 @@ env:
   INFURA_API_KEY: 'zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz'
   ETHERSCAN_API_KEY: 'zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz'
 
+# Each RunsOn label embeds run id, attempt, and job name so jobs never share runners.
 jobs:
   validate-and-prepare:
     name: Validate Tag and Prepare Release
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || format('runs-on={0}-{1}-{2}/runner=2cpu-linux-x64', github.run_id, github.run_attempt, github.job) }}
     outputs:
       version: ${{ steps.release.outputs.version }}
       is_prerelease: ${{ steps.release.outputs.is_prerelease }}
@@ -47,7 +48,7 @@ jobs:
 
   build-ciphernode-image-release:
     name: Build & Push ciphernode (release)
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || format('runs-on={0}-{1}-{2}/runner=2cpu-linux-x64', github.run_id, github.run_attempt, github.job) }}
     needs: [validate-and-prepare, release-candidate-gate]
     env:
       CIPHERNODE_IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/ciphernode
@@ -79,7 +80,7 @@ jobs:
 
   build-e3-support-release:
     name: Build & Push e3-support (release)
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || format('runs-on={0}-{1}-{2}/runner=2cpu-linux-x64', github.run_id, github.run_attempt, github.job) }}
     needs: [validate-and-prepare, release-candidate-gate]
     env:
       SUPPORT_IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/e3-support
@@ -116,7 +117,7 @@ jobs:
 
   build-dappnode-package-release:
     name: Build DAppNode package (release)
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || format('runs-on={0}-{1}-{2}/runner=2cpu-linux-x64', github.run_id, github.run_attempt, github.job) }}
     needs: [validate-and-prepare, build-ciphernode-image-release]
     if: needs.validate-and-prepare.outputs.is_prerelease == 'false'
     steps:
@@ -145,7 +146,7 @@ jobs:
   build-binaries:
     name: Build Binaries (${{ matrix.os_name }}-${{ matrix.arch }})
     # RunsOn does not support macOS. The macos-latest leg stays on a GitHub-hosted runner.
-    runs-on: ${{ matrix.os == 'macos-latest' && 'macos-latest' || format('runs-on={0}-linux-x64/runner=2cpu-linux-x64', github.run_id) }}
+    runs-on: ${{ matrix.os == 'macos-latest' && 'macos-latest' || format('runs-on={0}-{1}-{2}/runner=2cpu-linux-x64', github.run_id, github.run_attempt, github.job) }}
     needs: validate-and-prepare
     strategy:
       matrix:
@@ -202,7 +203,7 @@ jobs:
 
   publish-npm-packages:
     name: Publish NPM Packages
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || format('runs-on={0}-{1}-{2}/runner=2cpu-linux-x64', github.run_id, github.run_attempt, github.job) }}
     needs: [validate-and-prepare, release-candidate-gate]
     permissions:
       contents: read
@@ -260,7 +261,7 @@ jobs:
 
   download-circuits:
     name: Download Circuit Artifacts
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || format('runs-on={0}-{1}-{2}/runner=2cpu-linux-x64', github.run_id, github.run_attempt, github.job) }}
     needs: validate-and-prepare
     outputs:
       source_hash: ${{ steps.pull.outputs.source_hash }}
@@ -311,7 +312,7 @@ jobs:
 
   release-candidate-gate:
     name: Approve Release Artifacts
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || format('runs-on={0}-{1}-{2}/runner=2cpu-linux-x64', github.run_id, github.run_attempt, github.job) }}
     needs: [validate-and-prepare, build-binaries, download-circuits]
     steps:
       - name: Confirm candidate qualification
@@ -319,7 +320,7 @@ jobs:
 
   publication-gate:
     name: Verify Every Release Publication
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || format('runs-on={0}-{1}-{2}/runner=2cpu-linux-x64', github.run_id, github.run_attempt, github.job) }}
     needs:
       [validate-and-prepare, build-ciphernode-image-release, build-e3-support-release, publish-npm-packages, build-dappnode-package-release]
     if: ${{ always() && !cancelled() }}
@@ -337,7 +338,7 @@ jobs:
 
   create-github-release:
     name: Create GitHub Release
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || format('runs-on={0}-{1}-{2}/runner=2cpu-linux-x64', github.run_id, github.run_attempt, github.job) }}
     needs: [validate-and-prepare, build-binaries, download-circuits, publication-gate]
     steps:
       - name: Checkout

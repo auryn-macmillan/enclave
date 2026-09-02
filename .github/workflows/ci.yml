@@ -36,10 +36,12 @@ env:
 permissions:
   contents: read
 
+# Fork pull requests run untrusted code, so they stay on GitHub-hosted runners.
+# Each RunsOn label embeds run id, attempt, and job name so jobs never share runners.
 jobs:
   detect_changes:
     timeout-minutes: 5
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || format('runs-on={0}-{1}-{2}/runner=2cpu-linux-x64', github.run_id, github.run_attempt, github.job) }}
     outputs:
       rust_unit_tests: ${{ steps.jobs.outputs.rust_unit_tests }}
       rust_integration_tests: ${{ steps.jobs.outputs.rust_integration_tests }}
@@ -172,7 +174,7 @@ jobs:
     needs: [detect_changes]
     if: needs.detect_changes.outputs.rust_unit_tests == 'true'
     timeout-minutes: 20
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || format('runs-on={0}-{1}-{2}/runner=2cpu-linux-x64', github.run_id, github.run_attempt, github.job) }}
     permissions:
       contents: read
       actions: write
@@ -281,7 +283,7 @@ jobs:
     needs: [detect_changes]
     if: needs.detect_changes.outputs.zk_prover_integration == 'true'
     timeout-minutes: 30
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || format('runs-on={0}-{1}-{2}/runner=2cpu-linux-x64', github.run_id, github.run_attempt, github.job) }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
@@ -347,7 +349,7 @@ jobs:
     needs: [detect_changes]
     if: needs.detect_changes.outputs.docker_support == 'true'
     timeout-minutes: 30
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || format('runs-on={0}-{1}-{2}/runner=2cpu-linux-x64', github.run_id, github.run_attempt, github.job) }}
     permissions:
       contents: read
       packages: write
@@ -391,7 +393,7 @@ jobs:
     needs: [detect_changes]
     if: needs.detect_changes.outputs.docker_ciphernode == 'true'
     timeout-minutes: 60
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || format('runs-on={0}-{1}-{2}/runner=2cpu-linux-x64', github.run_id, github.run_attempt, github.job) }}
     permissions:
       contents: read
       packages: write
@@ -437,7 +439,7 @@ jobs:
     needs: [detect_changes]
     if: needs.detect_changes.outputs.contracts == 'true'
     timeout-minutes: 15
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || format('runs-on={0}-{1}-{2}/runner=2cpu-linux-x64', github.run_id, github.run_attempt, github.job) }}
     permissions:
       contents: read
       actions: write
@@ -495,7 +497,7 @@ jobs:
     needs: [detect_changes]
     if: needs.detect_changes.outputs.net == 'true'
     timeout-minutes: 15
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || format('runs-on={0}-{1}-{2}/runner=2cpu-linux-x64', github.run_id, github.run_attempt, github.job) }}
     steps:
       - name: 'Check out the repo'
         uses: 'actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10' # v6
@@ -511,7 +513,7 @@ jobs:
     needs: [detect_changes]
     if: needs.detect_changes.outputs.integration_prebuild == 'true'
     timeout-minutes: 30
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || format('runs-on={0}-{1}-{2}/runner=2cpu-linux-x64', github.run_id, github.run_attempt, github.job) }}
     steps:
       - name: 'Check out the repo'
         uses: 'actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10' # v6
@@ -710,7 +712,7 @@ jobs:
     # Per leg, because they are not remotely the same size. Anything that generates a ballot proves
     # five Noir circuits, which a two-vCPU runner takes minutes to do; everything else is seconds.
     timeout-minutes: ${{ matrix.timeout }}
-    runs-on: runs-on=${{ github.run_id }}-${{ matrix['test-suite'] }}/runner=2cpu-linux-x64
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || format('runs-on={0}-{1}-{2}-{3}/runner=2cpu-linux-x64', github.run_id, github.run_attempt, github.job, matrix['test-suite']) }}
     strategy:
       matrix:
         include:
@@ -977,7 +979,7 @@ jobs:
     needs: [detect_changes]
     if: needs.detect_changes.outputs.build_circuits == 'true'
     timeout-minutes: 30
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || format('runs-on={0}-{1}-{2}/runner=2cpu-linux-x64', github.run_id, github.run_attempt, github.job) }}
     permissions:
       contents: read
       actions: write
@@ -1120,7 +1122,7 @@ jobs:
     needs: [detect_changes, build_circuits]
     if: needs.detect_changes.outputs.zk == 'true'
     timeout-minutes: 30
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || format('runs-on={0}-{1}-{2}/runner=2cpu-linux-x64', github.run_id, github.run_attempt, github.job) }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
@@ -1201,7 +1203,7 @@ jobs:
     needs: [detect_changes]
     if: needs.detect_changes.outputs.build_e3_support_dev == 'true'
     timeout-minutes: 20
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || format('runs-on={0}-{1}-{2}/runner=2cpu-linux-x64', github.run_id, github.run_attempt, github.job) }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
@@ -1237,7 +1239,7 @@ jobs:
     needs: [detect_changes]
     if: needs.detect_changes.outputs.build_sdk == 'true'
     timeout-minutes: 30
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || format('runs-on={0}-{1}-{2}/runner=2cpu-linux-x64', github.run_id, github.run_attempt, github.job) }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
@@ -1310,7 +1312,7 @@ jobs:
     needs: [detect_changes]
     if: needs.detect_changes.outputs.crisp == 'true'
     timeout-minutes: 20
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || format('runs-on={0}-{1}-{2}/runner=2cpu-linux-x64', github.run_id, github.run_attempt, github.job) }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
 
@@ -1481,7 +1483,7 @@ jobs:
     needs: [detect_changes, build_interfold_cli, build_e3_support_dev]
     if: needs.detect_changes.outputs.init == 'true'
     timeout-minutes: 10
-    runs-on: runs-on=${{ github.run_id }}/runner=2cpu-linux-x64
+    runs-on: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && 'ubuntu-latest' || format('runs-on={0}-{1}-{2}/runner=2cpu-linux-x64', github.run_id, github.run_attempt, github.job) }}
     steps:
       - name: Install pnpm
         uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
