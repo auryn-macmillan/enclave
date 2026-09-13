@@ -1,0 +1,6 @@
+PASS C4 v1: compute_aggregated_shares body verbatim (self-de-referenced)
+PASS C4 v1: normalize_aggregated body verbatim
+PASS C4 v2: normalize_aggregated body verbatim
+PASS C5 v1: verify_pk_for_basis loop body verbatim (self-inlined)
+PASS C4 v2: normalize fixed-pointed on decrypted_shares (no H-fold)
+AUDIT OK (all bodies verbatim vs production @ HEAD)

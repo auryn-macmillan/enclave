@@ -1,0 +1,7 @@
+= r131 box census 09:31:07 =
+nproc=8
+MemTotal:       32866100 kB
+MemAvailable:   31511496 kB
+SwapTotal:             0 kB
+0.04 0.02 0.03 1/307 260202
+5dcd172b5b97e3fae1fdfa49c2978bb80b13b2df
