@@ -1,0 +1,7 @@
+[package]
+name = "r132_p4"
+type = "bin"
+authors = ["interfold-research probe (round 132)"]
+
+[dependencies]
+lib = { path = "/home/dev/interfold-research/interfold/circuits/lib" }

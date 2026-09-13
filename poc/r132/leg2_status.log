@@ -1,0 +1,35 @@
+p2 compile rc=0
+p2 gates rc=0 artifact=r132_p2.json
+p3 compile rc=1
+p3 NO artifact
+p4 compile rc=1
+p4 NO artifact
+cfg_restored=ec58545e2a4cc136b90f65e205d41606b7667526f3607a9deadd859a75be1de7
+CONFIG RESTORE FAIL
+DONE leg2 2026-09-13T13:20:24Z
+p3 compile rc=1
+p3 NO artifact
+p4 compile rc=1
+p4 NO artifact
+cfg pre  shas: 0bf0cc642ddfa98d48f51f7d007dc6749e9c1d4b4b02c36d9e1da1d4735d0ac4 7f07de82407c9601dd737044af69a068238dd9ff175f51c4d64d8e00980aa207 
+cfg post shas: 0bf0cc642ddfa98d48f51f7d007dc6749e9c1d4b4b02c36d9e1da1d4735d0ac4 7f07de82407c9601dd737044af69a068238dd9ff175f51c4d64d8e00980aa207 
+CONFIG BYTE-RESTORED OK
+DONE leg2b 2026-09-13T13:22:14Z
+p3 compile rc=1
+p3 NO artifact
+p4 compile rc=1
+p4 NO artifact
+CONFIG BYTE-RESTORED OK
+DONE leg2c 2026-09-13T13:23:14Z
+p3 compile rc=1
+p3 NO artifact
+p4 compile rc=1
+p4 NO artifact
+CONFIG BYTE-RESTORED OK
+DONE leg2d 2026-09-13T13:26:55Z
+p3 compile rc=0
+p3 gates rc=0
+p4 compile rc=0
+p4 gates rc=0
+CONFIG BYTE-RESTORED OK
+DONE leg2e 2026-09-13T13:30:36Z
