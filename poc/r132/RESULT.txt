@@ -1,0 +1,72 @@
+# r132 RESULT — (a)-block FINE SPLIT (I18/I19 design round 2, owner-signed lever)
+# HEAD 68b5c723 (r131). CG-0 = secure-8192 + committee/small (N=19/T=9/H=10, L=3, BIT_MSG=58).
+# 4c-pinned taskset (r126 protocol). Config flip insecure->secure + min->small, BYTE-RESTORED
+# (sha-asserted: 0bf0cc642d... / 7f07de8240... pre==post, see cfg_restore.txt).
+# Gate reader: bb 5.1.0 `gates -b <artifact> -t noir-recursive-no-zk`.
+
+## RAN GATE TABLE (5 probe circuits, all compile rc=0 / gates rc=0)
+#   arm  gates    acir    wall(4c)   peak-RSS   what it contains
+#   p1   19       1       0:00.67    0.23 GiB   floor: polymorphic pub pin only
+#   p2   16,401   8,192   0:09.75    0.46 GiB   production reverse pass, per-element pub pins
+#   p3   2,749    2,732   0:11.95    1.69 GiB   reversed payload (flatten BIT=58) + running-acc pin
+#   p4   71,981   3,644   0:12.72    0.48 GiB   FULL production per-cell body (== C4 verify_commitments
+#                                          one cell; StringUtils sha pin, sharpe pin: commit_out == expected)
+#   p0   71,981   3,644   0:12.70    0.48 GiB   same body, leg-1 sibling build (byte-parallel
+#                                          ACIR: gate count IDENTICAL to p4 => build NTC live)
+
+## CALIBRATION (skill anchor-reproduce gate)
+#   per-cell probe x 30 cells (H=10 x L=3) = 30 x 71,981 = 2,159,430 g
+#   vs r131 V0-V1 delta (a) block 2,158,861 g -> RATIO 1.00026 (0.026%): the per-cell
+#   probe slightly OVER-counts vs the 30-cell production block — in the full C4 circuit
+#   adjacent per-cell sponge instantiations share pinned intermediate wires
+#   (cross-cell acc/relay caching), which the lone probe cannot get. Attribution class
+#   agreed to 0.03%; the per-cell x30 figure is a label, not an exact block re-derivation.
+
+## FINE SPLIT (per-cell, RAN; HONEST LABELING: the two-ARM delta is the measurement,
+## not an NESTED decomposition -- p3 < p2 shows the arms share intermediate wires
+## (the sponge reuses packed carriers), so per-segment subtraction is NOT additive;
+## only the two-arm difference is valid):
+#   SAFE sponge part of the per-cell body = p4 - p3 = 69,232 g = 96.18% of the per-cell body
+#   remainder (pack+reverse+pinned payload stream, sponge-DROPPED probe) = p3 = 2,749 g = 3.82%
+#   (p2 is the standalone full-pinned reverse probe, 16,401 g = pin-width class,
+#    NOT on the p0/p4 spine; p2 - p1 = 16,382 g.)
+#   x 30 cells: sponge-class share 2,076,960 g = 96.21% of the r131 (a) block 2,158,861 g.
+
+## DESIGN CONSEQUENCE (RAN-robust; DRAFT = producer arm not yet built)
+# (1) 96.2% of the C4 recommit block IS the SAFE sponge, not the data movement. The
+#     producer-side commit-and-attest route (locked r131) replaces per-cell 71,981 g with
+#     a cheap binding against an ONCE-attested commitment; per-cell cost then = binding
+#     acc ~ 2,700 g (the p3 class) + ~0 pin -> theoretical C4 (a) delta deepens from
+#     -60.45% toward -floor 1,289,705 g + producer-attest term (DRAFT, r133).
+# (2) The 69,232 g/cell SPONGE TERM is the comparable unit for the C3-attestation
+#     floor probe (r133): if the producer re-commits each share with the same
+#     per-share sha in-circuit, the attestation costs ~69.2k g per (party, modulus);
+#     if instead the share is Merkle-noded + node-proven, the r131 np2 unit is
+#     40,618 g/cell. Two binding shapes differ by 1.70x -> the binding-scheme choice
+#     (Merkle-node vs direct-sha) is a first-order cost decision the producer arm
+#     must settle before the owner re-gate.
+# (3) Wall/RSS note: the per-cell probe is 12.7 s compile / 0.48 GiB @4c (vs C4 full 527 s /
+#     17.70 GiB r131) — the recommit block's wall/RSS dominance (10.6x) concentrates in the
+#     30-cell production instantiation + fixed panels, NOT the per-cell arithmetic: the
+#     producer arm probe MUST reproduce the full-scale shape, a per-cell number alone
+#     understates the wall recovery (already RAN-bounded by r131 V1 38 s / 1.68 GiB).
+
+## LEG OPERATIONS
+# leg1 (13:15-13:16 UTC): p1,p2[ELIDED],p3[ELIDED],p4, p0 — first pass; pins were a single
+#   scalar and got SHAVE-elided (p2/p3 read 19 g = p1): same pin-eligibility class r131 np2
+#   logged (a pub output without an asserting constraint gets its whole sponge elided).
+# FIX: p2 -> per-element pub pins [Field; 8192]; p3 -> payload accum pin; p4/p0 use a sha pin.
+# leg2 (13:20-13:30 UTC): p2 rebuilt => 16,401 g (pins live); p3/p4 were rebuilt
+#   twice for a Noir type error (vector/pub entry-point type, then vector-to-array
+#   coercion) before leg2e GREEN (13:27-13:30) — configs byte-restored after EVERY leg,
+#   sha-asserted.
+# Pin-ELISION DEFENSE for leg2: p2 re-read 16,401 g (not 19) => pins LIVE-probed;
+#   p4-p3=69,232 g is of the same class as the r131 np2 node cost (40,618 g) plus the
+#   squeeze output => the SAFE sponge is ELIDED, not the pins.
+
+## STATUS
+# I18/I19 ADVANCED: design-locked r131 -> per-cell anatomy RAN-locked (r132).
+# Next (r133, owner re-gate on any source diff): C3 producer-side attestation floor probe —
+#   build the C3 (share generator) commit-at-generation arm, R=2157 small committee,
+#   two binding shapes (Merkle-node-class 40,618 g vs direct-sha-class 69,232 g),
+#   delta against r113/r126 C3 anchors (8,034 g-op-scale).
