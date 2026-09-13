@@ -1,0 +1,51 @@
+PASS C4 v0 gates == r46 anchor 3571446 got=3571446 want=3571446
+PASS C4 v0 acir == r46 anchor 734617 got=734617 want=734617
+PASS C4 additivity A+B+C==V0 got=3571446 want=3571446
+PASS C5 additivity got=2554248 want=2554248
+PASS np2 gates in [40000,150000] got=True want=True
+
+WROTE RESULT.txt (43 lines)
+
+# r131 RESULT — C4/C5 commitment-scheme DESIGN round (RAN legs 1–3 + node probe)
+# config: CG-0 = secure-8192 + committee/small (N=19/T=9), H=10, L=3, B=2157. HEAD 5dcd172b. 4c-pinned.
+# no upstream rebase (origin/main == merge-base 95c38d70 at round start).
+
+# ============ GATE TABLE (RAN @ HEAD 5dcd172b, vs prod SRC, config-flipped+restored) ============
+#   arm             gates     (of C4)   (of C5)
+#   c4_v0 (prod mir)  3571446  =100.00%
+#   c4_v1 (=C4-(a))   1412585        -60.45%
+#   c4_v2 (=C4-flo)   1289705
+#   c5_v0 (prod mir)  2554248  (C5=100.00%)
+#   c5_v1 (=C5-(a))    396807        -84.46%
+#   c5_v2 (=C5-floor)  215849
+# node probe: np2 = 40618 gates (one 2-elem SAFE node, output-pinned); np3 = 40618
+
+# ============ C4/PURPLE DECOMPOSITION (RAN, additivity-verified) ============
+#   (a) re-commit block   =  2158861 gates = 60.45% of C4   [RAN-split, equivalent to r46 "2.16M"]
+#   (b) H-fold + normalize=   122880 gates = 3.44% of C4   [per-limb stand-in: V2 (a) normalized decrypt[0]; net number = normalized residual]
+#   (c) floor             =  1289705 gates = 36.11% of C4
+
+# ============ C5 DECOMPOSITION (RAN, 1st pass r113/by story) ============
+#   (a) recommit block  =  2157441 gates = 84.46% of C5 (r113 DIGIT anchor 2157441 — reproduced exact)
+#   (b) divis. + residue=   180958 gates = 7.08% of C5 (r118 anchor 180958 — reproduced exact)
+#   (c) floor           =   215849 gates = 8.45% of C5 (r113 anchor 215849 — reproduced exact)
+
+# ============ LEVER UPPER BOUNDS (RAN-robust: measured floors) ============
+# C4 S-purge: keep floor+H-fold dropped recommit block → gate delta = -60.45% C4 (RAN-robust floor = 1412585 gates).
+#   real delivered cut = floor + committed-grid verification cost (DRAFT — scheme internals not yet built).
+# C5 leaf-skeleton: same identity → -84.46% C5; r113 gate = same block, delta 1420 gates.
+
+# ============ WAL/RSS (4c-pinned, secure-8192/small) ============
+#   c4_v0   wall=527.00s (8:47)  RSS peak=  17.70 GiB
+#   c4_v1   wall= 38.00s (0:38)  RSS peak=   1.68 GiB
+#   c4_v2   wall= 22.00s (0:22)  RSS peak=   1.32 GiB
+#   c5_v0   wall= 56.00s (0:56)  RSS peak=   2.32 GiB
+#   c5_v1   wall= 26.00s (0:26)  RSS peak=   1.40 GiB
+#   c5_v2   wall=  8.00s (0:08)  RSS peak=   0.78 GiB
+
+# ============ CALIBRATION ANCHORS (RAN, reproduce r46/r113/r118 DIGIT) ============
+# C4 G v0: 3571446/734617 = r46 (734617 ACIR = r46 DIGIT, verify exact)
+# C5 G v0: 2554248/193909 = r113 (2554248 gates, --Time anchor exact)
+# C5 v1: 396807, v2: 215849 = r113 DIGIT-anchors (exact)
+# C4 B (recommit): 2158861 ≈ r46 "2.16M block" (annotated at this purview)
+
