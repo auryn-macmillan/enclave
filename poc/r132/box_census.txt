@@ -1,0 +1,7 @@
+= r132 box census 2026-09-13T13:15:38Z =
+nproc=8
+MemTotal:       32866100 kB
+MemAvailable:   31474128 kB
+SwapTotal:             0 kB
+0.10 0.03 0.01 1/322 267619
+68b5c7234be40aef02a3fbb72f3fc56801c7df3d
