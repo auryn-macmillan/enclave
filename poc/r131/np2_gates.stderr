@@ -1,0 +1,5 @@
+error: unrecognized subcommand 'gates'
+
+Usage: nargo <COMMAND>
+
+For more information, try '--help'.
