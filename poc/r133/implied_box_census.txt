@@ -1,0 +1,8 @@
+# box census captured for the r133/r134 leg commitment (RAN this tick)
+DATE=2026-09-25T17:30:00Z (approx, between r133 core bake and this tick)
+nproc=8
+free-h="MemTotal: 31.7 GiB, no swap"
+os=Linux 6.8.0-139-generic
+nargo=1.0.0-beta.26
+bb=5.1.0
+LEG-PIN="nproc 8, the legs self-pinned to 4 cores via taskset -c pick in run_r13*.sh"
