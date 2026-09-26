@@ -1,0 +1,32 @@
+== A. The walking pin is LINEAR (bilinear over F_P) ==
+  [PASS] walking_pin(a X + b Y) == a pin(X) + b pin(Y)  mod P
+         reason: Horner's form is a stack composition of scalar products; in every step the pin bilinearizes into A and B. Therefore the pin is a linear functional over F_P with kernel of dimension at least 1.
+         value : lhs = 5990179743580388362584429114931124779250662835291692808771412342957076089630, rhs = 5990179743580388362584429114931124779250662835291692808771412342957076089630
+
+== B. The walking pin has a non-trivial KERNEL (r136 leg_b, restated) ==
+  [PASS] walking_pin(vK) == 0 and vK is not the zero vector
+         reason: vK = [0]*N with vK[N-2] = 1, vK[N-1] = -ALPHA mod P. The Horner recurrence accumulates alpha*1 + (-alpha) = 0 at the tail step. All prior positions are 0, so the accumulator enters the tail step at 0 and exits at 0. pin(vK) == 0 mod P, but vK is nonzero -> kernel dimension >= 1.
+         value : |vK| = 52435875175126190479447740508185965837690552500527637822600017157749724563315, pin(vK) = 0
+
+== C. Building a valid P3-ct0 tuple: the RING IDENTITY holds by construction ==
+  [PASS] residual (built ct0) - (pk0*u + e0 + k1*k0 + r1*q) is the zero polynomial
+         reason: build_valid_tuple constructs ct0 as the EXACT sum and then stores it. ring_identity_residual recomputes the RHS independently and returns ct0 - RHS. Both use the same ring multiplication; by construction ct0 == RHS pointwise, so the residual is 0.
+         value : residual = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+== D. A 1-coefficient tamper to ct0 breaks the identity ==
+  [PASS] SH Breaking ct0[3] by +1 makes the residual nonzero
+         reason: The residual at index 3 is now 1 (mod Q), all other indices still 0. A nonzero residual in N-ring means the polynomial identity is genuinely broken, not merely 'worse in expectation': we are in a finite ring, and any nonzero residue is a deterministic DISCRIMINATOR (the circuit escalates this via one SZ modulus CHECK at a random gamma, but the underlying claim for this model is the stronger exact ring identity).
+         value : residual = [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+== E. The RANGE PIN catches a witness whose walking-pin ALONE would not ==
+  [PASS] range_ok(BASE) is TRUE; range_ok(BOGUS) is FALSE
+         reason: BASE is drawn from {0..6} so every coef <= 6 = EGSB. BOGUS[7] = 19 is out of range. The WALKING PIN over BOGUS is still a well-defined field element (the pin is a stack fold, not a range check) and might be in the SAME affine space as pin(BASE). The RANGE PIN is a per-index ABSOLUTE bound check and catches this immediately for every in-range witness while the pin ALONE would not.
+         value : BOGUS[7] = 19, EGSB = 6, pin(BOGUS) = 47632295028461947176689709145862963325172569760962393196879169344445079261789
+
+== F. SZ-IDENTITY is LOAD-BEARING: removing it reopens the forgery path ==
+  [PASS] forged tuple (wrong pk0, zeroed ct0): pin well-defined, in-range, but identity FAILS
+         reason: pin = well-defined field element; range on ct0 = [0]*N <= Q -> in-range. The ring identity FAILS because pk0*u != pk0*u + 37*u for any x; residual == non-trivial term in the ring. This demonstrates the SZ-identity is LOAD-BEARING: with identity dropped, an attacker could submit a.ct0 that looks (pin + range) like a valid commitment of some valid tuple while relying on the identity to do the actual BInding.
+         value : identity_holds = False
+
+  total: 6 PASS, 0 FAIL.
+ALL CHECKS PASS
