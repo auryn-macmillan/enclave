@@ -1,0 +1,2 @@
+config flipped insecure->secure (dkg preset only)
+flip rc=0
