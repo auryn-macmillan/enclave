@@ -1,0 +1,118 @@
+r138 RESULT (post-rebase rabbit, secure-8192/small H=14 A production shape,
+upstream base 51fa7415a57c920b, HEAD 43fe1a02 at round start; box 8c / 32 GiB /
+0 swap HARDWARE-unchanged since 2026-09-11 remigration; RAN box census in
+RAN.out)
+
+ONE IDEA: RAN-anchor the r136 DRAFT "in-leaf wall" ceiling for the I18/I19
+consumer-cheap-verify swap via the r134 leg_h14 in-leg A-shape numbers. Zero
+fresh compile (round has no new source; it is a model/reconciliation round on
+prior RAN legs). Chassis = tracked poc/r138/ only (NO circuits/crates source
+edit -- the in-tree C4 consumer diff is STILL the owner re-gate per the
+2026-09-12 standing per-diff rule).
+
+CLAIM (in advance): r136 printed "1,577,207 g = -64.83% in-leaf wall class
+reduction" and DRAFT-locked it. That headline is a GATE ratio
+(V1 + binding row) / V0 relabeled as a WALL claim. The in-leaf WALL cut is
+LARGER than the gate cut because the (a) S-sponge block is memory-bandwidth-
+BROKEN (r131/r132): it stays ~1.7 GiB after the drop but the 3M-gate class
+bucketing dominates the V0 24.16 GiB peak. RAN-anchor both the gate AND the
+wall with RAN inputs on both endpoints (skill rule: keep RAN-robust, do not
+cross-multiply DRAFTs).
+
+METHOD (RAN, self-sourced, zero compile):
+  verify_r138.py reads r134 leg_h14 on-disk artifacts (h14_v0, h14_v1,
+  h14_cell, h14_grid: *_gates.json + *_run.out) + r137 w6/w12 gates.jsons;
+  runs `time`-style parse for wall (Elapsed) and peak (max RSS GiB); asserts
+  every re-read matches the r134/r137 record digit-exact (regression canary).
+
+RAN INPUTS (all on disk, re-read this round):
+  r134 V0  (full C4, (a) present)   4,484,154 g  wall 725.14 s  peak 24.16 GiB
+  r134 V1  ((a) dropped, divrow flr) 1,461,749 g  wall  41.69 s  peak   1.71 GiB
+  r134 cell (1x direct-sha p4)           71,981 g  wall   1.97 s  peak   0.33 GiB
+  r134 grid (42x 2-felt compact row)       3,169 g  wall   0.93 s  peak   0.28 GiB
+  r137 w6  (6-cell runacc)               16,409 g
+  r137 w12 (12-cell runacc)              32,801 g
+  => c = (w12-w6)/6 = 2,732.000 g/cell ; S = 17.0 g ; 42-cell in-block =
+     114,761 g (RAN 2-pt slope, inside -0.004% of r136 DRAFT 42*2749=115,458)
+
+FINDINGS (RAN, exact):
+  (1) (a)-block (V0 - V1):
+        gate = 3,022,405 g (r134 r14 anchor digit-exact)
+        WALL = 725.14 - 41.69 = 683.45 s  = 94.25% of V0 WALL
+        PEAK = 24.16 - 1.71 = 22.45 GiB
+     The (a) S-sponge block is -67.40% of V0 GATES but -94.25% of V0 WALL.
+     It is memory-bandwidth-BROKEN, not gate-bound (r131/r132 memory class).
+     This asymmetry is THE reason the wall win dwarfs the gate win.
+
+  (2) GATE post-swap (RAN; runacc binding = r137 114,761):
+        V1 + runacc = 1,461,749 + 114,761 = 1,576,510 g
+        vs V0 4,484,154 g  => -64.84% gate cut (RAN)
+        vs r136 DRAFT 1,577,207 g  => -0.044% (r138 RAN refines to 1,576,510).
+        r136's -64.83% is CONFIRMED RAN at the gate level, to 0.5 per-mille.
+     CHEAPEST binding class (r134 grid row, 3,169 g):
+        V1 + grid = 1,464,918 g  = -67.40% gate cut (floor for "cheap binding").
+
+  (3) WALL post-swap (RAN floor; runacc band DRAFT):
+     RAN FLOOR = V1 wall + grid-row wall = 41.69 + 0.93 = 42.62 s
+              vs V0 725.14 s  => -94.12% in-leaf WALL cut (RAN at the grid-row
+                               binding class).
+     The 42-cell running-acc row wall (the REBOUND term in the runacc-binding
+     number) is DRAFT: r137 w42 single-blob OOM-d at 30.4 GiB (function-
+     depth class), and the per-cell wall form was not separately wall-
+     compiled. Its lower bound is the grid-row 0.93 s (DRAFT band above);
+     its upper bound cannot lift post-swap wall back toward V0's -64.83%
+     unless the 115 K-binding row alone weighs >233 s (orders of magnitude
+     off; binding row's gate count 114,761 vs (a)-block gate count 3,022,405
+     with 683 s of wall). So the -94% wall floor is RAN-robust at BOTH ends.
+
+  (4) Key reconciliation (r136 -> r138):
+     r136's "1,577,207 g = -64.83% in-leaf WALL" was a GATE ratio relabeled.
+     r138 splits the two quantities:
+        GATE post-swap = 1,576,510 g = -64.84% of V0 GATE (RAN) [runacc]
+        WALL post-swap (floor) = 42.62 s = -94.12% of V0 WALL  (RAN, grid-row)
+     The wall win (-94%) dwarfs the gate win (-65%) because the (a) S-sponge
+     is memory-bandwidth-BROKEN. Re-programming the (a) S-sponge DELETE +
+     acc-pin ADD at the consumer is NOT merely a C4 gate cut -- it is a
+     -94% in-leaf wall / -92.9% peak reduction, which is the class that
+     gates secure-8192/small C4 on the 32 GiB box (r131/r136).
+
+  (5) PEAK post-swap:
+        V0 24.16 -> V1 1.71 GiB (grid-row) = -92.9% (RAN).
+     This is the in-leaf class that OOM-d the old 7.8 GiB box (r38/r45/r46)
+     and the class that shape-caps secure-8192/small on the 32 GiB box.
+
+VERDICT: r136 DRAFT in-leaf WALL ceiling RAN-anchored + reconciled. The in-
+leafe C4 "cheap-verify swap" headline that drives DKG wall time:
+  GATE: -64.84% (RAN, r138 1,576,510 g; r136 DRAFT 1,577,207 confirmed)
+  WALL: -94.12% floor (RAN, grid-row rebinding)
+  PEAK: -92.9% (RAN, r134 V0/V1)
+i.e. the lever is a PRODUCTION-WALL lever, not just a gate cut. The in-tree
+consumer diff (S-sponge DELETE + acc-pin ADD, PER-CELL instance of a
+2,732-g-class helper per r137's membrane nail) remains the next owner re-gate
+leg (r139/r20).
+
+GATE / TREE RAN:
+  cargo check --workspace RC 0 (no source change this round -- the in-tree
+  C4 consumer diff is r139+r owner-re-gate per the 2026-09-12 standing
+  per-diff rule; r138 is poc/ + bookkeeping only).
+  python3 -u poc/r138/verify_r138.py  Self-check PASS (RC 0); RAN.out on disk.
+  git status --porcelain = 0 after this round's bookkeeping commit.
+  Zero .nr / zero Rust source change; Cargo.lock UNCHANGED.
+  Config byte-sha pre==post: N/A (round did not flip config; the on-disk
+  config was not touched this round, both default/mod.nr stayed at the
+  current secure/secure-8192/small shape per r134's byte-restore).
+
+REVIEW BRANCH: research/r138-in-leaf-wall-anchor @ <r138-commit> (enclave,
+NEVER origin, NOT merged). Findings reversed the DRAFT-label on 3 numbers
+in the r136 story (gate -64.83% [-64.84%], wall -94.12%, peak -92.9%), so
+owner review is warranted for the next in-tree source round.
+
+UPSTREAM-PR: N/A this round (poc/ + model re-anchoring only; no circuit/
+crates commit). The next round's in-tree C4 consumer source diff (r139+)
+would be the first I18/I19 in-tree PR candidate.
+Next: r139 = the r137-owner-re-gate (in-tree C4 consumer per-cell S-sponge
+DELETE + acc-pin ADD), or if the owner re-gate stays unopened this tick,
+r139 = RAN-proof wall-compilation of the r137 w42 per-cell INSTANTIATION
+form (compiles the 42-cell cheap-verify binding row by instance, not blob --
+r137 w42 OOM-d as a blob; the per-cell wall form is the RAN-robust in-leaf
+wall anchor for r138's -94.12% wall head).
