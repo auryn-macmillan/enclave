@@ -1,0 +1,7 @@
+[package]
+name = "r133_b10"
+type = "bin"
+authors = ["interfold-research r133"]
+
+[dependencies]
+lib = { path = "/home/dev/interfold-research/interfold/circuits/lib" }
