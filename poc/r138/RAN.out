@@ -1,0 +1,48 @@
+r138 RAN in-leaf wall anchor -------------------------------------------
+  r134 V0   (full C4, (a) present)   gate 4,484,154  wall  725.14s  peak  24.17 GiB
+  r134 V1   ((a) dropped)            gate 1,461,749  wall   41.69s  peak   1.71 GiB
+  r134 cell (1x direct-sha p4)       gate    71,981  wall   1.97s  peak   0.33 GiB
+  r134 grid (42x compact 2-felt row) gate     3,169  wall   0.93s  peak   0.28 GiB
+
+  (a)-block (V0 - V1) [RAN]
+    gate 3,022,405  = 67.40% of V0 gate
+    wall    683.45s = 94.25% of V0 wall   <-- the (a) S-sponge is memory-
+    peak     22.46 GiB                          bandwidth-bound, not gate-bound (r131/r132)
+
+  in-block consumer binding, r137 2-pt slope [RAN]
+    c = (w12-w6)/6 = 2732.000 g/cell ; S = 17.0 g
+    42-cell in-block = 114,761 g  (r136 DRAFT block = 42x2749 = 115,458 g)
+
+  POST-SWAP in-leaf [gate RAN; wall RAN-floor + DRAFT band]
+    GATE  runacc-binding : V1 + 114,761 = 1,576,510 g
+            -> gate cut vs V0 = 64.84%   (r136 DRAFT said 64.83%)
+            -> vs r136 DRAFT 1,577,207 g = -0.044%  (r138 RAN refines to 1,576,510)
+    GATE  grid-row floor : V1 + 3,169 = 1,464,918 g  (cheapest binding class)
+    WALL  RAN floor      : V1 41.69s + grid row 0.93s = 42.62s
+            -> WALL cut vs V0 725.14s = 94.12%
+    WALL  runacc-binding : V1 + [42-cell running-acc row wall]
+            -> DRAFT (single-blob 42-cell OOM-d r137 w42 @30.4G; per-cell wall form not
+               separately wall-compiled) -- a band above the 42.62s RAN floor,
+               NOT a measured number.
+
+  KEY RECONCILIATION (r136 -> r138):
+    r136 "1,577,207 g = -64.83% in-leaf wall" was a GATE ratio mislabeled as wall.
+    r138: GATE post-swap = 1,576,510 g = -64.84% of V0 gate (RAN; r136 -64.83% confirmed).
+           WALL  post-swap FLOOR (grid-row binding) = 42.62s = -94.12% of V0 wall (RAN).
+    The (a) S-sponge block is -94.25% of the in-leaf WALL but only -67.40% of its
+    GATES, because it is memory-bandwidth-bound. The wall win dwarfs the gate win.
+    Peak: V0 24.17 -> V1 1.71 GiB = -92.9% (RAN) -- this is the class that
+    unbounded secure-8192/small C4 on this 32 GiB box (r131/r136).
+
+Self-check PASS
+
+== r138 box census ==
+2026-09-26T08:53:04Z
+8
+MemTotal:       32866100 kB
+MemAvailable:   31548324 kB
+SwapTotal:             0 kB
+HEAD       43fe1a02aea867ee9ed6c7974c0ddb2551f8709a
+origin/main 51fa7415a57c920b7ca71de8d9ebb8fd91c942a2
+ahead/behind 80/0 (branch vs origin/main)
+R138 DONE
