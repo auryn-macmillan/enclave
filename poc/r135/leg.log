@@ -1,0 +1,6 @@
+04:08:24 == START 2026-09-26T04:08:24Z ==
+04:08:44 bpa compile rc=0
+04:08:46 bpa gates rc=0 Scheme is: ultra_honk, num threads: 8 (mem: 5.25 MiB){"functions": [  {        "acir_opcodes": 102005,        "circu
+04:09:28 bpb compile rc=0
+04:09:30 bpb gates rc=0 Scheme is: ultra_honk, num threads: 8 (mem: 5.25 MiB){"functions": [  {        "acir_opcodes": 204011,        "circu
+04:09:30 == DONE 2026-09-26T04:09:30Z ==
