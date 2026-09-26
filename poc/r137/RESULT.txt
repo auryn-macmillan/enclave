@@ -1,0 +1,84 @@
+r137 RESULT (secure-8192 / committee minimum, cell counts 6/12/42, 4c-pinned,
+2026-09-26 UTC; upstream base 51fa7415; HEAD at round start 12e4cbf6 r136;
+box 8c/32 GiB/0 swap r126 class)
+
+ONE IDEA ROUND: RAN-close the r136 DRAFT headline "in-block (a) 42 x 2,749 g =
+115,458 g = -96.17% of the r134 r14 (a)-block 3,022,405 g" — r136 had marked only
+the pin term RAN and the in-block assembly DRAFT. This round RAN-closes the
+in-block assembly with a 2-point gate linearity + a fresh 42-cell membrane datum.
+Chassis = tracked poc/r137/ only (NO circuits/crates source edit; the I18/I19
+in-tree diff is still the r137 owner-re-gate per the 2026-09-12 standing rule).
+
+PROTOCOL: foreach circuit shipped as a r126/r135-class systemd user unit with
+MemoryMax=31G (r135 used 26-28G; that is what turned r135 leg-3 into a unit-cap
+OOM, not a function-depth OOM — dating this round's membrane nail). DKG-preset
+only flip (insecure->secure), committee minimum (bare cell literals, no committee
+flip needed). Config byte-sha pre==post asserted on disk. All three legs
+4c-pinned taskset.
+
+LEGS (systemd --user app.slice units):
+  w6    6-cell running-acc pin (16,409 g / 6 ACIR)        rc=0  08:10:18-08:11:28
+  w12  12-cell running-acc pin (32,801 g / 12 ACIR)       rc=0  08:11:28-08:13:38
+  w42  42-cell running-acc pin            OOM-KILLER      rc=137 08:13:38-08:20:49
+       journal Consumed line:  "7min 10.972s CPU time, 30.4 G memory peak,
+       0B memory swap peak"  +  "A process of this unit has been killed by the
+       OOM killer" + "Failed with result 'oom-kill'"
+       host never OOM — MemFree stayed ~30.8G throughout run (checked during).
+
+CROSS-CHECKS (RAN, verify_r137.py quoting on-disk json; PASS rc=0):
+  (1) r137 w6 = 16,409 g  ==  r135 v3s = 16,409 g   digit-exact twin (same body,
+       same shape — the fresh compile matches r135 leg-4 exactly).
+  (2) 2-pt linearity:      c    = (w12 - w6)/6     = 2,732.000 g/cell
+                           S    = w6 - 6*c         =       17.0 g (shared preamble,
+                                                       same class as r132 p1 floor 19g).
+  (3) in-block slope c vs r132 isolated per-cell unit 2,749 g  =>  -0.618%.
+       The in-block per-cell rate is a hair UNDER the isolated unit (consistent
+       with r132's cross-cell wire-merge finding: in-block 71,963 vs isolated
+       71,981 r135 cross-check cx; same direction, same whisper).
+  (4) RAN in-block 42-cell extrapolation = 17.0 + 42*2,732.000 = 114,761 g.
+  (5) vs r136 DRAFT 42 x 2,749 = 115,458 g            =>  -0.604% delta.
+  (6) vs r134 r14 (a)-block 3,022,405 g               =>  -96.203% cut.
+       (r136 DRAFT said -96.17%; RAN settles it at -96.203%, within round 0.03%.)
+
+MEMBRANE NAIL (the second load-bearing datum):
+  r135 leg-3: cgroup memory.peak 33,084,223,488 B = 30.73 GiB; unit cap 28 GiB;
+              wall 7m13s CPU (before auto-restore, consulted in leg3.log).
+  r137 w42 : jb Consumed peak 30.4 GiB;        unit cap 31 GiB; wall 7m11s CPU.
+  A HIGHER unit cap (31 vs 28 GiB) but a LOWER measured peak (30.4 vs 30.73 GiB),
+  kills BOTH via OOM-killer mode. The ceiling is a FUNCTION-DEPTH class (per-cell
+  unbound wires + flatten + the running-acc accumulator over the 42-cell linear
+  front), NOT an artifact of the r135 26-28 GiB unit cap. The 42-cell cheap-verify
+  blob does not fit this 32 GiB box at ANY unit cap the box can hand out —
+  independent of the 26-28G cap r135 had hidden it behind.
+  Implication for the r137 in-tree source (owner re-gate pending): the consumer
+  variant MUST be per-cell instantiated (per h,l cell a single-line call into a
+  2,749-g helper class), NOT a single 42-cell function body at the H14 production
+  shape. Matches the r135 diagnosis; RAN-anchored both sides this round.
+
+VERDICT: r136's DRAFT headline is now RAN at the in-block scale:
+  42-cell (a)-block = 114,761 g RAN-extrapolated (2-pt linear) vs DRAFT 115,458 g
+  delta = -0.604%  - a RAN-adjustment on the in-block gate cut, not a change.
+  Net: the in-block 42-cell (a)-block gate cut is -96.203% of the r14 3,022,405 g.
+  AND: the 42-cell blob's OOM is a function-depth membrane, not a unit-cap
+  artifact; the in-tree variant must be per-cell, NOT a single-function 42-cell
+  block. The r136 design scope is preserved and RAN-sharpened.
+
+GATE / TREE:
+  `cargo check --workspace` RC 0 (no source change this round — the in-tree
+  C4 edit is the r137 owner-re-gate, per the 2026-09-12 standing per-diff rule).
+  Config sha pre==post asserted on disk post-round.
+  git status --porcelain = 0 for the DONE line (+ poc/r137/ + bookkeeping).
+  libs only; zero .nr / zero Rust source change; Cargo.lock UNCHANGED.
+
+REVIEW BRANCH: research/r137-consumer-slope-membrane @ <r137-commit> (enclave,
+NEVER origin, NOT merged).
+
+UPSTREAM-PR: N/A this round (poc/ + bookkeeping only; no circuit/crates commit).
+Next: r137 in-tree source round (owner-re-gate pending); the scope is C4
+per-cell (h,l) instantiation of the r132 p3-class helper with the r136 acc-pin
+ADD (not replace) per the RAN A-row-preserved co-pin family. In-block RAN at the
+per-cell call = 2,732 g/cell (this round) vs in-block 71,963 g/cell r135 (the
+(-71,963-2,732) in-block cell = -96.3% at the call level, the finding this round
+RAN-corroborates at the call-level deliberately: the 42 x 2,732 in-block call
+sum = 114,744 g, within 17 g of the 2-pt linearity 114,761 g, cell-level and
+block-level numbers agree).

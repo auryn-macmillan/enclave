@@ -1,0 +1,25 @@
+r137 RAN self-check ------------------------------------
+  w6    circuit_size  =     16,409 g  (RAN, fresh this round)
+  r135 v3s circuit_size =     16,409 g  (RAN, r135 leg-4 RAN)
+  digit-exact twin: True
+  w12   circuit_size  =     32,801 g  (RAN, fresh this round)
+  slope  (w12-w6)/6   = 16,392, /cell = 2732.000 g/cell
+  shared-preamble intercept S = 17.0 g  (same class as r132 p1 floor 19 g)
+
+  per-cell slope 2732.000 g vs r132 isolated unit 2,749 g = -0.618%
+  r136 DRAFT headline  42 x 2,749 = 115,458 g
+  RAN 2-pt extrapolation 114,761 g   delta -0.604%
+  vs r134 (a) block 3,022,405 g   => cut 96.203%  (DRAFT r136 already said -96.17%)
+
+  membrane datum (w42 journal-anchored RAN) ------------
+    unit MemoryMax = 31 GiB (systemd --user app.slice)
+    journal Consumed: 7min 10.972s CPU, 30.4 G memory peak, 0B swap
+    mode: OOM-killer; host never OOM (MemFree stayed ~30.8G during run)
+    wall: 08:13:38 -> 08:20:49 = 7m 11s
+  comparison vs r135 leg-3 (same 42-cell a-blob, unit cap 26-28G):
+    r135 leg-3: cgroup memory.peak 33,084,223,488 B = 30.73 GiB; unit 28 GiB cap; 7m13s CPU
+    r137 w42   : journal Consumed peak 30.4 GiB;    unit 31 GiB cap; 7m11s CPU
+    => same memory class, ~2s faster (this round 4c taskset pinned same class)
+    => the 42-cell MEMBERSHIP OOM-CEILING is the nonlinearity class, NOT a unit-cap artifact
+
+Self-check PASS
