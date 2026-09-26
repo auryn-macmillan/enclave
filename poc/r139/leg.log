@@ -1,0 +1,24 @@
+09:12:24 launched r139_f6
+09:12:24 r139_f6 ended=failed
+09:12:24 launched r139_f42
+09:12:24 r139_f42 ended=failed
+09:12:24 == DONE 2026-09-26T09:12:24Z ==
+09:12:24 f6 NO artifact
+09:12:24 f42 NO artifact
+Failed to start r139_f6.service: Unit r139_f6.service has a bad unit file setting.
+See user logs and 'systemctl --user status r139_f6.service' for details.
+09:13:27 launched r139_f6
+09:13:27 r139_f6 ended=failed
+Failed to start r139_f42.service: Unit r139_f42.service has a bad unit file setting.
+See user logs and 'systemctl --user status r139_f42.service' for details.
+09:13:27 launched r139_f42
+09:13:27 r139_f42 ended=failed
+09:13:27 == DONE 2026-09-26T09:13:27Z ==
+09:13:27 f6 NO artifact
+09:13:27 f42 NO artifact
+09:15:39 launched r139_f6
+09:15:49 r139_f6 ended=inactive
+09:15:49 launched r139_f42
+09:16:29 r139_f42 ended=failed
+09:16:29 == DONE 2026-09-26T09:16:29Z ==
+09:16:29 f42 NO artifact
