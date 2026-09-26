@@ -1,0 +1,147 @@
+r135 RESULT (secure-8192/small N=19/T=9/H=14, L=3, 42 cells, 4c-pinned,
+2026-09-26 UTC; upstream base 51fa7415; HEAD at round start fb2481a1)
+
+PROTOCOL = r126/r133/r134 self-restoring config flip; config sha pre==post
+asserted on every leg (cfg*pre/post/restore files in-tree). Legs ran as
+systemd user units (MemoryMax 26-28 GiB; worker-cgroup ceiling class,
+r130 finding). Box = 8c / 32 GiB / 0 swap (box_*_census.txt).
+
+LEG-1 (04:08Z) DEFECTIVE BY TEST-SOURCE BUG — recorded for provenance only.
+bpa/bpb imported configs::default::dkg::L, whose flat re-export resolves to
+the DKG moduli-count L=2 (the threshold L=3 that C4 verify_commitments
+uses lives in configs::{insecure,secure}::threshold::L). Blocks therefore
+compiled at 28 cells (14 x L2), not 42. RAN-but-wrong-cell-count numbers:
+  bpa  2,014,982 g / 102,005 ACIR (28-cell direct-sha)
+  bpb  4,031,936 g / 204,011 ACIR (28-cell Merkle-producer)
+  diagnostic: 2,014,982 / 71,981 = 27.993  (confirms the L=2 shape)
+
+LEG-2 (04:48Z) — THE CORRECTED 42-CELL PRODUCER ARMS (v2/v2b fixed the L
+import; all 42 cells pinned => sponges live, r131/np2 pin-protocol):
+  v2   42-cell DIRECT-SHA producer block   3,022,464 g / 153,007 ACIR
+       wall 0:28.29 / peak RSS 1,954,792 kB (1.82 GiB) / rc=0
+  v2b  42-cell MERKLE producer block       6,047,894 g / 306,015 ACIR
+       wall 1:20.42 / peak RSS 3,654,384 kB (3.49 GiB) / rc=0
+  comparator (RAN r134, on disk in poc/r133/leg_h14/RESULT.txt, same tree):
+  consumer re-commit block h14_v0 - h14_v1 = 3,022,405 g
+       (h14_v0 4,484,154 / 827,485 ACIR / 12:05.14s / 24.16 GiB;
+        h14_v1 1,461,749 / 674,478 ACIR / 0:41.69s / 1.71 GiB)
+
+LEG-3 (04:56-05:03Z) — 42-CELL CONSUMER CHEAP-VERIFY (v3, r132 p3-class
+unit: reversed+packed payload, running-acc pin, SAFE sponge DROPPED):
+  FAILED BY OOM at the 28 GiB unit cap (28.0 GiB peak, 7m13s CPU,
+  SIGKILL; config auto-restored sha-asserted). RAN datum at the A shape:
+  the cheap-verify body is NOT compilable at 42 cells on this 32 GiB box,
+  even though the same-arm 42-cell direct-sha (v2) compiles in 28 s at
+  1.8 GiB. The consumer-cells construction (flatten+per-element acc inside
+  the double loop) is memory-depth class >> the sha-sponge class — see
+  VERDICT-3 below. impl-round must instantiate differently or the consumer
+  array cannot live at H=14 in one function at any box this size.
+
+LEG-4 (05:08Z) — 6-CELL CONSUMER CHEAP-VERIFY (v3s: minimum committee H=2
+x threshold L=3; DKG preset flip only, committee stays minimum):
+  v3s  16,409 g / 6 ACIR  wall 1:05.00 / peak RSS 8,191,672 kB (7.81 GiB) / rc=0
+       per-cell coefficient = 2,734.8 g (r132 isolated p3 unit = 2,749 g)
+       ACIR data points out separately: 6 ACIR total vs 3,644 per-cell
+       isolated (r132 p3 2,732 ACIR/cell => ACIR merges/cancels across
+       cells; graphic pad kept to 6 per-cell total assertion).
+
+CROSS-CHECKS (RAN):
+ (1) v2 / (42 x 71,981) = 3,022,464 / 3,023,202 = 0.999757
+     (cell-count linearity within 0.024%, same class as r132 b1 x30 ratio
+      1.00026; in-block per-cell 71,963 g vs isolated 71,981 g).
+ (2) v2 / consumer 3,022,405 = 1.000020  (59-gate delta).
+     => producer direct-sha block costs EXACTLY the consumer re-commit
+        block it would displace. "Swap-only" direct-sha route = 0 gates
+        saved (the DRAFT assumption r131/r132 carried: `consumer cheap`
+        only walking through the producer side). REFUTED at A-shape RAN.
+ (3) v2b / consumer = 6,047,894 / 3,022,405 = 2.00102.
+     => Merkle route costs 2.00x the block at A-shape block scale
+        (r133 isolated per-cell 2.28x = 164,484 / 71,981; in-block
+        per-cell 143,997 g = -12.46% cross-cell wire merge, r133-class).
+ (4) v3s / 6 = 2,734.8 g/cell within 0.51% of r132 isolated p3 2,749 g
+     => cheap-verify cell unit holds from 1-cell (r132) to 6-cell (this
+        round) scale.
+ (5) v3s per-cell (2,734.8 g) vs v2 per-cell (71,963 g) = 26.30x
+     => cheap-verify cell unit (2,734.8 g) is 26.3x cheaper than the
+        C4 commit body in-block (71,963 g) RAN-confirmed (isolated:
+        2,749 vs 71,981 = 26.19x — same class).
+
+VERDICT (A-shape, RAN):
+ VERDICT-1 — "Producer direct-sha commitment replaces consumer re-commit
+             (block substitution)"  = REFUTED.  v2 = consumer block to
+             59 g (1.000020x). Both sides compute the same sponge field
+             (per-cell, once); the consumer is NOT heavier to carry a
+             second copy of the field just because it re-verifies.
+             Direct-sha substitution alone saves 0 g (potentially
+             negative with protocol-scope adjustment cost).
+ VERDICT-2 — "Producer Merkle node commitment" = DOMINATED (ranked, RAN
+             both scales): v2b = consumer 2.001x. r131's 40,618 g
+             isolated node class is real but under-prices the
+             producer leaf-commit stack; the honest producer floor is
+             a1-class 164,484 g/cell (r133 isolated) / 143,997 g/cell
+             (r135 A-shape block) — worse than the direct-sha 71,981.
+             Retire the Merkle-route-per-share design from the source
+             revision scope (per-diff owner re-gate, standing rule).
+ VERDICT-3 — "Consumer cheap-verify (r132 p3-class) replaces per-cell
+             re-commit at the A production shape" = PARTIAL RAN-POSITIVE
+             with an impl-bound that already exceeds the 32 GiB box at
+             H=14 42 cells (leg-3 OOM). The standalone 6 cells (v3s,
+             minimum committee configuration R0.5 shape-move) RAN green
+             = 16,409 g / 6 ACIR / 7.81 GiB peak / 1:05 s; the per-cell
+             unit (2,734.8 g) hits the r132 isolated p3 unit within
+             0.51% — the "cheap consumer verify" mechanism IS 26.30x
+             cheaper per cell than the C4 commit body (RAN: 2,734.8 vs
+             71,963 in-block; 2,749 vs 71,981 isolated). The 42-cell
+             body is NOT compilable on this box at ANY box this shape
+             (leg-3 OOM at 28 GiB cap; v2 same cell count compiles in
+             28 s / 1.8 GiB = the body's flatten+loop depth is the
+             memory-mover, not the gate density). PREREQUISITE TO THE
+             RE-GATE: the consumer-cheap-verify block cannot be issued
+             as one 42-cell function-body (the in-tree circuit must
+             instantiate per-cell instances (probes over a SINGLE cell
+             separately, or a more compact one-acc variadic shape); the
+             r132 p3 cell-probe was a single-cell function — at block
+             depth the flatten+acc interaction is the memory mover
+             (RAN leg-3 OOM is the proof this is not just a wall issue). The honest consumer-block numerator at A
+             shape stays DRAFT pending a struct-variant compile: the
+             memo: r132 gave 30 cells x 69,232 g = 2,076,960 g for the SPONGE class,
+                   which does NOT include the 2,749 g/cell payload-stream class
+                   (the two arms are independent, r132 leg-2 evidence). Projecting
+                   to H=14: 42 x 2,749 = 115,458 g total payload-stream block
+                   (DRAFT-for-the-assembly, cell-unit RAN r132, linearity confirmed
+                   r132-class; the in-tree consumer variant computation will give
+                   the A-shape block-assembly number).
+ VERDICT-4 — I18/I19 in-tree source-diff scope = "consumer-cheap-verify
+             swap" ONLY. Producer direct-sha and Merkle arms both
+             dominated/refuted at A-shape block scale; only the
+             consumer-side re-commit -> per-cell light-verify swap cuts
+             gates, and at the per-cell unit 26.30x the C4 body (the
+             ONLY hard RAN sentence that survives the round).
+
+DRAFT section: N/A this round. No further probe runs within r135 scope:
+ the only consumer-side A-shape block-assembly number at H=14 (native
+ verify_V3-L variant) belongs in the r136 owner-re-gate scope (design-
+ before-source-scope per the 2026-09-12 sign-off residual rule). The
+ 42 x 2,749 = 115,458 g payload-stream block projection above is the
+ DRAFT-for-assembly line; the signed source variant will provide the
+ in-tree block-add number in the r136 round.
+
+DURABLE RAN ARCHIVE: leg-2 (v2, v2b), leg-4 (v3s) both on disk under
+poc/r135/ with gates json + run logs + cfg restore files. Leg-3 v3
+archive = OOM evidence in leg3.log + systemd journal (28.0 GiB unit
+peak, 7m13s CPU, rc=137 SIGKILL, cgroup memory.peak
+= 33,084,223,488 B = 30.83 GiB); config auto-restore
+post-leg-3 RAN-verified (active.nr + mod.nr back at 51fa7415 base via
+git checkout, sha-asserted vs cfg3_pre.txt). leg-3 artifact-absent
+(OOM mid-compile; no target/ json written; the OOM itself is the RAN
+datum).
+
+CONFIG:  cfg2_pre==cfg2_post; cfg3 auto-restore ok (unit OOM-d kill);
+        cfg4_pre==cfg4_post; active.nr + mod.nr at upstream 51fa7415
+        shas (verified from disk after every leg).
+CARGO:  no circuit/crates source change this round (poc/ only).
+        mirrors the r134 battery analog four-step echo; the in-tree
+        diff is the r136 owner re-gate scope per the 2026-09-12
+        sign-off residual gate.
+
+UPSTREAM-PR: N/A this round (poc/ probes only; the r130 mark stands).

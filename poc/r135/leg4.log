@@ -1,0 +1,6 @@
+05:05:52 v3s compile rc=1
+05:05:52 v3s gates done 
+05:05:52 == DONE V3S 2026-09-26T05:05:52Z ==
+05:08:59 v3s compile rc=0
+05:08:59 v3s gates rc=0 Scheme is: ultra_honk, num threads: 8 (mem: 5.25 MiB){"functions": [  {        "acir_opcodes": 6,        "circuit_si
+05:08:59 == DONE V3S 2026-09-26T05:08:59Z ==

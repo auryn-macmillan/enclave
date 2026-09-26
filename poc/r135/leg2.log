@@ -1,0 +1,6 @@
+04:48:54 == START V2 2026-09-26T04:48:54Z ==
+04:49:22 v2 compile rc=0
+04:49:24 v2 gates rc=0 Scheme is: ultra_honk, num threads: 8 (mem: 5.25 MiB){"functions": [  {        "acir_opcodes": 153007,        "circu
+04:50:45 v2b compile rc=0
+04:50:49 v2b gates rc=0 Scheme is: ultra_honk, num threads: 8 (mem: 5.25 MiB){"functions": [  {        "acir_opcodes": 306015,        "circu
+04:50:49 == DONE V2 2026-09-26T04:50:49Z ==
