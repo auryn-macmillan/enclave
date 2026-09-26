@@ -1,0 +1,8 @@
+== r137 box census 2026-09-26T08:10:18Z ==
+nproc=8
+MemTotal:       32866100 kB
+MemAvailable:   31637860 kB
+SwapTotal:             0 kB
+0.31 0.39 0.18 1/244 57830
+12e4cbf680cd28c4e9ab47c57cbd2fe7becb5554
+51fa7415a57c920b7ca71de8d9ebb8fd91c942a2
