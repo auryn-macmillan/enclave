@@ -1,0 +1,2 @@
+default flipped insecure->secure (committee kept minimum; H=2, L=3 => 6 cells)
+flip rc=0
