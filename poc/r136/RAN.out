@@ -1,0 +1,3 @@
+kernel check: v[N-2]=1, v[N-1]=-A  ->  pin(v) = 0
+0 == exact kernel vector. acc-pin is a LINEAR functional (dim N-1 kernel)
+=> acc-pin ALONE does not bind a vector to a share; safe only WITH co-enforced per-coeff range+parity pins
