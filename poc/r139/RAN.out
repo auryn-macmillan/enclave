@@ -1,0 +1,9 @@
+TS1a f6=16409 == r137 w6=16409 (digit twin)
+TS1b c12=32801 == r137 w12=32801 (digit twin)
+TS2 c24=65585 == S+24c=65585.0 (S=17.0, c=2732.000 from r137 RAN)
+TS3 walls RAN: f6=7.24s c12=13.70s c24=26.53s @4c
+    per-cell wall slope = 1.078 / 1.069 s/cell; intercept 0.77 s
+TS4 OOM f42=30.33 GiB / c48=30.46 GiB (systemd MemoryPeak, oom-kill journalled)
+TS5 membrane PER-CELL CALL form: 24 cells RAN-GREEN, 42 & 48 cells OOM at ~30.3-30.5 GiB => (24, 42]
+    host MemTotal = 31.3 GiB; SwapTotal 0 (host-ceiling kills, this box)
+Self-check PASS (all RAN; config byte-restored sha-asserted per leg)

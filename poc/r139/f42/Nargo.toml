@@ -1,0 +1,7 @@
+[package]
+name = "r139_f42"
+type = "bin"
+authors = ["interfold-research probe (round 139)"]
+
+[dependencies]
+lib = { path = "/home/dev/interfold-research/interfold/circuits/lib" }
