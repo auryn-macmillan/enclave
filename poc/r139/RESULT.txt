@@ -1,0 +1,103 @@
+# r139 — per-cell INSTANTIATION membrane pin at the A production shape (RAN)
+
+Objective (r138 queue item (1) unopened-fallback): r138 left the 42-cell
+runacc-binding-row WALL as the one DRAFT bracket in the -94.12% in-leaf wall
+floor. This round wall-compiles the per-cell instantiation form (r137 membrane
+shape) across cell counts to (a) anchor the per-cell WALL slope RAN and
+(b) RAN-replicate the r137 membrane fact FOR THE PER-CELL FORM (w42 blob
+OOM-d; does the call form move the membrane?).
+
+## Legs (all RAN this tick, 2026-09-26 09:15-09:23 UTC, 4c-pinned,
+## MemoryMax=31G systemd user units, secure preset flip per leg, config
+## byte-restored sha-asserted per leg: cfg/cfg2/cfg3/cfg4_restore)
+
+| leg | form            | K  | gates   | wall    | result                                  |
+|-----|-----------------|----|---------|---------|------------------------------------------|
+| f6  | per-cell CALLS  | 6  | 16,409  | 7.236 s | RC 0                                     |
+| f42 | per-cell CALLS  | 42 | OOM     | —       | oom-kill, MemoryPeak 30.33 GiB (32,564,670,464 B) |
+| c12 | per-cell CALLS  | 12 | 32,801  | 13.704 s| RC 0                                     |
+| c24 | per-cell CALLS  | 24 | 65,585  | 26.534 s| RC 0                                     |
+| c48 | per-cell CALLS  | 48 | OOM     | —       | oom-kill, MemoryPeak 30.46 GiB (32,704,512,000 B) |
+
+## Findings (all RAN; exact)
+
+1. FORM-EQUIVALENCE (gate): f6 = r137 w6 (16,409) DIGIT-EXACT twin; c12 =
+   r137 w12 (32,801) DIGIT-EXACT twin; c24 = r137 slope S + 24c = 17 + 24 x
+   2732.000 = 65,585 DIGIT-EXACT. The per-cell explicit-CALL form is
+   gate-identical to the wrapped-loop form at every point. The r137 in-block
+   RAN 42-cell (a)-block figure (S + 42c = 114,761 g) is form-robust.
+2. WALL SLOPE (RAN, warm-lib context, this tick): f6 7.236 / c12 13.704 /
+   c24 26.534 s @4c. 2-pt slopes: (c12-f6)/6 = 1.078 s/cell; (c24-c12)/12 =
+   1.069 s/cell; intercept (vs f6) = 0.768 s. Linearity holds within 0.8%
+   over 6->24 cells. 42-cell binding-row wall by FORWARD EXTRAPOLATION
+   from the last RAN point (W24 + 18 cells x each pair slope) =
+   45.78-45.94 s (LSQ 3-pt fit: slope 1.0717 s/cell, intercept 0.82 s,
+   W(42) 45.83 s center); EXTRAPOLATION-from-RAN label, NOT a direct 42-
+   cell measurement (the 42-cell direct wall is not RAN-able on-box: it
+   OOMs, point 3).
+   Context label (provenance): r139's GREEN legs reused the secure lib
+   sources flipped the same morning by r137 (byte-identical config files);
+   nargo re-compiled the probe crates this tick (T0/T1 bracket the scoped
+   `nargo compile` per leg). r137's w6/w12 (70 s / 130 s) were full
+   unit-interval times (launch->end, first use-rerun of that day). THE
+   WALL BASELINES ARE NOT MUTUALLY COMPARABLE cross-round; the per-cell
+   slope here is computed WITHIN r139's own consistent T0/T1 set (that is
+   the valid measurement). Since the in-tree diff lands in a C4 compile
+   that has already consumed the lib path once, the in-leaf wall estimate
+   uses this warm per-cell slope as the cell-increment addend.
+3. MEMBRANE FOR THE PER-CELL FORM (the r137 nail re-tested in-form): f42
+   oom-kill at 30.33 GiB and c48 at 30.46 GiB (systemd MemoryPeak, journalled
+   oom-kill, Result=oom-kill) vs r137 w42 blob 30.4 G. HIGHER cell counts
+   (42 vs 48) measure the SAME ~30.3-30.5 GiB ceiling; the 31 G unit cap was
+   never the active constraint (peaks < cap; the host 31.4 GiB MemTotal with
+   ~1-2 GiB running session+cache was). GREEN: c24 (24 cells, RC 0). MEMBRANE
+   = (24, 42] cells for the p3-class body IN BOTH FORMS (call and wrap). The
+   per-cell-call refactor does NOT move the membrane: the memory class is
+   the per-cell unbound-wire/flatten depth (function depth), not the call
+   wrapper. r137's "must instantiate per-cell" remains a SOURCE-CLEANLINESS
+   rule; it was never and is not a memory fix.
+4. IN-TREE IMPLICATION (labeled inference, not RAN): the in-tree 42-cell
+   consumer diff keeps the V1 body (1.71 GiB peak RAN r134) with the 42-cell
+   (a) re-commit block (30.3 GiB standalone class RAN f42) replaced by the
+   42-cell acc row (this round's OOM class). If the acc row reuses V1's
+   share/payload wires the in-leaf peak lands below the replacement block's
+   class; if it re-flattens per cell the in-leaf compile lands in the ~30-31
+   GiB band — AT THE TOP OF THIS 32 GiB BOX, fit/no-fit decided by wire
+   sharing, a property only the real in-tree circuit exhibits. The owner
+   re-gate diff's compile must be treated as CEILING-ADJACENT on this box,
+   unit cap 31 G, host load kept low (r137/r135 OOM evidence pattern).
+
+## Round verdict
+
+RAN anchors added: (1) per-cell-call form is gate/twin-identical to the
+wrapped form (3 digit-exact points); (2) per-cell wall slope 1.069-1.078
+s/cell + 0.77 s intercept @4c warm-lib (RAN 3-point); (3) membrane (24, 42]
+holds for the call form too (f42 30.33 GiB / c48 30.46 GiB OOM vs c24 green).
+The r138 DRAFT runacc-band upper bound is now slope-anchored: post-swap
+in-leaf wall = 41.69 (V1, RAN) + 0.93 (grid row, RAN) + 45.78-45.94 (42-cell
+binding row, RAN-slope forward extrap) = 88.40-88.56 s = -87.81 % to
+-87.79 % of V0's 725.14 s
+(RAN-floor -94.12 % + RAN-slope upper; the slope band is the honest
+ESTIMATE label per skill rule 4: RAN slope + RAN V1 base, DRAFT only in
+the in-circuit interaction). Gate headline unchanged: -64.84 % (RAN, r138). Peak
+unchanged: -92.9 % (RAN, r134 numbers).
+
+## Gate / tree
+
+- cargo check --workspace: RC 0 (no source change this round; 0 .nr / Rust in
+  circuits/crates).
+- python3 -u poc/r139/verify_r139.py: Self-check PASS, RC 0; RAN.out on disk.
+- Config restoration: cfg_restore / cfg2_restore / cfg3_restore /
+  cfg4_restore all "CONFIG BYTE-RESTORED (sha equal)".
+- Zero circuits/crates/Rust/Cargo.lock change; poc/r139/ chassis only.
+
+## Next
+
+r140 = the OWNER per-diff re-gate on the in-tree C4 consumer source diff
+(S-sponge DELETE + acc-pin ADD, per-(h,l) cell). This round hands the
+re-gate two new bounds: the in-leaf wall prediction (-87.8 % slope-anchored,
+-94.12 % floor) AND the bacteria that the 42-cell variant's own compile is
+ceiling-adjacent on this 32 GiB box (journal evidence this tick + r137 +
+r135 leg-3). If the re-gate stays unopened: no box fix prophylaxis remains
+for the cells-forced 42 shape; the forward queue falls to (1) LIVE-NETLINK
+wall / (2) C6 in-tree ship (owner-gated).
