@@ -1,0 +1,10 @@
+01:33:19 == START 2026-09-26T01:33:19Z ==
+01:33:21 h14_cell compile rc=0
+01:33:21 h14_cell gates rc=0 Scheme is: ultra_honk, num threads: 8 (mem: 5.25 MiB){"functions": [  {        "acir_opcodes": 3644,        "circuit
+01:33:22 h14_grid compile rc=0
+01:33:22 h14_grid gates rc=0 Scheme is: ultra_honk, num threads: 8 (mem: 5.25 MiB){"functions": [  {        "acir_opcodes": 86,        "circuit_s
+01:45:27 h14_v0 compile rc=0
+01:45:30 h14_v0 gates rc=0 Scheme is: ultra_honk, num threads: 8 (mem: 5.25 MiB){"functions": [  {        "acir_opcodes": 827485,        "circu
+01:46:12 h14_v1 compile rc=0
+01:46:14 h14_v1 gates rc=0 Scheme is: ultra_honk, num threads: 8 (mem: 5.25 MiB){"functions": [  {        "acir_opcodes": 674478,        "circu
+01:46:14 == DONE 2026-09-26T01:46:14Z ==

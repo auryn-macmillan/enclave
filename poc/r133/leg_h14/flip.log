@@ -1,0 +1,2 @@
+config flipped min->small, insecure->secure
+flip rc=0

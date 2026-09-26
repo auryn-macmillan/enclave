@@ -1,0 +1,7 @@
+[package]
+name = "r133_bnp1"
+type = "bin"
+authors = ["interfld r133 probe"]
+
+[dependencies]
+lib = { path = "/home/dev/interfold-research/interfold/circuits/lib" }

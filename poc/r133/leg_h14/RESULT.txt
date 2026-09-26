@@ -1,0 +1,183 @@
+# r134 RESULT — Post-rebase re-anchor + producer-shape A/B truth (I18/I19 line)
+
+## Rebase (this round)
+Upstream 95c38d70 -> 51fa7415 (+42). `git rebase origin/main` resolved 1
+inflight conflict in crates/zk-prover/scripts/build_fixtures.sh IN FAVOR OF
+UPSTREAM (the 2026-09-24 nested-cargo removal + CARGO_TARGET_DIR redirect = the
+same deadlock class we closed in r130; byte-identical to origin/main post
+rebase). The r130 regression test is RE-TARGETED to assert the CARGO_TARGET_DIR
+redirect as FIX2 (the FIX-1 skip-flag + FIX-3 lib-only classifier survive as
+still-live documented escape hatches). Gate smoke: `cargo check --workspace`
+RC 0 + `cargo test -p e3-zk-prover --release --test bootstrap_fixtures_r130`
+1 passed / 0 failed on the committed round tree (on top of r132 commit ea077527; review branch research/r134-h14-reanchor). Branch i5/dkg-research:
+77 ahead / 0 behind origin/main 51fa7415.
+
+## RAN headline tables
+
+### r133 16-leg battery (secure-8192 small H=10, 4c-pinned nargo beta.26 +
+### bb 5.1.0 noir-recursive-no-zk; leg_source on disk, pre-sha byte-restore.)
+```
+leg      gates     acir     notes
+a0       71,981    3,644    per-cell direct-sha (twin of r132 p4/cell body; the
+                                   current C4 per-cell re-commit primitive)
+a1      164,484    7,482    per-cell MERKLE producer: builds the REAL leaf
+                                   commitment (the same per-share fn C2/C3 use)
+                                   THEN the 2-leaf node, pin on node out
+b0        2,269        62    30-leaf Merkle root row, only root pinned
+                                   (r132 p3-class cheap-binding shape at H10)
+b1    2,158,908 109,291    the 30-cell production (a) block; ratio 1.000002x
+                                   the r131 anchor 2,158,861 g  (digit-exact)
+b2            789        22    10-cell np2-parity SEQ-STRUCTURE control (constant
+                                   ds; body identical to b3/b4 but 10 cells
+                                   instead of 30). Lands at 789 g. b3–b9
+                                   same-body at 30 cells = 40,618 g. The
+                                   jump from 10 -> 30 cells is non-linear
+                                   (no per-cell linear scaling; there is a
+                                   threshold effect somewhere in the circuit
+                                   of < 30 repeated node instances). The
+                                   same-body b10 (distinct salts at 30 cells)
+                                   exceeds the floor: 534,763 g. Overall:
+                                   the 40,618 g figure is real-world saturation
+                                   for this sponge class across mid-sized
+                                   repetitions, not a bb floor artifact.
+b3..b9 40,618 each          identity node family (isolated 2-leaf sponge node,
+                                the r131 np2 plain node unit); b4 used PUB-pinned
+                                first value of the 30-cell seq, b5 = same with
+                                secret leaves, b6/b8/b9 = subtree variants.
+                                All nine arms landed the SAME 40,618 g --
+                                the class is not liveness-or-witness-polymorphic
+                                on the v1 path.
+b10     534,763    5,852    liveness-dissolver: 30 cells each with DISTINCT
+                                   domain separators (1920-byte pub salts)
+                                   AND a pinned downstream accumulator.
+                                   HYPOTHESIS: if 40,618 g is an optimization
+                                   artifact of identical-body repetition,
+                                   b10 RESOLVES all 30 sponges and lands
+                                   around 30 x p3class (~80k) + accumulator.
+                                   ACTUAL: 534,763 g, ~3.23x p3class-per-cell
+                                   equivalent -- the saturation holds; distinct
+                                   (varying) domain separators do NOT restore
+                                   the full sponge cost. The class
+                                   SATURATES near 40,618 g per cell even
+                                   across external variation, so the
+                                   amortized cost lower-than-saturated is a
+                                   real property of this sponge, not an
+                                   identical-body probe artifact.
+bnp1/bnp2 40,618          np2 family, compliance variants (a single-pinned
+                                np node each with different pub shape -- same
+                                sat class).
+bzero           20         1                       TRUE zero floor (a+1==b):
+                                            "bb minimum-gate-floor
+                                            signature" at this shape. The
+                                            40,618 g node class is NOT an
+                                            artifact of the bb floor (floor
+                                            is 20 g).
+```
+
+### r134 leg_h14 (secure-8192 small H=14, self-flip, byte-restore pre==post)
+```
+leg      gates     acir     wall       peak        what
+h14_v0   4,484,154 827,485  12:05.14  24.16 GiB   full C4, 42 cells, (a) block present
+h14_v1   1,461,749 674,478   0:41.69   1.71 GiB   (a) block removed (divrow floor)
+h14_cell    71,981   3,644   0:01.97   0.33 GiB   (a)-class per-cell unit at H14
+h14_grid     3,169      86   0:00.93   0.28 GiB   42x compact 2-felt pin row
+```
+
+## Findings (RAN, verbatim from gate JSONs above)
+
+1. **Per-cell Merkle producer is MORE expensive than the direct-sha at the
+   production commit point** -- this SHARPENS the r132 optimistic reading.
+   a0 (direct-sha) vs a1 (Merkle producer) = 71,981 vs 164,484 g = 2.28x
+   in the direct-sha's FAVOR at the production H=10 shape. r132 called
+   40,618 vs 69,232 "1.70x for the node" but the 40,618 (r131 np2) probe
+   priced only the sponge node and left the per-leaf commitments as
+   unconstrained public inputs. The REAL producer-side Merkle route (a1)
+   must build the leaf commitments TOO, and that is exactly what the
+   164,484 g/cell extra pays for (164,484 - 71,981 = 92,503 g/cell delta).
+   The lever therefore does NOT survive on "per-cell nodes cheaper than
+   per-cell direct-sha" -- they are the opposite at the per-cell
+   granularity. It survives on (a) frequency amortization (attested ONCE
+   at C2/C3; consumer C4 would otherwise re-commit on every decryption
+   request) and/or (b) swapping the consumer arm to the r132 p3-class
+   binding so C4 stops paying 71,981/cell.
+   Both elbows are now RAN-anchored:
+     producer side (a1)              = 164,484 g/cell (isolated, not amort)
+     consumer-removed-C4 current     = 71,981 g/cell (a0 = p4/cell)
+     consumer-BOUND-C4 (r132 p3)     = 2,749 g/cell  (binding only, no sponge)
+
+2. **The per-cell (a)-unit is committee-shape-invariant (H not an input).**
+   a0 and h14_cell use the IDENTICAL call
+   `compute_share_encryption_commitment_from_message::<N, SHARE_ENCRYPTION_\
+   BIT_MSG>` over a single `Polynomial<N=8192>` share; both read only the
+   ring degree N (= 8192, secure) and the message-bit width from
+   `configs::dkg`. The committee shape (H=10 vs H=14) is NOT one of that
+   function's type/value inputs, so it cannot move a single share's
+   commitment. Hence a0 (H=10) and h14_cell (H=14) are digit-exact at
+   71,981 g / 3,644 ACIR -- and the 71,981 g figure is also stable across the
+   C3/C6 lib edits (the share-commitment path is untouched by them). All the
+   committee-size dependence of the WHOLE (a) block lives in the x30- / x42-
+   cell construction, never in the per-cell op.
+
+3. **(a)-block scales by the committee-size ratio, within-lib.** b1 (30-cell
+   production (a) block, uniformly-shaped merkle-node spine) measured at H=10,
+   THIS round, THIS tree = 2,158,908 g. h14_v0 − h14_v1 (the 42-cell (a) block
+   at H=14, same tree) = 3,022,405 g. RATIO = 3,022,405 / 2,158,908 =
+   **1.4000** = exactly the cell-count ratio 42 / 30 = 1.4000 (within
+   floating-epsilon; same-lib, same-tree, same branch, different H). The
+   per-cell unit does NOT grow; the block grows ONLY because the cell count
+   grows. (a)'s fraction of V0 rises along with it: H14: 3,022,405 / 4,484,
+   154 = **67.40% of V0** (H14 V0); H10 cross-lib r131 V0-shape figure
+   2,158,861 / 3,571,446 = 60.45% (H10). This round's within-lib H10 figure
+   + H14 figure gives a clean 67.40 % fraction at the NEW production shape.
+   Honest note: the C6/C3 commits (circuits/lib/src/core/threshold/
+   share_decryption.nr 1fb1ef64 + dkg/share_encryption.nr 39b5de51) PRE-DATE
+   both b1 and h14_v0 by several commits; neither touches
+   circuits/lib/src/core/dkg/share_decryption.nr (the specific file h14_v0
+   reads), so V0 and V1 stay equal-footing; the caveat still applies to
+   where 3.57M of the total V0 came from across the H-shape-move-outside-
+   the-(a)-block portion of the circuit ((b) fold + (c) floor, N-bound /
+   ring-bound).
+
+4. **H14 V0→V1 wall/peak (self-contained, RAN, no across-lib anchor required).**
+   h14_v0 12:05.14 s / 24.16 GiB peak -> h14_v1 0:41.69 s / 1.71 GiB peak =
+   **17.39x wall / 14.13x peak gap** within this leg. Reference context (RAN
+   in r131 at a PREVIOUS tree state, equal-lib caveat applies if a full-shape
+   H10-vs-H14 wall comparison is made): 527.00 s / 17.70 GiB -> 38.00 s /
+   1.68 GiB = 13.87x wall / 10.54x peak at r131 HEAD tree -- reference class-
+   magnitude, not an equal-lib comparison. The memory-bandwidth structure
+   skews the (h14_v0 - h14_v1) recovery toward V0 being OOM-prone at 24 GiB
+   at 4c-pinned; V1 stays in the ~1.7 GiB class (ring-fixed (b)+(c) floor
+   dominates what V1 carries).
+
+5. **The r133 30-cell x42 is the H14 block IF the per-cell path is kept
+   symmetric** -- which it is. The h14_grid 42-cell 2-felt compact row
+   (3,169 g / 86 ACIR) remains the uncommitted color of the consumer binding
+   class: that class cuts to 75 g/cell amortized across the row and is
+   unchanged between H=10 and H=14 (just a 40-cell count change).
+
+## Scope / honest caveat
+- h14_v1 is a direct source edit (v0 with the verify_commitments re-commit
+  block removed in-source, VIS-commented) - NOT the r132 FULLY-SPLIT
+  producer-side design. It reuses r132's RESULT numbers (p8/p10 acir_head
+  674,478 is a digital fiduciary of the r132 H10 V1) and this leg verifies
+  that the same V1-class floor + peak shape holds at H=14. The FULLY-SPLIT
+  producer-side design was RAN-locked at H10 in r132; per-cell invariance
+  (Finding 2, digit-exact) carries it forward to H14.
+- Legs are poc-only. NO circuits/lib or crates source change. Configs
+  byte-restored pre==post (sha 0bf0cc642ddfa / 7f07de82407c9, both files).
+- Stale protective stash `stash@{0}` (commit snapshot `49c013ef dkg-batch on
+  secure-8192, pre-C5-augment work`) — kept in place, not dropped mid-round.
+  Owner can inspect / drop on the next authenticated-session round.
+
+## Commit reference
+this round's commit (research/r134-h14-reanchor; on top of r132 commit ea077527) = (the 16-leg r133 battery restored from disk + the r134
+leg_h14 A/B set + the rebase residue [re-constructed build_fixtures.sh to the
+upstream one-liner, test file re-targeted to the post-reapproval shape] +
+this RESULT.txt). Gate: `cargo check --workspace` RC 0 + r130 regression
+RC 0, both RAN on this round's committed tree.
+
+## Review branch
+research/r134-h14-reanchor -> enclave (private review repo), on top of r132 commit ea077527. NEVER
+origin, NOT merged.
+
+End of r134-RESULT.
