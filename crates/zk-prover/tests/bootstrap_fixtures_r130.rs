@@ -14,14 +14,23 @@
 //! `cargo test` (or `cargo build`) of the zk-prover crate on a lean checkout
 //! could NEVER complete (r127 observed this via a second outer job hang).
 //!
-//! Composite fix under test (this round):
+//! Composite fix under test (this round), as carried AFTER the 2026-09-25
+//! rebase onto upstream main (which independently removed the nested cargo
+//! call from `build:circuits` on 2026-09-24 — #1984):
 //!   FIX1: `scripts/build-circuits.ts` gains `--skip-regen-parity`;
 //!         `regenerateParityMatrices()` early-returns, trusting the COMMITTED
 //!         on-disk parity matrices (they are git-tracked literals under
 //!         circuits/lib/src/configs/committee/<committee>/parity_{insecure,secure}.nr;
 //!         the only mutation path documented is a top-level manual regen).
-//!   FIX2: `crates/zk-prover/scripts/build_fixtures.sh` passes
-//!         `--skip-regen-parity` to build:circuits from inside the outer cargo.
+//!         (Recallable code path — keeps a no-nested-cargo escape hatch even
+//!         though the build no longer bypasses it in-tree.)
+//!   FIX2: `crates/zk-prover/scripts/build_fixtures.sh` invokes
+//!         `pnpm build:circuits` WITHOUT touching the outer cargo's target
+//!         directory: CARGO_TARGET_DIR is redirected to a sibling fixtures
+//!         dir ($PWD/target/e3-zk-prover-fixtures), so any cargo the builder
+//!         spawns cannot park on target/release/.cargo-lock. (This matches
+//!         the upstream fix that landed in the 2026-09-24 rebase; our
+//!         --skip-regen-parity flag remains available as documented above.)
 //!   FIX3: `scripts/build-circuits.ts` classifies Noir `type = "lib"` packages
 //!         (e.g. c3_fold_batch_lib) as dep-only and skips them — `nargo
 //!         compile` RC 0 emits no artifact for a lib, which the
@@ -55,11 +64,16 @@ fn r130_bootstrap_skips_nested_cargo_parity_regen() {
     let ts = std::fs::read_to_string(root.join("scripts/build-circuits.ts"))
         .unwrap_or_else(|e| panic!("scripts/build-circuits.ts unreadable: {e}"));
 
-    // FIX2: the in-cargo bootstrap must pass the no-nested-cargo flag.
+    // FIX2: the in-cargo bootstrap must redirect CARGO_TARGET_DIR off the
+    // outer cargo's target directory (post-2026-09-24-rebase shape; matches
+    // the upstream independent fix of the same deadlock, #1984). A nested
+    // cargo with the SAME target dir parks on the outer target's
+    // .cargo-lock forever (r127 n2 / r130) — any in-cargo invocation of
+    // build:circuits without the redirect reopens the class.
     assert!(
-        sh.contains("--skip-regen-parity"),
-        "build_fixtures.sh lost --skip-regen-parity: the in-cargo fixture bootstrap \
-         would deadlock on target/.cargo-lock again (r127 n2 / r130)"
+        sh.contains("CARGO_TARGET_DIR=\"${CARGO_TARGET_DIR:-$PWD/target}/e3-zk-prover-fixtures\" pnpm build:circuits"),
+        "build_fixtures.sh lost the CARGO_TARGET_DIR redirect: the in-cargo \
+         fixture bootstrap would deadlock on target/.cargo-lock again (r127 n2 / r130)"
     );
 
     // FIX1: the skip hook exists in the builder.
