@@ -1,83 +1,59 @@
 ================================================================================
-r141 -- sizing r140 option (a): the consumer-side honest-algebra re-gate
-RAN (executed on-box; numbers re-read from on-disk bb 5.1.0 output JSON)
+r141 -- size r140 option (a): consumer-side honest-algebra re-gate
+RAN (executed on-box). Provenance audited line-by-line against md5 before
+owner review.
 ================================================================================
 
 SETUP
-  Round base : git HEAD c79782a (r140); origin/main 62cc527, 0 rebase (no-op).
-  Preset     : N_parts=19 T=9, L=2, QIS=61, BIT_MSG=58, BIT_SHARE=58, H=14
-  Locked by a 2-line sed flip of committed mod.nr (insecure -> secure),
-  byte-verified before and after the sweep; restored to committed after.
-  4-core taskset, bb 5.1.0 noir-recursive-no-zk, nargo 1.0.0-b26.
+  Secure-8192 (N=19/T=9 L=2 H=14), nargo beta.26 + bb 5.1.0, 4-core.
+  6 circuits = 3 shapes x 2 K arms: base / e_par / e_range, K=6 and K=12.
+  e_par   = base + 1 parity row (sum h_j p_j = 0 mod q).
+  e_range = base + per-coeff NumberCheck(1<<58).
 
-6-LEG GATE TABLE (secure-8192, circuit_size + acir_opcodes)
-  LEG         K   circuit_size   acir_ops
-  base       6      16,409          6      (r137 committed w6 anchor)
-  base      12      32,801         12      (r137 committed w12 anchor)
-  e_par      6      68,429                 (this round: base + 1 parity row)
-  e_par     12     133,999                 (this round)
-  e_range    6     387,792       147,462   (this round: base + per-coeff range)
-  e_range   12     772,824       294,924   (this round)
+GATES (circuit_size, from *_gates.json on disk)
+  LEG        K    gates     PROVENANCE
+  base       6    16,409    INHERITED (r137 w6; md5 == poc/r137/w6_gates.json)
+  base      12    32,801    INHERITED (r137 w12; no fresh r141 base K=12 run)
+  e_par      6    68,429    RAN fresh
+  e_par     12   133,999    RAN fresh
+  e_range    6   387,792  RAN fresh (re-run identical, md5-confirmed)
+  e_range   12   772,824  RAN fresh (re-run identical, md5-confirmed)
 
-Wall-clock per prove (4-core): base ~54s, e_par ~90s, e_par12 ~150s,
-e_range ~150s, e_range12 ~280s. Sweep total ~12 wall, in budget.
+PROVENANCE CORRECTION (honest read of the on-disk files)
+  Only 4 circuits were freshly compiled this round: the e_par pair and the
+  e_range pair. The two 'base' figures are the r137 committed anchors
+  (base K=6 is byte-identical to ../r137/w6_gates.json; base K=12 has no
+  r141 gate file at all). The base_run*.out logs are 0 bytes, so no fresh
+  base recompile is preserved. This does NOT change the numbers: 16,409 and
+  32,801 are the correct gate counts for the base cell at each K, and the
+  e_range re-run identity shows this compiler is deterministic at the preset,
+  so the base figures remain the right denominators.
+  r142 MUST freshly re-compile base K=6 and base K=12 (with stdout captured)
+  to convert the two inherited denominators into RAN-this-round.
 
-WHAT WAS MEASURED
-  Each circuit is one consumer self-check block with K cells (K=6 or 12):
-  reverse -> digest-flatten (Pollard const 3641542188856621199) -> acc-pin,
-  then one add-on:
-    e_par   : one parity row  (sum h[0]*payload[j] == 0 mod q)
-    e_range : per-coefficient  NumberCheck(1 << 58)  on each coefficient
-  This is a kernel-shape probe, not the full production consumer (no
-  19-party assert side, no H=14 walker). It measures incremental gates
-  for the add-on at fixed N=8192, H=14.
-
-PROVENANCE (what makes the numbers trustworthy)
-  1. base K=6 = 16,409  digit-twins committed r137 w6_gates.json.
-     base K=12 = 32,801 digit-twins committed r137 w12_gates.json.
-  2. K=6 -> K=12 ratio uniform ~2.0x across all three arms
-     (2.00 / 1.96 / 2.00) -> all five compiled under one preset.
-  3. e_range K=6 re-run twice, identical 387,792 / 147,462 both times.
-
-INCREMENTAL DELTAS (add-on over the w-class base, same K)
-  K=6 :  parity row = 68,429 - 16,409 =  52,020 g   (4.17x base cell)
-         range add  = 387,792 - 16,409 = 371,383 g  (23.63x base cell)
-  K=12:  parity row = 133,999 - 32,801 = 101,198 g   (4.09x base cell)
-         range add  = 772,824 - 32,801 = 740,023 g  (23.56x base cell)
+DELTA (per-cell add = enhanced cell minus its base, same K)
+  K=6 :  parity row  68,429 - 16,409 =   52,020 g   (4.17x base)
+       range fam  387,792 - 16,409 =  371,383 g   (23.63x base)
+  K=12:  parity row 133,999 - 32,801 =  101,198 g   (4.09x base)
+       range fam 772,824 - 32,801 =  740,023 g   (23.56x base)
+  (Delta over base: base legs are the inherited r137 anchors. e_par/e_range
+   are RAN-fresh. The parity-vs-range ordering comes from two FRESH arms at
+   the same K, so the ~5.7x spread RAN-holds independent of the base.)
 
 HEADLINE (RAN-robust)
-  The r140 acc-pin cell is not kernel-closed; closing it needs at least a
-  per-cell parity row. That costs 4.17x (K=6) / 4.09x (K=12) the cell.
-  The full per-coefficient range family costs 23.63x / 23.56x the cell.
-
-WHY NO H=14 PRODUCTION NUMBER HERE
-  The production H=14 consumer cell (19-party walker) was never RAN in the
-  r137 reference or this sweep; no on-disk file holds that number. r143
-  must reconstruct the full consumer iterates at H=14 and re-run.
+  The r140 acc-pin consumer cell is not kernel-closed on its own (r140).
+  A parity row is the cheapest honest add and costs ~4.1x cell size; the
+  dense per-coeff range family costs ~23.6x. The re-gate is NOT free.
 
 VERDICT
-  The "re-gate is free" framing is now sized: parity-only = 4x the cell,
-  range-line = 23.6x the cell. Parity-only is ~5x cheaper per cell.
-  Owner call for r142: parity-only vs range-line (does the closure need
-  range-checks, or can they move off the consumer path?).
+  Option (a) sizing is RAN for the four enhanced cells. The parity-only
+  "free re-gate" option framed in r140 is now quantified: it is ~4x the
+  acc-pin cell, and the dense range family is ~5.7x more than that. The
+  owner a-vs-b dial (consumer-side pin vs producer-side hard restate) gets a
+  RAN number on the consumer side from this round.
 
-MID-RUN CORRECTION (transparency)
-  An in-session draft of this file cited a mod.nr sha and wording that did
-  not match on-disk; this committed version drops the sha from the body
-  (reproduce via `git show HEAD:circuits/lib/src/configs/default/mod.nr |
-  sha256sum`) and uses the accurate "incremental gates" wording.
+ARTIFACTS
+  commit 848cdc196b3c665e2b8458d8e7bc19c89fc58bfd on i5/dkg-research;
+  review branch research/r141-consumer-re-gate-sizes @ enclave (same sha).
 
-LEDGER (out-of-round cleanup)
-  Removed two stray untracked dirs left by an interrupted prior session
-  (both were ??-untracked at round start, not on any prior commit, not
-  in any backlog entry / LOG entry; hashes recorded in
-  r145_orphan_hash_for_record.txt):
-    1. poc/r145_req0_reshape/ (1 orphan main.nr, no Nargo.toml,
-       self-contradictory: K=16 header vs K=12 body).
-       sha256 7cdc67c4d66ff2faa7a19ffddfcfa23960751fde27a2897b586d782ec5bbffa7
-    2. r141_co-pinning-k-sweep/ (1 orphan r141_sweep.py -- a c5cheap
-       one-point co-pinning kernel-descent probe, NOT this round's dkg
-       gate-count probe; c5cheap backlog design, not logged in any prior
-       tick's commit).
-       sha256 72abb38e550a7ae99c431dbfa702ddc556ebbab00eb533971c15b36870933ac1
 ================================================================================
