@@ -1,0 +1,12 @@
+[13:25:32Z] HEAD=c79782a352d890999cc1235ce2b4694b3124d8e6 committed_mod=7f07de82407c9601dd737044af69a068238dd9ff175f51c4d64d8e00980aa207 src_digest=feff7a03086cfca67c419c8d1188bfb3863935a53b1aa25a75715d5c6dfc4e30
+[13:25:32Z] LAUNCH r141r6_base (K=6) pre_sha=d0148b59537b4e49ec979b1cdf192becac755e333c0a90441d34d24794597474
+[13:25:32Z] DONE base status=inactive   circuit= acir= post_sha=d0148b59537b4e49ec979b1cdf192becac755e333c0a90441d34d24794597474
+[13:25:33Z] LAUNCH r141r6_e_par (K=6) pre_sha=d0148b59537b4e49ec979b1cdf192becac755e333c0a90441d34d24794597474
+[13:25:33Z] DONE e_par status=inactive   circuit= acir= post_sha=d0148b59537b4e49ec979b1cdf192becac755e333c0a90441d34d24794597474
+[13:25:33Z] LAUNCH r141r6_e_par12 (K=12) pre_sha=d0148b59537b4e49ec979b1cdf192becac755e333c0a90441d34d24794597474
+[13:25:33Z] DONE e_par12 status=inactive   circuit= acir= post_sha=d0148b59537b4e49ec979b1cdf192becac755e333c0a90441d34d24794597474
+[13:25:33Z] LAUNCH r141r6_e_range (K=6) pre_sha=d0148b59537b4e49ec979b1cdf192becac755e333c0a90441d34d24794597474
+[13:25:33Z] DONE e_range status=inactive   circuit= acir= post_sha=d0148b59537b4e49ec979b1cdf192becac755e333c0a90441d34d24794597474
+[13:25:33Z] LAUNCH r141r6_e_range12 (K=12) pre_sha=d0148b59537b4e49ec979b1cdf192becac755e333c0a90441d34d24794597474
+[13:25:33Z] DONE e_range12 status=inactive   circuit= acir= post_sha=d0148b59537b4e49ec979b1cdf192becac755e333c0a90441d34d24794597474
+[13:25:33Z] RUN6 END OK (restored to committed)

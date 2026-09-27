@@ -1,0 +1,1 @@
+{ "config_at_launch": "pub use super::secure::dkg; pub use super::secure::threshold; " }

@@ -1,0 +1,8 @@
+12:04:54 launched r141_base
+12:06:04 r141_base ended=inactive
+12:06:04 launched r141_e_par
+12:06:14 r141_e_par ended=failed
+12:06:14 launched r141_e_range
+12:07:24 r141_e_range ended=inactive
+12:07:24 == DONE 12:07:24Z ==
+12:07:24 e_par NO artifact
