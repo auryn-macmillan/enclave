@@ -1,0 +1,1 @@
+ARTIFACT=target/r142_base12.json rc=0
