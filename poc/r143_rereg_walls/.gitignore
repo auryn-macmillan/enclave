@@ -1,0 +1,4 @@
+# nargo build artifacts (regenerable)
+e_par12/target/
+e_par24/target/
+e_par42/target/

@@ -1,0 +1,7 @@
+[package]
+name = "r143_e_par42"
+type = "bin"
+authors = ["interfold-research probe (round 141)"]
+
+[dependencies]
+lib = { path = "/home/dev/interfold-research/interfold/circuits/lib" }

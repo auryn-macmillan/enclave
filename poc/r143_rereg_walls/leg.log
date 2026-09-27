@@ -1,0 +1,10 @@
+21:20:00Z START nproc=8 free=29GiB nargo=nargo version = 1.0.0-beta.26 bb=5.1.0
+21:20:00Z SWEEP_LOCKED sha=d0148b59537b4e49ec979b1cdf192becac755e333c0a90441d34d24794597474
+21:20:00Z launched r143_e_par12
+21:22:30Z e_par12 ended=inactive
+21:22:30Z launched r143_e_par24
+21:27:10Z e_par24 ended=failed
+21:27:10Z launched r143_e_par42
+21:35:11Z e_par42 ended=failed
+21:35:11Z END OK (mod restored byte-exact)
+21:35:11Z == 2026-09-27T21:35:11Z ==
