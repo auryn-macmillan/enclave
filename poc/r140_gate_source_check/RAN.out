@@ -1,0 +1,18 @@
+== r140 gate source-check RAN probe ==
+P = 52435875175126190479447740508185965837690552500527637822603658699938581184513 (255 bits)
+A = 3641542188856621199
+Q (secure-8192 max limb) = 144115188098531329 = 0x2000000015a0001 (58 bits)
+N = 8192, BIT_MSG = 58, flat payload len = 475136
+
+[K] kernel vector k[N-2]=1, k[N-1]=(P-A) mod P, pin(k) = 0
+[K] in-box (all coords < Q)? False   max coord bits = 255  vs Q bits = 58
+
+[V] in-box secret entropy ceiling  = N * bits(Q) = 8192 * 58 = 475136 bits
+[V] acc-pin output = 255 bits (one BN254 field element)
+[V] lower bound on IN-BOX witnesses per acc value = 2^(475136 - 255) = 2^474881
+[V] => acc-pin + per-coeff range box is NOT injective: a ~474881-bit in-box fiber remains;
+    range pins only remove the ~197-bit OUT-of-box coords; they do not close the fiber.
+
+[D] k[N-1] = 52435875175126190479447740508185965837690552500527637822600017157749724563314 (255 bits)
+[D] gap: k[N-1] is about 39f6d3a96da2f17d9f1bfa1b4ed2452ea79dab998f9709b4d1 the per-coeff box bound Q (bit gap 197 bits)
+END
