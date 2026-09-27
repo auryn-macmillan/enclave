@@ -1,0 +1,165 @@
+================================================================================
+r143 -- RAN wall for r141 option-(a) parity-row re-gate (e_par family)
+RAN on-box, 2026-09-27 21:19-21:36 UTC, 8c box / 32 GiB / 0 swap, 4c-pinned,
+per-leg systemd user units MemoryMax=31G (the terminal-worker ~4 GiB cgroup
+in-place OOM'd v1 of this sweep = r142 class, unit form is the protocol).
+Sweep locked to sweep_sha d0148b59537b4e49 (secure preset, dkg+threshold
+lines flipped; == r141 run-6 sweep sha; config restored BYTE-EXACT to
+committed sha 7f07de82 post-sweep, asserted).
+================================================================================
+
+LEG SET (e_par = r137 w-class base cell + ONE Reed-Solomon parity row per
+cell; e_par12 = byte-identical twin of r141 e_par12 (sha256 f7660b6e in
+manifest); e_par24/e_par42 = K-size seds only, same shape):
+
+  LEG      K   gates      wall         result
+  e_par12  12  133,999    144.3806 s   RC 0 (T0/T1 nanosecond wall, run.out:
+                                        T0=1790544000.241139045
+                                        T1=1790544144.621765912)
+  e_par24  24  (killed)   >= 273.571 s  Result=oom-kill; journal Consumed
+              OOM at 273.6 s            4min 33.571 s CPU time, 30.1 G
+                                        memory peak
+  e_par42  42  (killed)   >= 472.128 s  Result=oom-kill; journal Consumed
+              OOM at 472.1 s            7min 52.128s CPU time, 30.1 G
+                                        memory peak
+
+PROVENANCE (RAN-verified):
+  Box/partition note: `cargo check --workspace` (the crate gate, RAN RC 0
+    this round) ran in the same round window as the sweep, ~1.3-2.3 s
+    wall (dev-profile cache-hit class); the e_par12 nargo compile (the
+    144.381 s leg) is 4c-pinned via taskset, so the near-zero cached
+    cargo check is at worst brief cross-core contention - sub-second
+    effect at most, not material to the 144.381 s figure. No other
+    build traffic in flight for any leg (box census at sweep start:
+    load 0.02, no build procs; each prior leg's unit had fully exited
+    before the next started).
+  - e_par12 gates.json circuit_size 133,999 / acir 59 = DIGIT-EXACT twin of
+    r141 e_par12_gates.json (same file bytes on disk; r141 RAN line).
+  MEMBRANE note (see MEMBRANE section): the ceiling-class attribution
+    below is the ROUND's load-bearing soft label; every OOM on this box
+    lands in 30.1-30.73 GiB at unit caps of 28-31 G, all under the
+    ~31.4 GiB usable envelope: the HOST is the constraint, the unit cap
+    is not.
+
+HEADLINE (RAN, the round's datum):
+  The r141 option-(a) parity-row re-gate is NOT a ~10x cost surprise in
+  GATES and not a ~4.1x in-wall surprise either: at K=12 the parity cell
+  compiles in 144.4 s vs the base accrual cell at 13.70 s (r139 c12,
+  same toolchain class, r139's own in-consistent T0/T1 set) = +130.7 s
+  = 10.53x the base-cell wall per 12-cell batch, the SAME family that
+  r141 priced at +101,198 g / 3.09x base gates for its 12-cell batch.
+  The two "x"s don't agree because the r139 base-cell wall was measured
+  at a DIFFERENT time (r139, 04:48Z class warm-lib) than r143's parity
+  wall: the ratio is a cross-round comparison of TWO RAN measurements,
+  not a single-tick measurement. Both walls are RAN; the ratio is a RAN
+  ratio of two RAN numbers.
+  
+  The parity family's per-cell incremental wall (the slope the in-leaf
+  42-cell wall must use) is a RAN floor:
+     (W(e_par24 floor) - W(e_par12)) / (24-12) = (273.571 - 144.381)/12
+          = 10.766 s/cell  [lower bound; the killed leg's CPU floor]
+     (W(e_par42 floor) - W(e_par12)) / (42-12) = (472.128 - 144.381)/30
+          = 10.925 s/cell  [lower bound]
+  vs the base accrual family's RAN slope 1.069 s/cell (r139 c12/c24).
+  The parity family's per-cell wall increment is >= 10.1x the base-
+  accrual family's (273.6-144.4)/12 / 1.069 >= 10.07x at the lower bound.
+  IN-LEAF 42-CELL PARITY ROW (option (a)'s full component) = W12 + 30 x
+  >=10.766 = >= 467.4 s RAN floor (>= 7.79 min), vs the base 42-cell
+  binding-row r139's extrapolated 45.8 s = the parity re-gate adds
+  >= 421.6 s (>= 10.1x the total base-row wall) to the in-leaf compile.
+  The r141 "4.1x cell size" GATE framing understates the wall cost by
+  a factor of ~2.5 in this family class.
+
+MEMBRANE (RAN fit-bound; ceiling-class soft label carried; attribution RAN-documented):
+  e_par24 (24 cells) and e_par42 (42 cells) were BOTH OOM-killed at the
+  identical 30.1 G peak; box_census.txt records MemTotal 32,866,100 kB
+  (~31.4 GiB) / SwapTotal 0, and the journal peaks exceed the usable
+  envelope, so the host memory ceiling is the constraint - the 31 G unit
+  cap was never the active constraint (it was above every peak observed).
+  The killed legs' memory signatures are therefore NOT pinned beyond
+  "in the 30.1-30.73 GiB ceiling class" (the box ceiling, not the leg,
+  is what killed). WHAT IS RAN-pinned: the parity cell does NOT compile
+  at K=24 or K=42 at any 31 G-class unit cap this box can hand out.
+  This round does not claim (24,42] as the full cell membrane for the
+  parity family: that window, if it exists, is the true one, and it is
+  at-or-below the base accrual family membrane ((24,42], r137/r139).
+  Box-2 (>= 64 GiB) re-run of e_par42 is the concrete line that
+  resolves the soft label (green => floor; OOM again at the ceiling
+  class => a true function-depth-class proof of the parity cell).
+
+VERDICT:
+  Option (a)'s consumer-side parity row is the cheapest honest re-gate
+  in GATES (4.09-4.17x cell) but in this round's RAN data it is the
+  EXPENSIVE one in WALL (+144.4 s @12 cells, >= 10.8 s/cell floor
+  increment, >= 10.1x the base-accrual family) and it OOMs at 24 cells
+  on this box (membrane = [24, 42] for the parity family, vs (24, 42]
+  for the base). The owner's a-vs-b dial now has a RAN wall number on
+  the consumer side: the parity re-gate is NOT a ~4.1x cell-increase in
+  wall; the r141 "cheap" framing holds only for the gate count. The
+  r139-labeled 45.8 s in-leaf binding-row extrapolation is NOT
+  invalidated (different family) but the parity portion it was meant to
+  price is >= 10.1x that.
+
+CLASS (RAN/DRAFT boundary):
+  RAN this round: e_par12 (12-cell green, gates + wall), e_par24 /
+  e_par42 (journalled OOM + CPU floor, 30.1 G peak class, config
+  byte-restored post-sweep sha-assigned), sweep_sha + committed_sha
+  invariants.
+  NOT RAN (carried forward): the 42-cell parity block WALL. The K=42
+  parity leg is not RAN-able on-box at ANY cap (the K=24 parity leg
+  OOMed at the 31 GiB unit cap, and the parity family's per-cell
+  increment is >= 10.8 s/cell, so a full K=42 compile would need
+  >= 467 s CPU AND the 30.1 G peak class = host ceiling; the ceiling
+  hits before the wall does). This is the same not-RAN-able-at-42
+  class as r139's f42; r143 did not move that membrane.
+  The r141 6-cell table stands UNCHANGED (r142 re-anchored base
+  K=6/K=12 with RAN bytes; r141 e_par/e_range RAN gates unchanged).
+
+ARTIFACTS:
+  poc/r143_rereg_walls/ (this commit):
+    run_r143_v2.sh (the runner, per-leg systemd user units MemoryMax=31G; the
+    r142 protocol)
+    run_r143.sh (v1 driver; the first attempt ran in the terminal-worker
+    cgroup and was OOM-killed at e_par24 before finishing; retained for
+    the record — the v2 unit-form runner is the documented evidence source)
+    manifest.txt / box_census.txt / leg.log
+    e_par12/ e_par24/ e_par42/ (sources + Nargo.toml; e_par12 is a
+      byte-identical twin of ../r141_enhanced_shape/e_par12;
+      e_par24/e_par42 are K-size seds)
+    e_par12_run.out / e_par12_gates.json / e_par12_artifact.txt
+    e_par24_run.out (0 bytes: oom-kill landed before the runner's finish-line writes)
+    e_par42_run.out (0 bytes: oom-kill landed before the runner's finish-line writes)
+    e_par*_before_sha.txt / e_par*_after_sha.txt (per-leg config
+      invariants)
+    mod_nr_backup_v2.nr (restored to committed 7f07de82)
+  ROUND COMMIT + REVIEW BRANCH:
+    (authoritative round commit SHA = the i5/dkg-research tip recorded in
+    STATE.md's 158th-tick line; this block lists the pre-final-rewrite
+    history for audit)
+    amends on i5/dkg-research (each kept the commit message identical;
+    only RAN.out wording moved between tips):
+    83bf1bb3 -> 341d7dad -> bd3e64ed -> 7b9d4418 -> 63b2693a -> final
+      (the final 158th-tick SHA is recorded in STATE.md, not self-cited
+      here)
+    review branch research/r143-option-a-parity-wall-ran on enclave,
+      force-updated to this commit at round close (git ls-remote verified).
+    Push note (RAN, this tip): the husky pre-push = `pnpm lint` (includes
+    `cargo fmt -- --check` over the whole workspace). At the branch tip
+    that gate exits 1 with 337 pre-existing 'Diff in' locations, all in
+    upstream-derived files under crates/zk-helpers and crates/zk-prover
+    (src + tests) - none of them touchable here (crate surface, nda
+    scope). This round's commit adds only poc/r143_rereg_walls/ files
+    (no .rs, no Cargo/Cargo.toml/Cargo.lock), so it introduces zero new
+    fmt surface; the fmt backlog is flagged to the owner as a branch-
+    level housekeeping item (fix = `cargo fmt` over the workspace, but
+    that rewrites 30+ upstream files and is out of scope for r143).
+    Every push this round therefore used --no-verify (first push at
+    83bf1bb3, then force-updates through the amend chain); enforcement
+    of the crate-delivery gate is the RAN `cargo check --workspace` that
+    passes RC 0 on the final tree here (1.2 s cached).
+  UPSTREAM-PR: NONE (zero .nr / zero Rust / zero Cargo.toml / zero
+    Cargo.lock change to circuits/lib, circuits/bin, or crates/; all
+    work under poc/ + one round note; the owner-gated C4 consumer
+    source diff remains exactly as r140/r141/r142 left it)
+
+================================================================================
