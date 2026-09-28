@@ -50,10 +50,12 @@ in this folder (test_a and test_b in test_c5cheap.py), not assumed:
 
 (B) The P3 ct0 already runs a co-pin family over these same limb polys: per-limb
     range checks (ct0.nr:110-125), and the single SZ evaluation identity
-    (ct0.nr:162-187, the summed lhs == rhs). A non-zero kernel displacement is
-    localized: it kicks out of the range pin at exactly the shifted coefficient,
-    and it shows up at one or two limbs in the SZ identity. So the co-pin family
-    closes the kernel exactly. (This is the argument of test_d + test_e + test_f.)
+    (ct0.nr:162-187, the summed lhs == rhs). The intent is that this family is
+    what licenses using the pin as a binding. Whether it actually CLOSES the
+    (N-1)-dim pin kernel over the in-box, in-circuit-satisfying set is exactly
+    the question the suite below does NOT settle - section 2a states it.
+    (test_d + test_e + test_f show the family catches specific displacements;
+    they do not show it catches every one.)
 
 With the pin, the commitment input becomes the pin (a single field element)
 rather than the full bit-flattened limb polys. The pin is a deterministic
@@ -63,6 +65,91 @@ SZ identity / range pins are left untouched. The soundness frontier is the
 same as the safe-sponge frontier, with one less in-circuit term. This restates
 r136 DESIGN.md line 16-18: "the consumer must keep every other pin live on its
 path" ... "Option B is a BINDING REARRANGEMENT, not a hash swap."
+
+## 2a. OPEN SOUNDNESS STATEMENT (labeled; NOT established by this branch)
+
+The gate-cut number (section 1, -96.203%) does not depend on this; the *binding*
+claim does. Stated out, separate from the cost result, because the suite that
+passes in this folder does not settle it.
+
+**The circuit-actual assertion (one point, not the full ring identity).**
+`verify_evaluations` (ct0.nr:162-187) asserts a SINGLE field equality at one
+evaluation point gamma (= gammas[0]). For each of the L limbs it forms
+
+    ct0_rhs_i = pk0is[i](gamma) * u(gamma) + e0is[i](gamma)
+               + k1(gamma) * k0is[i]
+               + r1is[i](gamma) * qis[i]
+               + r2is[i](gamma) * (gamma^N + 1)
+
+and asserts
+    sum_i gamma_i * ct0is[i](gamma)  ==  sum_i gamma_i * ct0_rhs_i,
+with gamma_0 = 1 and gamma_i = gammas[i] for i >= 1. That is ONE field
+equation. The full polynomial identity `residual == 0` in
+(Z/QZ)[x]/(x^N+1) instead requires the residual to be the zero polynomial = N
+independent coefficient constraints. V(circuit) therefore strictly contains
+V(ring-identity).
+
+**The kernel statement (the only question that matters).**
+Let V be the set of witness tensors
+    W = (pk0is, ct0is, u, e0, e0is, k1, r1is, r2is)
+passing every in-circuit check (per-limb range box, ct0.nr:110-125; e0 CRT
+consistency, ct0.nr:98-108; the one-point SZ assertion above). Let pi(W) be the
+proposed pin (walking pin over the committed limb polys). The binding question
+is:
+
+    Is pi injective on V?  i.e., is there W != W' in V with pi(W) = pi(W')?
+
+If such a pair exists, one who commits to pi and learns the channel that
+distinguishes the two preimages succeeds; the binding is broken, and the
+question this reduces to is short-integer-solution / bounds-SIS-shaped (find a
+nonzero d in the (N-1)-dim pin kernel with pi(d) = 0 and W, W' both in-box
+and in V). This is the expression of a SIS-type hardness; whether it is
+actually hard at the concrete (N, q, box, gamma-dist) at secure-8192 is NOT
+shown here. It depends on parameters, and needs either a reduction or a lattice
+cost estimate, not the six tests below.
+
+**What the suite (section 3) does and does NOT establish.**
+- (A),(B): pin linear, kernel dim N-1. Kernels are linear; V is a quadratic /
+  affine slice. Neither says anything about V.
+- (C),(D),(F): test `residual == 0` (the N-constraint ring identity), a STRICTLY
+  stronger condition than the circuit's one-point SZ. If Vr = {in-box W :
+  residual(W) = 0} subset V, then (C) exhibits one W in Vr, (D) shows a single-
+  coefficient tamper leaves Vr, and (F) shows a forged tuple leaves Vr. None of
+  these is a search over V for a pi-collision, and none rules one out on
+  V \ Vr. That residual set V minus Vr is exactly the surface the one-point
+  assertion opens, and exactly where a small in-box d with pi(d) = 0 could
+  register undetected. The tests searched Vr (smaller); the claim needs V.
+- (E): range box catches an OOB witness; independent of pi.
+
+So the honest status: (A),(B) are true; (C)-(F) hold on the stronger set Vr;
+injectivity of pi on V is OPEN. This branch should not be read as settling it.
+
+**Decision pointer (owner/architecture; none run in this branch).**
+1. If the SZ residual at the fixed gamma, linearized in small displacements
+   d, is affine in d, then a pi-collision on V is L-inf-bounded-SIS (short
+   integer solution with a linear kernel subject to a box). An eSIS-style
+   reduction suffices and is short.
+2. The one-point residual is degree-2 in the witness, but with a narrow
+   non-linearity: the ONLY monomial multiplying two varied witnesses is
+   pk0is_i(gamma) * u(gamma). The pieces k1(gamma)*k0i and r1i(gamma)*q_i are
+   LINEAR, because k0i and q_i are public scheme params (`configs`), not
+   witnesses; and the e0 / r2 / ct0 terms are plainly linear. Since all L
+   limbs share the single u(gamma), that term is the bilinear form
+   u(gamma) * [sum_i gamma_i pk0is_i(gamma)] - rank-1. Hold u fixed (or keep
+   the pk0-u perturbation off the other displacements) and the residual is
+   affine in every remaining direction, so option 1's affine linearization is
+   exact on all but that one rank-1 direction. If the bilinear term cannot be
+   excluded, run a seeded Babai / LLL / kernel-solve over the concrete
+   (N, q, box) at secure-8192 with the in-tree gamma distribution, and report
+   the lower bound in bits; 128-or-better is the honest floor.
+3. Cheapest closure: keep the safe-sponge / collision-resistant binding as the
+   EXTERNAL commit (H(ct)) and demote the pin to an internal compression of the
+   proof's own FS machinery. Then the two-witness pi-collision question only
+   has to be answered for whatever the proof is internally bound to, and the
+   app-side trust model is the hash, collision-resistant by construction.
+
+(2a) is the open item that extends 6.3.
+
 ## 3. What the draft proves (each line -> a section in test_c5cheap.py)
 
 - **A** — the pin is bilinear over the field: pin(aX + bY) = a pin(X) + b pin(Y).
