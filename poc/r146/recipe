@@ -1,0 +1,64 @@
+# r146 — C3 + C2b range-family fractions (closes r145 NEXT)
+
+r145 left the two biggest UNPRICED DKG leaves unpriced: C3 (25.66% of DKG) and C2b
+(24.99%). This round runs the same shadow-NOP ablation that r145 ran on C2a, on both,
+in one unit pass. Measurement-only, never released: the range-check call is commented
+out, compiled, gates read, tree restored byte-exact.
+
+## Legs — RAN (systemd user unit r146_a_rangel_a, MemoryMax=31G, taskset 0-3)
+
+| Leg | Leaf | NOP | Gates | ACIR | Wall | Peak RSS | Fresh SHA-256 (first 8) |
+|-----|------|-----|-------:|-----:|-----:|---------:|-------------------------|
+| C3A | share_encryption | — (re-anchor) | **2,966,353** | 1,087,267 | 1:29.20 | 4.11 GiB | e808e5bc |
+| C3B | share_encryption | `check_range_bounds()` | **1,827,697** | 440,131 | 1:09.04 | 3.22 GiB | 0e054e1c |
+| C2BA | e_sm_share_computation | — (re-anchor) | **2,888,964** | 827,414 | 3:44.85 | 5.46 GiB | 7a10a811 |
+| C2BB | e_sm_share_computation | `check_range_bounds` @172 | **2,335,999** | 606,230 | 3:39.34 | 5.32 GiB | c4ba1f1a |
+
+- **Re-anchor before the Δ is quotable — PASS:** C3A reproduces the r39/r41/r75/r84
+  digit-pinned golden 2,966,353 g exactly; C2BA reproduces the r45/r100 golden
+  2,888,964 g exactly. Same compiler (nargo 1.0.0-beta.26 / bb 5.1.0), same
+  secure-8192/minimum shape (N=3/T=1/H=2) as r145.
+- Box: 8-core / ~31.6 GiB avail at launch / 0 swap. HEAD 7d617157b (i5/dkg-research,
+  base d62e22e = origin/main).
+
+## Deltas
+
+| Family | ΔGates | % of leaf | % of DKG base (11,558,499 g) |
+|--------|-------:|----------:|-----------------------------:|
+| **C3 range family** | **1,138,656** | **38.38%** of C3 | **9.85%** |
+| **C2b range family** | **552,965** | **19.14%** of C2b | **4.78%** |
+
+C2b's Δ is digit-identical to r145's C2a Δ (552,965 g) — the twins run the same
+`check_range_bounds::<N, L, N_PARTIES, BIT_SHARE>` call over the same witness shape,
+so the class is RAN-confirmed at both sites now.
+
+## Updated family census (all RAN)
+
+| Family | Gates | Range-family Δ (RAN) | Range % of leaf | Soundness posture |
+|--------|-------:|--------------------:|----------------:|-------------------|
+| C3 | 2,966,353 | 1,138,656 | 38.38% | NOT YET TAGGED (r34 tag is on C2a) |
+| C2b | 2,888,964 | 552,965 | 19.14% | twin of C2a (r34: load-bearing class) |
+| C2a | 1,446,311 | 552,965 | 38.23% | TAGGED load-bearing (r34) — fraction only |
+| C1 | 2,223,114 | unpriced | — | next (r147 if owner wants) |
+| C4 | 1,746,030 | unpriced (dense rate r141) | — | — |
+| C0 | 287,727 | small | — | — |
+
+**Combined C3+C2a+C2b per-coeff range family = 2,244,586 g = 19.42% of the DKG base** if
+the full class were removable. It is NOT independently removable: the C2a twin is
+r34-tagged load-bearing at secure-8192, and the C3/C2b shares of that class carry the
+same per-share [0, q_j) bound that the parity + decryption legs rely on. The quotable
+research fact is the *size of the family the current proof pays for at full density*.
+
+## Verdict
+
+- r145's DRAFT ceiling for C3 (≤ ~9.8% of DKG base) came in **RAN-confirmed at 9.85%** —
+  the top of the band. C3's range family is a real 38.38% of its leaf — the same class
+  as C2a's 38.23% (marginally above it), on a leaf ~2× the size.
+- The single biggest *priced* reducible surface across both paths remains the C3 range
+  family; the honest caveat is that it is the same soundness-loaded class as C2a's, so
+  "cut it" still requires a chip-level/aggregate redesign (r115 C6 class), not a NOP.
+- Browser P3 asymmetry stands undisturbed: <3.8% (r132) vs ~38% here — the per-coeff
+  range family is a DKG-side problem, not a browser-side one.
+
+UPSTREAM-PR: none (measurement-only; poc/-only diff; NOP source restored byte-exact —
+config+source shas re-verified, the sole porcelain line is this untracked poc/r146/ dir).
