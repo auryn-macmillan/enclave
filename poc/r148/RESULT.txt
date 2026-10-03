@@ -1,0 +1,33 @@
+r148 RESULT - DIRECTION 2026-10-02 item (2) Browser P3 wall anchor
+Branch: i5/dkg-research @ 46d7d706c (r147 tip). Base origin/main d62e22e16 UNMOVED (rebase no-op 0/90).
+Box: 8c / ~31.5 GiB avail / 0 swap. nargo 1.0.0-beta.26 / bb 5.1.0.
+Zero .nr/.rs source change; config byte-sha restored to DEF 7f07de82 / ACT 0bf0cc64 (or 0bf0cc64).
+
+RAN (fresh this round):
+ - P3 browser leg gate census (commitriive recursive artifact on-box RAN):
+     user_data_encryption   FULL  = 1,426,442 g
+     user_data_encryption_ct0     =    53,695 g
+     user_data_encryption_ct1     =    46,233 g
+     ct0+ct1 = 99,928 g = 7.0% of FULL (rest = bb_proof_verification + sha3 pin)
+ - (0)-winner bridge: source-grep over the 3 P3 wrappers returns EMPTY for
+   c3|share_encrypt|per_limb|range; hence the (0) winner (C3 per-limb, 966,604 g,
+   8.36% DKG base per r147) is ABSENT from the P3 wrapper => (0)-winner browser-wall cut = 0 us.
+
+2-pt gate->wall (RAN prior-round anchors, on-disk; not on-box re-run):
+  p4 swim cell  71,981 g / 1.97 s  = 27.36 us/g (r132/r134/r138 RAN)
+  per-cell      2,732 g / 1.069 s  = 391.3 us/g (r137/r139 RAN)
+  Different families -> not one line (r138 design callout). Full 1,426,442-g P3 wall
+  at either rate is DRAFT-only (~39 s or ~558 s) - not a RAN wall.
+
+DELIVERABLE (the (0)-winner browser wall cut):
+  = 0 us (structural, RAN-grep). The (0)-winner's wall cut (8.36% DKG base = 966,604 g
+  per-limb) lives in the DKG phase, NOT in the P3 wrapper. P3-leg realism = 1.426M gates
+  at smallest-shape minimum (insecure-512/minimum committed artifact); secure-8192 wall = DRAFT
+  (box-2 >= 64 GiB + tsc BUILD_PRESET driver required; this box pages through the combined
+  DKG C3-class 4-5 GiB + P3 wrapper tech-profile).
+
+VERDICT: item (2) RAN-closed on the ask "quote the browser wall cut of the (0) winner" (= 0 us, structural).
+The "smallest secure shape that fits" + real wall for P3 itself remains DRAFT for box-2.
+Browser-side P3 lever = SAFE-poly re-commit family (96.2% of the 71,981-g M3 cell, r132 anatomy)
+- distinct from the (0) winner. Owner decides context: box-2 wall leg vs SAFE-poly pivot.
+UPSTREAM-PR: none (poc/ + ledger only).

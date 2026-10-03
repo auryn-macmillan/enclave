@@ -1,0 +1,17 @@
+r148 GATE->WALL 2-point curve (RAN-pinned inputs; skill rule 4: RAN parts robust to DRAFT parts)
+
+SOLID RAN anchor points (measured, on-box, prior rounds):
+  PT-1  p4 swim cell isolated (r134/r138):  71,981 g  ->  1.97 s   (secure-8192/small H=14, 4c)
+           per-gate  = 1.97 / 71,981 = 27.37 us/g
+  PT-2  per-cell in-block slope (r137/r139): 2,732 g / cell, per-cell wall 1.069-1.078 s @4c
+           per-gate  = 1.069 / 2,732 = 391 us/g  (SAFE-poly 96.2% body -> mem-bw-broken, higher unit cost)
+NOTE: PT-1 (light cell) and PT-2 (safe-poly body) are DIFFERENT circuit families, so they do NOT lie on
+      one line - this is by design (r138 'wall vs gate' callout). Do NOT cross-multiply them into a fake slope.
+
+=> The FULL P3 wrapper (1,426,442 g) wall is NOT derivable from a single clean linear 2-pt: it is a
+   composite (ct+sha3+ptvk). Anchoring it to ONE measured chain (skill rule): the closest measured chain
+   for a browser-class wrapper is the pt-1 light-cell rate only if the wrapper were all light (it is not).
+   Honest quote: P3 wrapper wall = DRAFT until a direct secure-8192 reclaim RAN (box-2). No fabricated midpoint.
+
+(0)-WINNER BROWSER WALL CUT:  0 us (structural: the winner's family is not in the P3 wrapper gate body,
+   RAN-grep-verified). The 8.36% DKG-base cut (966,604 g) is a DKG-phase cut, not a browser-leg cut.
