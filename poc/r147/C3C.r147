@@ -1,0 +1,12 @@
+ROUND=r147 LEG=C3C DATE=2026-10-03T06:13:26Z
+COMPILE_RC=0
+PEAK_RSS_KB=3591560 SWAPS=0
+WALL_TIME=1:13.41
+FRESH_SHA256=4f0d58f2f79d57d0d3f186d544a53403f5176721d0f8334d38408ef8122d115c PRE_SHA_SE=a7c5b9b91b036db02ecaf3e23bb86bccebc0abb3b5b7ff7309552460fbe5e56f
+GATES=1999749 GOLDEN_EXPECTED=UNANCHORED-SHADOW-NOP-LEG(BLOCK: per-limb-for-loop-commented, 4 flat polynoms remain)
+ACIR_OPS=563011
+SAMPLED_PEAK_MB_THIS_LEG=4.2G (from direct run; unit-peak not yet capturable)
+NOTE: C3C first launched via A_main.sh failed with RC=1 (anchor dropped the fn-close brace).
+Re-run inline (python /tmp/c3c_slice2.py + nargo --force direct) succeeded. This file
+is the RAN record of the corrected leg. Slice math identity: (C3A - C3C) + (C3C - C3B)
+= 966,604 + 172,052 = 1,138,656 = (C3A - C3B). DKG-base share = 8.36%; leaf share = 32.59%.

@@ -1,0 +1,11 @@
+# large compile intermediates retained for provenance but not versioned
+/*_compile_stdout.log
+/*_compile_timev.log
+/*_ram_trace.log
+*_fresh.json
+*_gates_raw.json
+*_gates_err.log
+restored
+*.out
+unitA.log
+leg_env.txt

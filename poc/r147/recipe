@@ -1,0 +1,52 @@
+# r147 — C3 per-limb range-family cost-price (DIRECTION 2026-10-02 item (1))
+
+r146 RAN-confirmed the C3 range family = 1,138,656 g (38.38% leaf, 9.85% DKG). This
+round prices the PER-LIMB slice of that family (the part a per-limb aggregate-bound
+redesign, "r115 C6 class", would actually replace) via a 3-leg shadow-compile harness
+(same r99/r100/r145/r146 shape: systemd user unit MemoryMax=31G, taskset 0-3, 8c/32G
+box; nargo 1.0.0-beta.26 / bb 5.1.0; secure-8192 / minimum N=3/T=1/H=2; HEAD a89e6f451).
+
+## Legs (all RAN; measurement-only; tree restored byte-exact after each leg)
+
+| Leg   | Configuration                                        | Gates     | ACIR     |
+|-------|------------------------------------------------------|----------:|---------:|
+| C3A   | in-tree as-is (unblunt re-anchor)                    | 2,966,353 | 1,087,267 |
+| C3B   | `check_range_bounds()` call fully NOP'd (r146 shape) | 1,827,697 | 440,131  |
+| C3C   | 4 flat polynoms stay; per-limb for-loop commented    | 1,999,749 | 563,011  |
+
+Re-anchor PASS: C3A = 2,966,353 digit-EXACT to r145/r146 golden (r39/r41/r75/r84);
+C3B = 1,827,697 digit-EXACT to r146 C3B twin. Fresh SHAs: C3A e808e5bc / C3B 0e054e1c
+(both byte-twin to r146) / C3C 4f0d58f2 (new, unanchored by design).
+
+## Deltas (all RAN from RAN inputs only)
+
+| Slice                                    | Gates    | % leaf  | % DKG base |
+|------------------------------------------|---------:|--------:|-----------:|
+| Total range family (C3A - C3B)           | 1,138,656| 38.39%  | 9.85%      |
+| Per-limb slice (C3A - C3C)               | 966,604  | 32.59%  | 8.36%      |
+| Flat slice (C3C - C3B; = u/e0/e1/message)| 172,052  | 5.80%   | 1.49%      |
+
+Identity check: per-limb (966,604) + flat (172,052) = 1,138,656 = total. ✓
+
+Per-limb = 84.9% of the total C3 range family; flat = 15.1%. This is the number the
+aggregate-bound lever must beat: a Spec-A (pk/p1/p2 aggregate only) redesign attacks
+the 8.37%-DKG per-limb slice.
+
+## Soundness posture (see soundness.md)
+
+C3C is NOT a sound vehicle - it only isolates the per-limb slice. A per-limb aggregate
+bound redesign (Spec A) is binding-invariant: the 12 per-limb range calls it replaces
+are NOT part of the I15 witness shape (CT0 relation relies on |e0| < q_l, which is in
+the flat e0 polynomial, not the per-limb pk/r1/r2/p1/p2). Spec B (also aggregate r1/r2)
+is NOT recommended - it re-opens I15 adjudication.
+
+## Verdict
+
+Per-limb slice of C3's range family RAN = 966,604 g = 32.59% of C3 leaf = 8.37% of the
+DKG base (byte-twin with r146 for the family ceiling). The aggregate-bound lever's
+maximum attainable is this 8.37%; after an in-tree Spec-A proto + e2e it should land
+≈ 6-7% DKG base (the per-limb wire overhead that survives after aggregation is not
+zero). In-tree delivery is owner-gated per the 2026-09-12 C6-class sign-off.
+
+UPSTREAM-PR: none (measurement-only; poc/-only diff; C3C NOP source restored byte-exact;
+porcelain clean after this round).
