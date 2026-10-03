@@ -1,0 +1,154 @@
+error: Expected a statement but found 'fn'
+    ┌─ /home/dev/interfold-research/interfold/circuits/lib/src/core/threshold/pk_generation.nr:192:5
+    │
+192 │     fn verify_evaluations(self, gamma: Field) {
+    │     --
+    │
+
+error: Expected an expression but found ':'
+    ┌─ /home/dev/interfold-research/interfold/circuits/lib/src/core/threshold/pk_generation.nr:192:38
+    │
+192 │     fn verify_evaluations(self, gamma: Field) {
+    │                                      -
+    │
+
+error: Expected a statement but found ':'
+    ┌─ /home/dev/interfold-research/interfold/circuits/lib/src/core/threshold/pk_generation.nr:192:38
+    │
+192 │     fn verify_evaluations(self, gamma: Field) {
+    │                                      -
+    │
+
+error: Expected a statement but found ')'
+    ┌─ /home/dev/interfold-research/interfold/circuits/lib/src/core/threshold/pk_generation.nr:192:45
+    │
+192 │     fn verify_evaluations(self, gamma: Field) {
+    │                                             -
+    │
+
+error: Expected a ; separating these two statements
+    ┌─ /home/dev/interfold-research/interfold/circuits/lib/src/core/threshold/pk_generation.nr:192:33
+    │
+192 │     fn verify_evaluations(self, gamma: Field) {
+    │                                 -----
+    │
+
+error: Expected a ; separating these two statements
+    ┌─ /home/dev/interfold-research/interfold/circuits/lib/src/core/threshold/pk_generation.nr:192:40
+    │
+192 │     fn verify_evaluations(self, gamma: Field) {
+    │                                        -----
+    │
+
+error: Expected a '}' but found end of input
+    ┌─ /home/dev/interfold-research/interfold/circuits/lib/src/core/threshold/pk_generation.nr:206:2
+    │  
+206 │   }
+    │ ╭─'
+207 │ │ 
+    │ ╰'
+    │  
+
+error: No method named 'verify_evaluations' found for type 'PkGeneration<N, L, BIT_EEK, BIT_SK, BIT_E_SM, BIT_R1, BIT_R2, BIT_PK>'
+    ┌─ /home/dev/interfold-research/interfold/circuits/lib/src/core/threshold/pk_generation.nr:137:9
+    │
+137 │         self.verify_evaluations(gamma);
+    │         ------------------------------
+    │
+
+error: cannot find `verify_evaluations` in this scope
+    ┌─ /home/dev/interfold-research/interfold/circuits/lib/src/core/threshold/pk_generation.nr:192:8
+    │
+192 │     fn verify_evaluations(self, gamma: Field) {
+    │        ------------------ not found in this scope
+    │
+
+error: cannot find `gamma` in this scope
+    ┌─ /home/dev/interfold-research/interfold/circuits/lib/src/core/threshold/pk_generation.nr:192:33
+    │
+192 │     fn verify_evaluations(self, gamma: Field) {
+    │                                 ----- not found in this scope
+    │
+
+error: expected value, found primitive type `Field`
+    ┌─ /home/dev/interfold-research/interfold/circuits/lib/src/core/threshold/pk_generation.nr:192:40
+    │
+192 │     fn verify_evaluations(self, gamma: Field) {
+    │                                        -----
+    │
+
+error: cannot find `gamma` in this scope
+    ┌─ /home/dev/interfold-research/interfold/circuits/lib/src/core/threshold/pk_generation.nr:193:30
+    │
+193 │         let cyclo_at_gamma = gamma.pow_32(N as Field) + 1;
+    │                              ----- not found in this scope
+    │
+
+error: cannot find `gamma` in this scope
+    ┌─ /home/dev/interfold-research/interfold/circuits/lib/src/core/threshold/pk_generation.nr:194:40
+    │
+194 │         let sk_at_gamma = self.sk.eval(gamma);
+    │                                        ----- not found in this scope
+    │
+
+error: cannot find `gamma` in this scope
+    ┌─ /home/dev/interfold-research/interfold/circuits/lib/src/core/threshold/pk_generation.nr:195:42
+    │
+195 │         let eek_at_gamma = self.eek.eval(gamma);
+    │                                          ----- not found in this scope
+    │
+
+error: cannot find `gamma` in this scope
+    ┌─ /home/dev/interfold-research/interfold/circuits/lib/src/core/threshold/pk_generation.nr:198:48
+    │
+198 │             let expected_pk0 = -self.a[i].eval(gamma) * sk_at_gamma
+    │                                                ----- not found in this scope
+    │
+
+error: cannot find `gamma` in this scope
+    ┌─ /home/dev/interfold-research/interfold/circuits/lib/src/core/threshold/pk_generation.nr:200:35
+    │
+200 │                 + self.r2[i].eval(gamma) * cyclo_at_gamma
+    │                                   ----- not found in this scope
+    │
+
+error: cannot find `gamma` in this scope
+    ┌─ /home/dev/interfold-research/interfold/circuits/lib/src/core/threshold/pk_generation.nr:201:35
+    │
+201 │                 + self.r1[i].eval(gamma) * self.configs.qis[i];
+    │                                   ----- not found in this scope
+    │
+
+error: cannot find `gamma` in this scope
+    ┌─ /home/dev/interfold-research/interfold/circuits/lib/src/core/threshold/pk_generation.nr:203:37
+    │
+203 │             assert(self.pk0[i].eval(gamma) == expected_pk0, "Public key equation 1 failed");
+    │                                     ----- not found in this scope
+    │
+
+Aborting due to 18 previous errors
+Command exited with non-zero status 1
+	Command being timed: "nargo compile --force"
+	User time (seconds): 0.61
+	System time (seconds): 0.06
+	Percent of CPU this job got: 107%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:00.63
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 236744
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 0
+	Minor (reclaiming a frame) page faults: 64075
+	Voluntary context switches: 143
+	Involuntary context switches: 41
+	Swaps: 0
+	File system inputs: 0
+	File system outputs: 16
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 1
+COMPILE_RC=1

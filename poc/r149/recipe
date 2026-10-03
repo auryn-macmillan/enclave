@@ -1,0 +1,74 @@
+# r149 — C1 (pk_generation) range-family cost-price (DIRECTION 2026-10-02 queue: C1 was the last UNPRICED large leaf)
+
+r146 RAN-priced C3 (1,138,656 g family, 9.85% DKG) and C2b (552,965 g, 4.78%); r145 C2a (552,965 g, 4.78%);
+r147 per-limb slice of C3 (966,604 g, 8.36% DKG). C1 (2,223,114 g leaf = 19.23% of the 11,558,499 g DKG
+base, r44/r75 digit-pinned, committee-invariant) was the last unpriced large leaf. This round prices its
+range family (eek BIT_EEK flat + sk BIT_SK flat + per-limb e_sm/r1/r2 across L=3) with the same
+r99/r100/r145/r146/r147 shadow-NOP harness form (systemd user unit MemoryMax=31G, taskset 0-3, 8c/32G
+box; nargo 1.0.0-beta.26 / bb 5.1.0; secure-8192 / minimum N=3/T=1/H=2; HEAD f95c835ee = r148 tip).
+
+## Legs (all RAN this round; measurement-only; NEVER release; tree restored byte-exact after each leg)
+
+| Leg  | Configuration                                                              | Gates   | ACIR    | Wall    | Peak       |
+|------|----------------------------------------------------------------------------|--------:|--------:|--------:|-----------:|
+| C1A  | in-tree as-is (unblunt re-anchor)                                          | 2,223,114 | 658,944 | 1:31.29 | 4,339,208 kB |
+| C1B  | `perform_range_checks()` call fully NOP'd                                  | 1,335,654 | 200,216 | 1:09.56 | 4,072,744 kB |
+| C1C  | 2 flat polynoms stay; per-limb `for i in 0..L { e_sm, r1, r2 }` commented   | 1,409,402 | 265,752 | 1:10.50 | 4,316,116 kB |
+
+Re-anchor PASS: C1A = 2,223,114 digit-EXACT to the r44/r75 secure-8192 C1 golden
+(committee-invariant class, r44) - zero shape drift on base d62e22e16. Fresh SHAs:
+C1A 72c5ace8 / C1B eb77cdac / C1C d66aec22 (C1C unanchored by design).
+MEM: all three legs Swaps=0, peak ≤ 4.34 GiB (r44's 4.29 GiB class re-confirmed on the 32 GiB box).
+
+Splice provenance note: C1C's first attempt failed at the brace splice (the for-loop close and the
+range-fn close byte-coincide; the commented-unit logic swallowed the fn close — same class of bug as
+r147's C3C first pass, fixed in-place). The re-run legs are C1C_rerun.sh with the tightened
+`block.count('{')==1 and count('}')==1` unit guard; NO gate number changed between attempts (only the
+failed parse attempt, 0:00.63 wall, produced no artifact).
+
+## Deltas (all RAN from RAN inputs only)
+
+| Slice                                      | Gates   | % leaf  | % DKG base |
+|--------------------------------------------|--------:|--------:|-----------:|
+| Total range family (C1A - C1B)             | 887,460 | 39.92%  | 7.68%      |
+| Per-limb slice (C1A - C1C = e_sm+r1+r2 × L)| 813,712 | 36.60%  | 7.04%      |
+| Flat slice (C1C - C1B; = eek + sk)         | 73,748  | 3.32%   | 0.64%      |
+
+Identity check: per-limb (813,712) + flat (73,748) = 887,460 = total. ✓
+Per-limb = 91.7% of the C1 family (slightly more concentrated than C3's 84.9%).
+
+## Cross-leaf class table (ALL RAN: this round + r145/r146/r147)
+
+| Leaf | Leaf gates | Range family (g)  | % leaf | % DKG base | Per-limb slice (g) | % DKG base |
+|------|-----------:|------------------:|-------:|-----------:|-------------------:|-----------:|
+| C3   | 2,966,353  | 1,138,656 (r146)  | 38.39% | 9.85%      | 966,604 (r147)     | 8.36%      |
+| C1   | 2,223,114  | 887,460 (r149)    | 39.92% | **7.68%**  | 813,712 (r149)     | **7.04%**  |
+| C2b  | 2,888,964  | 552,965 (r146)    | 19.14% | 4.78%      | — (twin-identical to C2a; call site check_range_bounds::<N,L,N_PARTIES,58>) |
+| C2a  | 1,446,311  | 552,965 (r145)    | 38.23% | 4.78%      | — (same as C2b twin) |
+| C4   | 1,746,030  | unpriced          | —      | —          | — (r141 dense-rate RAN) |
+
+The per-limb chops of the two witness-poly leaves (C1 36.60% / C3 32.59% of leaf) are now of the same
+structural class, confirming the reshape-reduction hypothesis at the max-granularity at both sites.
+
+## Soundness posture (see soundness.md)
+
+Same class as r145/r146/r147: the C1 range family is (per the source at pk_generation.nr:155-156)
+ring-LWE-load-bearing - "large coefficients would break the scheme's hardness assumptions (Ring-LWE)."
+The quotable research fact = FAMILY SIZE (7.68% DKG, per-limb 7.04%). An actual cut requires a
+r115-C6-class per-limb aggregate bound redesign (owner-gated, item (5)-(6) persist).
+
+## Verdict
+
+C1 family = 887,460 g (39.92% leaf / 7.68% DKG base); per-limb slice = 813,712 g (36.60% leaf /
+7.04% DKG). C1 + C3 witness-poly leaves (per-limb slices, from the two highest-leaf-share families): 7.04% + 8.36%
+= 15.40% of the DKG base; plus the C2a/C2b twin-site family 9.56% would add another ~10-11% under a
+Spec-A-class redesign (see soundness.md - the C2 twins are bit-share-per-coeff, a stricter bound
+shape, so the inverse direction is NOT a free swap).
+
+## Recompute path (if the owner wants to verify)
+
+/systemd user units: /home/dev/.config/systemd/user/r149_a_rangel_a.service
+A_main.sh (C1A + C1B); C1C_rerun.sh (C1C re-run with unit-reinforce intercept guard).
+Goldens: pk_generation.json sha 6c02eac4e807831bd0fd12dd4c04a5ab9be0df1566a1a715ca5ec65b8c1e2aae.
+
+Upstream PR: none (measurement-only, poc/-only; per-leg blocks restored byte-exact; tree CLEAN post-run).
