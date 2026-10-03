@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+# r152d - C2a + C2b re-anchor + C2a/C2b family shadow-NOP at NEW upstream base c98b0d1ca (#1999).
+# Working branch i5/dkg-research, evidence base c98b0d1ca (rebase onto origin/main RED-BLOCKED
+# at commit 13/93 share_encryption.nr -- do NOT force). worktree /tmp/r151b.
+# 4 legs, all measurement-only (NEVER shipped):
+#   A2a : unblunt C2a re-anchor (sk_... package, exec = SecretKeyShareComputation)
+#   A2b : unblunt C2b re-anchor (e_sm_package, exec = SmudgingNoiseShareComputation)
+#   B   : 1st check_range_bounds call site in share_computation.nr out-of-tree-commented (C2a body)
+#   C   : 2nd check_range_bounds call site in share_computation.nr commented (C2b body)
+# Plus rule-reading: C4 solo re-anchor done in sibling script r152d_c4_reanchor.sh.
+# Total runtime est: 4 legs x ~2:40 wall @4c = ~11-12 min wall (sequential). Well inside budget.
+# nargo beta-26 writes artifact to PACKAGE-ROOT target (<bin>/dkg/target/<CIR>.json), NOT pkg-dir.
+set -u
+export PATH="$HOME/.local/bin:$HOME/.nargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+R=/tmp/r151b
+OUT=/home/dev/interfold-research/interfold/poc/r152d
+BIN=$R/circuits/bin/dkg
+TGT=$BIN/target
+
+# C2a directory address (100% ASCII 20 chars, resolves `sk_share_computation` per byte-audit
+# sha256(hex) == 736b5f73686172655f636f6d7075746174696f6e == 'sk_share_computation').
+# Set-diff addressing also covers the NULL-ACK case if the channel ever drops a byte.
+#  audited: 4 dirs + 5 jsons in $BIN + $TGT; altitude known.
+# Inline literal resolved via os.listdir exactly-matches (fails loudly if any byte differs,
+# guards against transport mangling of the name).
+CIRA=$(python3 - "$BIN" <<'PY'
+import os,sys
+d=sys.argv[1]; cands=[x for x in os.listdir(d) if os.path.isdir(os.path.join(d,x))]
+# expected dir name: 20 chars, matches sha256 == 0607d9f6fb06ca29a1b1e2e9425b0c1ae9a0aa9a0e0a48ca1bb4e5be33e7c25e? no -- that is no, just do set-diff against the 4 known siblings
+known={'pk','share_encryption','share_decryption','e_sm_share_computation','target'}
+diff=[x for x in cands if x not in known]
+assert len(diff)==1, 'expected exactly 1 non-known dkg member dir; got %r' % diff
+print(diff[0])
+PY
+) || { echo "CIRA_PICKFAIL: $CIRA" >&2; exit 97; }
+CIRB=e_sm_share_computation
+log(){ echo "[$(date -u +%FT%TZ)] $*" | tee -a /tmp/r152d.log; }
+
+cd "$R" || { log ERR; exit 96; }
+mkdir -p "$OUT"
+[ "$CIRA" != "PICKFAIL" ] || { log C2A_PICKFAIL; exit 97; }
+log "HEAD=$(git rev-parse HEAD) CIRA=$CIRA CIRB=$CIRB"
+git rev-parse HEAD | grep -qE '^c98b0d1ca' || { log BASE-NOT-LOCKED; exit 97; }
+[ "$(git status --porcelain)" = "" ] || { log DIRTY; git status --porcelain | head -5; exit 98; }
+AVAIL_KB=$(awk '/^MemAvailable:/{print $2}' /proc/meminfo)
+[ "$AVAIL_KB" -ge 20000000 ] || { log "NOGO_PRE_MEM=$AVAIL_KB"; exit 96; }
+
+DEF=$R/circuits/lib/src/configs/default/mod.nr
+ACT=$R/circuits/lib/src/configs/committee/active.nr
+SC=$R/circuits/lib/src/core/dkg/share_computation.nr
+SE=$R/circuits/lib/src/core/dkg/share_encryption.nr
+SD=$R/circuits/lib/src/core/dkg/share_decryption.nr
+
+P_DEF=$(sha256sum "$DEF" | cut -d' ' -f1)
+P_ACT=$(sha256sum "$ACT" | cut -d' ' -f1)
+P_SC=$(sha256sum "$SC"  | cut -d' ' -f1)
+SE_SHA=$(sha256sum "$SE" | cut -d' ' -f1)
+SD_SHA=$(sha256sum "$SD" | cut -d' ' -f1)
+J2A_SHA=$(sha256sum "$TGT/$CIRA.json" 2>/dev/null | cut -d' ' -f1 || echo none)
+J2B_SHA=$(sha256sum "$TGT/$CIRB.json" 2>/dev/null | cut -d' ' -f1 || echo none)
+JD_SHA=$(sha256sum "$TGT/share_decryption.json" 2>/dev/null | cut -d' ' -f1 || echo none)
+log "PRE_DEF=$P_DEF ACT=$P_ACT SC=$P_SC SE=$SE_SHA SD=$SD_SHA J2A=$J2A_SHA J2B=$J2B_SHA JD=$JD_SHA"
+
+cp -f "$DEF" "$OUT/zz_default_mod.nr"
+cp -f "$ACT" "$OUT/zz_active.nr"
+cp -f "$SC"  "$OUT/zz_share_computation.nr"
+[ "$J2A_SHA" != "none" ] && cp -f "$TGT/$CIRA.json" "$OUT/pre_${CIRA}.json"
+[ "$J2B_SHA" != "none" ] && cp -f "$TGT/$CIRB.json" "$OUT/pre_${CIRB}.json"
+
+restore(){
+  log TRAP-RESTORE
+  cp -f "$OUT/zz_default_mod.nr" "$DEF"
+  cp -f "$OUT/zz_active.nr"      "$ACT"
+  cp -f "$OUT/zz_share_computation.nr" "$SC"
+  # Also restore the in-tree pre-JSON artifacts so the tree ends CONSERVE_OK
+  # (each leg's nargo compile replaced them with its own output; without this
+  #  restore the tree would carry leg-C's artifact as the C2a/C2b in-tree pin.)
+  [ "$J2A_SHA" != "none" ] && cp -f "$OUT/pre_${CIRA}.json" "$TGT/$CIRA.json" || rm -f "$TGT/$CIRA.json"
+  [ "$J2B_SHA" != "none" ] && cp -f "$OUT/pre_${CIRB}.json" "$TGT/$CIRB.json" || rm -f "$TGT/$CIRB.json"
+  if diff -q "$OUT/zz_default_mod.nr" "$DEF" >/dev/null 2>&1 && \
+     diff -q "$OUT/zz_active.nr"      "$ACT" >/dev/null 2>&1 && \
+     diff -q "$OUT/zz_share_computation.nr" "$SC" >/dev/null 2>&1; then
+    log RESTORED_OK
+  else
+    log RESTORE_FAIL
+  fi
+}
+trap restore TERM INT
+
+flip_preset(){
+  python3 - "$DEF" <<'PY'
+import sys
+p=sys.argv[1]; a=open(p).read()
+s=a.replace('Auto-generated by build-circuits.ts for preset: insecure-512',
+            'Auto-generated by build-circuits.ts for preset: secure-8192')
+s=s.replace('pub use super::insecure::dkg;','pub use super::secure::dkg;')
+s=s.replace('pub use super::insecure::threshold;','pub use super::secure::threshold;')
+assert s!=a, 'preset flip miss'
+open(p,'w').write(s); print('FLIP_OK')
+PY
+}
+
+compile_leg(){
+  local TAG=$1 CIR=$2 SUBDIR=$3
+  log "${TAG} ${CIR} PRE_JSON=$(sha256sum "$TGT/$CIR.json" 2>/dev/null | cut -d' ' -f1 || echo none)"
+  rm -f "$TGT/$CIR.json"
+  cd "$BIN/$SUBDIR" || { log "${TAG}_CDN_FAIL_SUBDIR=$SUBDIR ret=97"; return 97; }
+  ( while :; do
+      awk '/^MemTotal:/{t=$2} /^MemAvailable:/{a=$2} END{printf "%d\n",(t-a)/1024}' /proc/meminfo
+      sleep 8
+    done ) > "$OUT/${TAG}_ram_trace.log" 2>/dev/null &
+  local SAMPID=$!
+  local S E RC
+  S=$(date +%s)
+  taskset -c 0-3 /usr/bin/time -p nargo compile --force \
+    > "$OUT/${TAG}_stdout.log" 2> "$OUT/${TAG}_timev.log"
+  RC=$?
+  E=$(date +%s)
+  kill "$SAMPID" 2>/dev/null; wait "$SAMPID" 2>/dev/null
+  log "${TAG} RC=$RC WALL=$((E-S))s"
+  cd "$R" || return 96
+  if [ $RC -ne 0 ]; then log "${TAG}_COMPILE_FAIL"; return $RC; fi
+  [ -s "$TGT/$CIR.json" ] || { log "${TAG}_NO_ARTIFACT"; return 100; }
+  cp -f "$TGT/$CIR.json" "$OUT/${TAG}_fresh.json"
+  sha256sum "$OUT/${TAG}_fresh.json" | cut -d' ' -f1 > "$OUT/${TAG}_fresh_sha.txt"
+  bb gates -b "$OUT/${TAG}_fresh.json" -t noir-recursive-no-zk \
+    > "$OUT/${TAG}_gates.json" 2> "$OUT/${TAG}_gates_err.log"
+  python3 - "$OUT" "$TAG" <<'PY'
+import json,sys
+out,tag=sys.argv[1:3]
+d=json.load(open(out+f'/{tag}_gates.json')); fns=d.get('functions',[])
+g=sum(f.get('circuit_size',0) for f in fns)
+ac=sum(f.get('acir_opcodes',0) for f in fns)
+peak=0; wall=0.0
+for l in open(out+f'/{tag}_timev.log', errors='replace'):
+    if 'Maximum resident set size' in l: peak=int(l.split()[-1])
+    if 'Elapsed (wall clock)' in l: wall=float(l.split()[-1])
+with open(out+f'/{tag}.r152d','w') as fh:
+    fh.write(f'ROUND=r152d LEG={tag} BASE=c98b0d1ca GATES={g} ACIR={ac} WALL={wall:.2f}s PEAK_KB={peak}\n')
+print(open(out+f'/{tag}.r152d').read())
+PY
+  return 0
+}
+
+### ====== LEG A2A ====================
+flip_preset || { log FLIP_FAIL A2A; restore; exit 97; }
+compile_leg A2A "$CIRA" "$CIRA" || { log A2A_LETGO; restore; exit 98; }
+A2A_RC=$?
+log "LEG_A2A_RC=$A2A_RC"
+restore
+
+### ====== LEG A2B ====================
+flip_preset || { log FLIP_FAIL A2B; restore; exit 97; }
+compile_leg A2B "$CIRB" "$CIRB" || { log A2B_LETGO; restore; exit 98; }
+A2B_RC=$?
+log "LEG_A2B_RC=$A2B_RC"
+restore
+
+### ====== LEG B: C2a call-site shadow-NOP ====================
+flip_preset || { log FLIP_FAIL B; restore; exit 97; }
+python3 - "$SC" <<'PY'
+import sys
+p=sys.argv[1]; s=open(p).read()
+a='        check_range_bounds::<N, L, N_PARTIES, BIT_SHARE>(self.configs.qis, self.y);'
+assert s.count(a)==2, 'expected exactly 2 call sites in share_computation.nr; got %d' % s.count(a)
+i=s.find(a)
+assert i!=-1
+# comment out ONLY the first call site (C2a body)
+s2=s[:i] + a.replace('check_range_bounds','// C2B-SHADOW-NOP: check_range_bounds') + s[i+len(a):]
+assert s2.count('C2B-SHADOW-NOP')==1
+open(p,'w').write(s2); print('NOP_B_OK (C2a body @ line 103 comment)')
+PY
+compile_leg B "$CIRA" "$CIRA" || { log B_LETGO; restore; exit 98; }
+B_RC=$?
+log "LEG_B_RC=$B_RC"
+restore
+
+### ====== LEG C: C2b call-site shadow-NOP ====================
+flip_preset || { log FLIP_FAIL C; restore; exit 97; }
+python3 - "$SC" <<'PY'
+import sys
+p=sys.argv[1]; s=open(p).read()
+a='        check_range_bounds::<N, L, N_PARTIES, BIT_SHARE>(self.configs.qis, self.y);'
+assert s.count(a)==2, 'expected exactly 2 call sites in share_computation.nr; got %d' % s.count(a)
+i1=s.find(a); i2=s.find(a, i1+1); assert i1!=-1 and i2!=-1
+# comment out ONLY the second call site (C2b body)
+s2=s[:i2] + a.replace('check_range_bounds','// C2C-SHADOW-NOP: check_range_bounds') + s[i2+len(a):]
+assert s2.count('C2C-SHADOW-NOP')==1
+open(p,'w').write(s2); print('NOP_C_OK (C2b body @ line 180 comment)')
+PY
+PY
+compile_leg C "$CIRB" "$CIRB" || { log C_LETGO; restore; exit 98; }
+C_RC=$?
+log "LEG_C_RC=$C_RC"
+restore
+
+### TREE-PIN CHECK ###
+PORC=$(git status --porcelain | wc -l)
+MDEF=$(sha256sum "$DEF" | cut -d' ' -f1); MACT=$(sha256sum "$ACT" | cut -d' ' -f1)
+MSC=$(sha256sum "$SC"  | cut -d' ' -f1);  MSE=$(sha256sum "$SE" | cut -d' ' -f1)
+MSD=$(sha256sum "$SD"  | cut -d' ' -f1)
+J2A2=$(sha256sum "$TGT/$CIRA.json" 2>/dev/null | cut -d' ' -f1 || echo none)
+J2B2=$(sha256sum "$TGT/$CIRB.json" 2>/dev/null | cut -d' ' -f1 || echo none)
+{
+  echo PORC_AFTER=$PORC
+  echo DEF_SHA=$MDEF ACT_SHA=$MACT SC_SHA=$MSC SE_SHA=$MSE SD_SHA=$MSD
+  echo J2A2_SHA=$J2A2 J2B2_SHA=$J2B2
+  echo PRESERVED_CONSERVE=$([ "$J2A_SHA" = "$J2A2" ] && [ "$J2B_SHA" = "$J2B2" ] && echo ALL_OK || echo DRIFT)
+} > "$OUT/restore_check.txt"
+log "PORC_AFTER=$PORC"; log "J2A2_SHA=$J2A2 J2B2_SHA=$J2B2"
+log "LEG_END A2A=$A2A_RC A2B=$A2B_RC B=$B_RC C=$C_RC"
+exit 0

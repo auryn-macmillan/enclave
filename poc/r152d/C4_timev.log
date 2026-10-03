@@ -1,0 +1,51 @@
+bug: Brillig function call isn't properly covered by a manual constraint
+    ┌─ /tmp/r151b/circuits/lib/src/math/modulo/U128.nr:277:34
+    │
+277 │     let (quotient, _) = unsafe { __compute_mod_reduction(n + half, q) };
+    │                                  ------------------------------------ This Brillig call's inputs and its return values haven't been sufficiently constrained. This should be done to prevent potential soundness vulnerabilities
+    │
+    = Call stack:
+      1: main
+              at src/main.nr:21:5
+      2: ShareDecryption<N, L, H, BIT_MSG, BIT_AGG>::execute
+              at /tmp/r151b/circuits/lib/src/core/dkg/share_decryption.nr:148:17
+      3: normalize_aggregated
+              at /tmp/r151b/circuits/lib/src/core/dkg/share_decryption.nr:184:29
+      4: centered_mod_bounded
+              at /tmp/r151b/circuits/lib/src/math/modulo/U128.nr:277:42
+
+bug: Brillig function call isn't properly covered by a manual constraint
+    ┌─ /tmp/r151b/circuits/lib/src/math/modulo/U128.nr:277:34
+    │
+277 │     let (quotient, _) = unsafe { __compute_mod_reduction(n + half, q) };
+    │                                  ------------------------------------ This Brillig call's inputs and its return values haven't been sufficiently constrained. This should be done to prevent potential soundness vulnerabilities
+    │
+    = Call stack:
+      1: main
+              at src/main.nr:21:5
+      2: ShareDecryption<N, L, H, BIT_MSG, BIT_AGG>::execute
+              at /tmp/r151b/circuits/lib/src/core/dkg/share_decryption.nr:148:17
+      3: normalize_aggregated
+              at /tmp/r151b/circuits/lib/src/core/dkg/share_decryption.nr:184:29
+      4: centered_mod_bounded
+              at /tmp/r151b/circuits/lib/src/math/modulo/U128.nr:277:42
+
+bug: Brillig function call isn't properly covered by a manual constraint
+    ┌─ /tmp/r151b/circuits/lib/src/math/modulo/U128.nr:277:34
+    │
+277 │     let (quotient, _) = unsafe { __compute_mod_reduction(n + half, q) };
+    │                                  ------------------------------------ This Brillig call's inputs and its return values haven't been sufficiently constrained. This should be done to prevent potential soundness vulnerabilities
+    │
+    = Call stack:
+      1: main
+              at src/main.nr:21:5
+      2: ShareDecryption<N, L, H, BIT_MSG, BIT_AGG>::execute
+              at /tmp/r151b/circuits/lib/src/core/dkg/share_decryption.nr:148:17
+      3: normalize_aggregated
+              at /tmp/r151b/circuits/lib/src/core/dkg/share_decryption.nr:184:29
+      4: centered_mod_bounded
+              at /tmp/r151b/circuits/lib/src/math/modulo/U128.nr:277:42
+
+real 99.63
+user 98.24
+sys 1.44
