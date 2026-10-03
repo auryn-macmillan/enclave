@@ -1,0 +1,5 @@
+# Exclude high-rat memory-high JSONs (fold's bb full output, ruff into ~13 MiB total-class)
+A0_c2a_min_secure_fresh.json
+A1_c2a_min_secure_fresh.json
+# Harness-trial-node artifacts (1_ trial)
+legA.py.bak
