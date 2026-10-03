@@ -1,0 +1,15 @@
+# Large fresh compile artifacts (bb full outputs; same class as r145)
+C3A_fresh.json
+C3B_fresh.json
+C2BA_fresh.json
+C2BB_fresh.json
+# raw gate dumps
+*gates_raw.json
+# leg stderr/stdout + ram traces
+*_compile_stdout.log
+*_compile_timev.log
+*_gates_err.log
+*_ram_trace.log
+# backups
+pre_*.bak
+pre_target_note.txt
