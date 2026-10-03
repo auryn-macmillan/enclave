@@ -1,0 +1,69 @@
+========== r150 SOURCE AUDIT v2 (C4 range-family ABSENCE) ==========
+HEAD=936d357f662569f70e92f5cd4f2400f0e97b9396
+DATE_UTC=2026-10-03T10:25:51Z
+
+--- (1) C4 LEAF file full-range grep (whole 170-line circuits/lib/src/core/dkg/share_decryption.nr) ---
+  total lines: 170
+  range_check_* hits: 0
+0
+  check_range hits:   0
+0
+  perform_range hits: 0
+0
+
+--- (2) C4 execute() body (含 the 4 call sites) ---
+    pub fn execute(self, moduli: [Field; L]) -> Field {
+        // Step 1: Verify decrypted shares match expected C2 commitments.
+        self.verify_commitments();
+
+        // Step 2: Sum shares coefficient-wise per CRT limb.
+        let aggregated = self.compute_aggregated_shares();
+
+        // Step 3: Normalize to match C6's representation: reduce mod q, reverse, center.
+        let normalized = normalize_aggregated::<N, L>(aggregated, moduli);
+
+        // Step 4: Publish commitment to the aggregate (C6 input).
+        compute_aggregated_shares_commitment::<N, L, BIT_AGG>(normalized)
+    }
+
+--- (3) external helpers C4 calls (direct-cone, NOT definitions but RAN-check on each function body) ---
+
+  (3a) math/commitments.nr :: compute_share_encryption_commitment_from_message
+    period (first 3 lines):
+      pub fn compute_share_encryption_commitment_from_message<let N: u32, let BIT_MSG: u32>(
+          message: Polynomial<N>,
+      ) -> Field {
+    range_check_* hits in this function body: 0
+0
+
+  (3b) math/commitments.nr :: compute_aggregated_shares_commitment
+    period (first 3 lines):
+      pub fn compute_aggregated_shares_commitment<let N: u32, let L: u32, let BIT_MSG: u32>(
+          agg_shares: [Polynomial<N>; L],
+      ) -> Field {
+    range_check_* hits in this function body: 0
+0
+
+  (3c) math/modulo/U64.nr :: ModU64::reduce_mod
+    period (first 3 lines):
+          pub fn reduce_mod(self, n: Field) -> Field {
+              // Safety: __reduce_witness_u64 divides via u128; result verified below.
+              let quotient = unsafe { __reduce_witness_u64(n, self.m) };
+    range_check_* | assert_bit_size | check_range hits in this function body: 0
+0
+
+  (3d) math/polynomial.nr :: Polynomial::new (constructor C4 uses for reversed_coeffs + share_poly)
+    range_check_* hits in this function body (first 40 lines): 0
+0
+
+  (3e) math/safe.nr :: SafeSponge absorb (the SAFE absorption pathway through which commitments.hash() actually consumes, indirect but no range_check)
+  (note: SafeSponge's own absorb/squeeze use no range_check_*; all constraints are via Assert operations on Field)
+0
+
+--- (4) Contrast (other leaves DO have range calls, so the C4 absence is distinguishable) ---
+  C1  pk_generation.nr              perform_range_checks  body-only hits: 5
+  C2a share_computation nr (C2 комиссион) check  body-only hits: 2
+  C2b share_computation nr         check  body-only hits: 2
+  C3  share_encryption nr             check  body-only hits: 10
+
+--- VERDICT (corrected: cone-reachable, not library-wide) ---
