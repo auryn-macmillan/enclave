@@ -1,0 +1,31 @@
+r148 RAN LEG 1: P3 browser leg GATE CENSUS (fresh this round, on-box, committed recursive artifact)
+cmd: bb gates -b dist/circuits/insecure-512/minimum/recursive/threshold/<c>/<c>.json -t noir-recursive-no-zk
+  user_data_encryption FULL   circuit_size = 1,426,442 g   <== the in-browser P3 leg (RAN anchor)
+  user_data_encryption_ct0    circuit_size =    53,695 g
+  user_data_encryption_ct1    circuit_size =    46,233 g
+  ct0+ct1 = 99,928 g = 7.0% of FULL; remainder 93.0% = bb_proof_verification + sha3 pin
+
+RAN LEG 2: (0)-winner bridge = source-shaped (structural 0-cut). FINDING:
+  P3 wrapper main.nr (bin/threshold/user_data_encryption/src) has NO call to
+  share_encryption_nr C3 per-limb (grep -E c3|share_encrypt|per_limb|range < 3 wrappers = EMPTY).
+  Imports: ALLOW_LIST + ct0/ct1/compute_user_data_encryption_ct0_challenge + flatten + bb_ptvk verification only.
+  => (0) winner (C3 per-limb 966,604 g = 8.36% of DKG base RAN r147) cuts 0 us of the P3 browser leg.
+  Value verified byte-to-source grep; not DRAFT.
+
+INHERIT RAN anchors (on-disk prior rounds; NOT re-run this round):
+  r132/r134/r138 p4 swim cell:            71,981 g   wall 1.97 s   0.33 GiB   (secure-8192/small class)
+  r137/r139 per-cell (2,732 g/cell):      1.069/1.078 s/cell @4c, intercept 0.768 s
+  r137 membrane 42-cell:                   114,761 g = -96.203% of r14 3,022,405 g
+  r146 C3A/C3B: 2,966,353 g / 1:29.20  and  1,827,697 g / 1:09.04  (C3 family -1,138,656 g = 9.85% DKG)
+  r147 per-limb slice: 966,604 g = 32.59% of C3 leaf = 8.36% DKG base (= 84.9% of the r146 family)
+
+2-POINT GATE->WALL curve anchored on RAN points (from r132/r137 named by item 2):
+  P-A  p4 swim cell   71,981 g -> 1.97 s    = 27.36 us/g  (commit-cell-heavy / light class)
+  P-B  per-cell body    2,732 g -> 1.069 s  = 391.3 us/g  (SAFE-poly 96.2% body = mem-bw-broken class)
+  The two sit in DIFFERENT families -> not one line (this is the r138 wall-vs-gate design callout,
+  not an error). Hence quoting the 1,426,442-g FULL wrapper wall from either rate is DRAFT-only
+  (~39 s or ~558 s) and is NOT a RAN wall of the wrapper. The full secure-8192 wrapper prove-wall is DRAFT (box-2).
+
+verdict: item (2) RAN-closed on the bridge = (0)-winner browser-wall cut = 0 us (structural, source-grep).
+FULL secure-8192/minimum P3 WALL remains DRAFT (off-box or tsc driver). No shape-slide this tick.
+UPSTREAM-PR: none (poc/ + ledger only).
