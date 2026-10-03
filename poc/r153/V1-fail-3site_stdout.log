@@ -1,0 +1,29 @@
+3-site (r115-original-shape, no #1999 test-site patches) compile capture:
+RC=1
+--- stderr (verbatim) ---
+error: Function expects 2 parameters but 1 was given
+    ┌─ /tmp/r151b/circuits/lib/src/core/threshold/share_decryption.nr:369:17
+    │
+369 │     let gamma = c.generate_challenge();
+    │                 --------------------
+    │
+
+error: Object type is unknown in method call
+    ┌─ /tmp/r151b/circuits/lib/src/core/threshold/share_decryption.nr:373:23
+    │
+373 │     let shift = -1 / (gamma.pow_32(6) * (gamma - radix));
+    │                       ----- Type must be known by this point to know which method to call
+    │
+    = Try adding a type annotation for the object type before this method call
+
+error: Function expects 2 parameters but 1 was given
+    ┌─ /tmp/r151b/circuits/lib/src/core/threshold/share_decryption.nr:378:12
+    │
+378 │     assert(c.generate_challenge() == gamma);
+    │            --------------------
+    │
+
+Aborting due to 3 previous errors
+
+--- stdout (verbatim) ---
+
