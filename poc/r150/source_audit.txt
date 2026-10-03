@@ -1,0 +1,47 @@
+========== r150 SOURCE AUDIT (C4 range-family ABSENCE) ==========
+HEAD=936d357f662569f70e92f5cd4f2400f0e97b9396
+DATE_UTC=2026-10-03T10:21:08Z
+
+--- (1) C4 leaf: circuits/lib/src/core/dkg/share_decryption.nr ---
+  total lines: 170
+  range_check hits: 0
+  check_range hits: 0
+  perform_range hits: 0
+
+--- (2) C4 execute() call chain ---
+ShareDecryption::execute calls:
+compute_aggregated_shares_commitment::
+normalize_aggregated::
+self.compute_aggregated_shares(
+self.verify_commitments(
+
+--- (3) Cone functions (direct in C4 external helpers); each grepped range_check_* ---
+  file: circuits/lib/src/math/commitments.nr
+    range_check hits: 0
+    check_range hits: 0
+  file: circuits/lib/src/math/commitments.nr
+    range_check hits: 0
+    check_range hits: 0
+  file: circuits/lib/src/math/modulo/U64.nr
+    range_check hits: 0
+    check_range hits: 0
+  file: circuits/lib/src/math/safe.nr
+    range_check hits: 0
+    check_range hits: 0
+  file: circuits/lib/src/math/polynomial.nr
+    range_check hits: 6
+    check_range hits: 0
+  file: circuits/bin/dkg/share_decryption/src/main.nr
+    range_check hits: 0
+    check_range hits: 0
+
+--- (4) Contrast: other DKG/threshold leaves DO have range calls (RAN class) ---
+  pk_generation.nr (C1) perform_range: 2
+  share_computation.nr (C2a+C2b) check_range_bounds: 3
+  share_encryption.nr (C3) check_range_bounds: 2
+  threshold/share_decryption.nr (C6/c5) check_range_bounds: 2
+  user_data_encryption_ct0.nr (P3a) check_range_bounds: 2
+  user_data_encryption_ct1.nr (P3b) check_range_bounds: 2
+
+--- VERDICT ---
+ABSENT-FAILED: expected 0 in C4 cone but found 0 in leaf + 6 across mapped cone files; the DRAFT ceiling stays open and r150 should NOT close as killed.
