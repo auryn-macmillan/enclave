@@ -180,18 +180,20 @@ impl<let N: u32, let MAX_MSG_NON_ZERO_COEFFS: u32, let L: u32, let BIT_CT: u32, 
     /// # Returns
     /// A vector containing commitments and polynomial coefficients in flattened form,
     /// ready for hashing to generate the Fiat-Shamir challenge.
-    fn payload(self, ct_commitment: Field) -> [Field] {
+    fn payload(self) -> [Field] {
         // Use commitments instead of full polynomials (saves constraints)
         let mut inputs = [self.expected_sk_commitment, self.expected_e_sm_commitment].as_vector();
 
-        // Bind the ciphertext via its commitment: the packed raw ct0/ct1 limbs
-        // were redundant in the challenge (I14 class, as shipped into C3
-        // share_encryption). The witness ct limbs are already bound to this
-        // public `ct_commitment` by verify_ct_commitment (the SAME
-        // compute_ciphertext_commitment payload) and are relation-bound at the
-        // FS-derived gamma by verify_decryption_share_computation, so the
-        // sponge absorbs one field instead of 2*N*L packed carriers.
-        inputs = inputs.push_back(ct_commitment);
+        // Bind the ciphertext via its commitment, read from the struct: the packed raw
+        // ct0/ct1 limbs were redundant in the challenge (I14 class, as shipped into C3
+        // share_encryption). The witness ct limbs are already bound to this public
+        // ct_commitment by verify_ct_commitment (the same compute_ciphertext_commitment
+        // payload) and are relation-bound at the FS-derived gamma by
+        // verify_decryption_share_computation, so the sponge absorbs one field instead of
+        // 2*N*L packed carriers. Reading self.ct_commitment here, not a parameter, keeps
+        // the absorbed value the one the witness is checked against -- a caller cannot
+        // pass an unbound commitment.
+        inputs = inputs.push_back(self.ct_commitment);
 
         // Flatten the reduced quotient polynomials. The unreduced form absorbed `r1` at degree
         // 2N-1 and `r2` on top of it; the reduced one absorbs neither.
@@ -233,7 +235,7 @@ impl<let N: u32, let MAX_MSG_NON_ZERO_COEFFS: u32, let L: u32, let BIT_CT: u32, 
         // in step 3 (verify_ct_commitment), so the sponge absorbs that
         // commitment instead of the raw ct0/ct1 limbs - mirroring the I14
         // lever shipped into C3.
-        let gamma = self.generate_challenge(self.ct_commitment);
+        let gamma = self.generate_challenge();
 
         // Step 6: Verify the reduced decryption-share identity for each CRT basis.
         for i in 0..L {
@@ -276,7 +278,8 @@ impl<let N: u32, let MAX_MSG_NON_ZERO_COEFFS: u32, let L: u32, let BIT_CT: u32, 
     /// Generates Fiat-Shamir challenge value using the SAFE cryptographic sponge.
     ///
     /// This function implements the Fiat-Shamir transform for the decryption share circuit:
-    /// 1. Flattens all witness data (commitments for sk/e_sm, ciphertexts c_0/c_1, quotients r_1/r_2, full d) into a single array
+    /// 1. Flattens the public commitments to sk and e_sm, the ciphertext commitment ct_commitment,
+    ///    the reduced quotient r, and the full decryption share d into a single array
     /// 2. Absorbs the flattened data into the SAFE sponge
     /// 3. Squeezes a single challenge value
     ///
@@ -287,8 +290,8 @@ impl<let N: u32, let MAX_MSG_NON_ZERO_COEFFS: u32, let L: u32, let BIT_CT: u32, 
     /// # Returns
     /// A single challenge value `gamma` used as the evaluation point for verifying
     /// the decryption share computation formula for all CRT bases.
-    fn generate_challenge(self, ct_commitment: Field) -> Field {
-        let inputs = self.payload(ct_commitment);
+    fn generate_challenge(self) -> Field {
+        let inputs = self.payload();
 
         compute_threshold_share_decryption_challenge::<L>(inputs)
     }
@@ -372,7 +375,7 @@ fn forged_d_with_same_transcript_is_rejected() {
         [d],
         [Polynomial::new([1])],
     );
-    let gamma = c.generate_challenge(c.ct_commitment);
+    let gamma = c.generate_challenge();
 
     // Carry `shift` from slot 0 into slot 1: the packed carrier, and so `gamma`, is unchanged.
     let radix: Field = 1099511627776;
@@ -381,17 +384,17 @@ fn forged_d_with_same_transcript_is_rejected() {
     c.d[0].coefficients[1] -= radix * shift;
 
     // Rejected here: the shifted coefficients no longer fit their digit slots.
-    assert(c.generate_challenge(c.ct_commitment) == gamma);
+    assert(c.generate_challenge() == gamma);
     let _ = c.execute();
 }
 
-/// The digest of an honest C6 transcript must change when `ct_commitment` changes.
+/// The FS challenge changes when `ct_commitment` changes.
 ///
-/// `payload` absorbs `ct_commitment` into the Fiat-Shamir sponge before squeezing
-/// `gamma`. That absorption is the visible transcript binding, and if a future
-/// refactor drops it the digest would be identical under any challenge of the
-/// payload, so the cross-check would fail with no other warning. This is the
-/// fairness analogue of the IF-013 reduction below.
+/// `payload` absorbs `self.ct_commitment` into the transcript before squeezing
+/// `gamma`. This test perturbs only that field and asserts `gamma` moves, so a
+/// future change that stops absorbing the commitment (or feeds it a value not
+/// bound to the witness via `verify_ct_commitment`) fails here at the next
+/// `nargo test` instead of silently changing the transcript shape.
 #[test]
 fn challenge_depends_on_the_ct_commitment() {
     let z = Polynomial::new([0; 8]);
@@ -399,7 +402,6 @@ fn challenge_depends_on_the_ct_commitment() {
     let mut d = z;
     d.coefficients[7] = 1;
 
-    // Caller-supplied public ct_commitment; zero here matches the zero limbs used below.
     let ct_commitment: Field = compute_ciphertext_commitment_checked::<8, 1, 35>([z], [z]);
     let c: ShareDecryption<8, 1, 1, 35, 35, 35, 43, 35, 36> = ShareDecryption::new(
         Configs::new([68719403009], [1]),
@@ -414,10 +416,11 @@ fn challenge_depends_on_the_ct_commitment() {
         [d],
         [Polynomial::new([1])],
     );
-    let gamma = c.generate_challenge(ct_commitment);
+    let gamma = c.generate_challenge();
 
-    // Perturb only the absorbed ct_commitment; everything else in the payload is
-    // byte-identical. If the sponge had not absorbed it, gamma would not have moved.
+    // Same witness, one different field: only ct_commitment changes (+1), so the
+    // payloads differ in exactly the absorbed field. If the sponge had not
+    // absorbed it, gamma would not have moved and this assert would fail.
     let c_alt: ShareDecryption<8, 1, 1, 35, 35, 35, 43, 35, 36> = ShareDecryption::new(
         Configs::new([68719403009], [1]),
         anchor,
@@ -431,7 +434,7 @@ fn challenge_depends_on_the_ct_commitment() {
         [d],
         [Polynomial::new([1])],
     );
-    assert(gamma != c_alt.generate_challenge(ct_commitment + 1));
+    assert(gamma != c_alt.generate_challenge());
 }
 
 /// The reduced identity accepts an honest witness.
