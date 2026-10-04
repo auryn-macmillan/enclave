@@ -165,22 +165,17 @@ impl<let N: u32, let MAX_MSG_NON_ZERO_COEFFS: u32, let L: u32, let BIT_CT: u32, 
 
     /// Flattens all witness data into a single array for Fiat-Shamir challenge generation.
     ///
-    /// This function serializes all polynomial coefficients (both public inputs and
-    /// secret witnesses) into a 1D array in a deterministic order. The flattened data
-    /// is used to generate the Fiat-Shamir challenge via the SAFE sponge API.
+    /// This function serializes all polynomial data (both public inputs and secret
+    /// witnesses) into a 1D array in a deterministic order. The flattened data is
+    /// used to generate the Fiat-Shamir challenge via the SAFE sponge API.
     ///
     /// The order of serialization is:
     /// 1. Commitment to aggregated secret shares `sk` (expected_sk_commitment)
     /// 2. Commitment to aggregated noise shares `e_sm` (expected_e_sm_commitment)
-    /// 3. Ciphertext components `c_0` for each CRT basis (serialized coefficients)
-    /// 4. Ciphertext components `c_1` for each CRT basis (serialized coefficients)
-    /// 5. Quotient polynomials `r_1` for each CRT basis (serialized coefficients)
-    /// 6. Quotient polynomials `r_2` for each CRT basis (serialized coefficients)
-    /// 7. Full decryption share polynomials `d` for each CRT basis (all N coefficients per limb)
-    ///
-    /// Note: Aggregated secret shares `sk` and noise shares `e_sm` are represented by their
-    /// commitments rather than serialized coefficients. This saves constraints while
-    /// still binding them to the transcript.
+    /// 3. Ciphertext commitment `ct_commitment` (bound in transcript shape; the ct limbs
+    ///    themselves are checked against it by verify_ct_commitment)
+    /// 4. Reduced quotient polynomials `r` for each CRT basis (plain packing)
+    /// 5. Full decryption share polynomials `d` for each CRT basis (checked packing)
     ///
     /// # Returns
     /// A vector containing commitments and polynomial coefficients in flattened form,
@@ -388,6 +383,55 @@ fn forged_d_with_same_transcript_is_rejected() {
     // Rejected here: the shifted coefficients no longer fit their digit slots.
     assert(c.generate_challenge(c.ct_commitment) == gamma);
     let _ = c.execute();
+}
+
+/// The digest of an honest C6 transcript must change when `ct_commitment` changes.
+///
+/// `payload` absorbs `ct_commitment` into the Fiat-Shamir sponge before squeezing
+/// `gamma`. That absorption is the visible transcript binding, and if a future
+/// refactor drops it the digest would be identical under any challenge of the
+/// payload, so the cross-check would fail with no other warning. This is the
+/// fairness analogue of the IF-013 reduction below.
+#[test]
+fn challenge_depends_on_the_ct_commitment() {
+    let z = Polynomial::new([0; 8]);
+    let anchor = compute_aggregated_shares_commitment_checked::<8, 1, 35>([z]);
+    let mut d = z;
+    d.coefficients[7] = 1;
+
+    // Caller-supplied public ct_commitment; zero here matches the zero limbs used below.
+    let ct_commitment: Field = compute_ciphertext_commitment_checked::<8, 1, 35>([z], [z]);
+    let c: ShareDecryption<8, 1, 1, 35, 35, 35, 43, 35, 36> = ShareDecryption::new(
+        Configs::new([68719403009], [1]),
+        anchor,
+        anchor,
+        ct_commitment,
+        [z],
+        [z],
+        [z],
+        [z],
+        [z],
+        [d],
+        [Polynomial::new([1])],
+    );
+    let gamma = c.generate_challenge(ct_commitment);
+
+    // Perturb only the absorbed ct_commitment; everything else in the payload is
+    // byte-identical. If the sponge had not absorbed it, gamma would not have moved.
+    let c_alt: ShareDecryption<8, 1, 1, 35, 35, 35, 43, 35, 36> = ShareDecryption::new(
+        Configs::new([68719403009], [1]),
+        anchor,
+        anchor,
+        ct_commitment + 1,
+        [z],
+        [z],
+        [z],
+        [z],
+        [z],
+        [d],
+        [Polynomial::new([1])],
+    );
+    assert(gamma != c_alt.generate_challenge(ct_commitment + 1));
 }
 
 /// The reduced identity accepts an honest witness.
