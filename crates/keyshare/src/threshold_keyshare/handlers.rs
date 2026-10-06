@@ -127,6 +127,16 @@ impl Handler<TypedEvent<ComputeResponse>> for ThresholdKeyshare {
     }
 }
 
+impl Handler<RedeliverDecryptionWork> for ThresholdKeyshare {
+    type Result = ();
+
+    fn handle(&mut self, msg: RedeliverDecryptionWork, _: &mut Self::Context) -> Self::Result {
+        if let Err(error) = self.redeliver_decryption_work(msg.0) {
+            error!(%error, "Could not redeliver decryption work");
+        }
+    }
+}
+
 impl Handler<TypedEvent<ComputeRequestError>> for ThresholdKeyshare {
     type Result = ();
 
@@ -410,6 +420,9 @@ impl Handler<TypedEvent<E3RequestComplete>> for ThresholdKeyshare {
         event: TypedEvent<E3RequestComplete>,
         ctx: &mut Self::Context,
     ) -> Self::Result {
+        // No decryption work is redelivered after the end, also while the cleanup below retries.
+        self.pending.decryption_share_request = None;
+        self.pending.decryption_proof_request = None;
         if let Err(error) = self.clear_large_recovery_payloads(event.get_ctx()) {
             error!(%error, "Could not clear terminal DKG recovery payloads");
             ctx.notify_later(event, std::time::Duration::from_secs(1));
