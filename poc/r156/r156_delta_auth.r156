@@ -1,0 +1,20 @@
+# r156 DELTA (AUTHORITATIVE) re-derived from the on-disk *_gates.json after the leg
+# Note: r156_legs.sh's print block mislabeled per-limb as (B-C);
+# the wrong constant 476,693 in that block is NOT a RAN number (r148-era
+# derived figure) and is struck here -- do not cite it.
+C3A_live   = 2,124,549 g   ACIR 609,966   wall 226.6s  peak 20.8 GiB  (HEAD folded, locus blob a38431229 = #1996+I3)
+C3B_full   = 1,395,432 g   ACIR 224,942   wall 216.3s  peak 18.7 GiB  (check_range_bounds entirely NOP'd)
+C3C_limb   = 1,567,484 g   ACIR 347,822   wall 219.7s  peak 19.5 GiB  (per-limb loop NOP'd; 4 flat polys + quotient preserved)
+c98bA ctl  = 2,125,396 g   ACIR 609,966   (control @c98b0d1ca; reproduces r152b multi-run RAN digit-exact, bank shape proven)
+Per-limb slice  = C3A-C3C = 557,065 g  = 26.22% of C3A leaf = 76.40% of family
+Flat slice      = C3C-C3B = 172,052 g  =  8.10% of C3A leaf = 23.60% of family
+Family total    = C3A-C3B = 729,117 g  = 34.32% of C3A leaf
+Identity: 557,065 + 172,052 = 729,117  == C3A-C3B  [holds exactly]
+Cross-base:
+  C3A  c98b 2,125,396 -> folded 2,124,549 = -847 g (ACIR identical 609,966 -> gate-neutral; #1996 regen + I3 de-raw (N raw k1 coefficients dropped from sponge) combined)
+  C3B  c98b 1,396,286 -> folded 1,395,432 = -854 g
+  Family c98b 729,110 -> folded 729,117    = +7 g   (range family essentially flat across the fold;
+       "family migration" C3 in the persistent table DE-FLAGGED -- no gap between c98b and the fold tree)
+  per-limb vs r147 old-d62e 966,604 g (2,966,353 leaf era, pre-#1996): -409,539 g (-42.37%)
+  flat slice 172,052 g DIGIT-EXACT vs r147 old-era 172,052 g -> flat slice base-invariant (both pre- and post-#1996)
+STALE_476693_STRUCK: 476,693 is not a disk RAN value (provenance sweep: does not exist in STATE/LOG/poc prior to this round).
