@@ -1,0 +1,33 @@
+# r156 cross-base receipt anchors (values verified against round files this tick)
+## c98b0d1ca ledger (r152b, oldest RAN receipts)
+C3A_c98b   = 2,125,396 g  ACIR 609,966   (r151/C3A2b.r152b; reproduced BIT-exact by R156 c98bA control leg, DELTA_VS_PRIOR_MULTIRUN=0)
+C3B_c98b   = 1,396,286 g  ACIR 224,942   (r151/r152b_C3B.r152b)
+family_c98b = 729,110 g   (C3A-C3B at c98b; r152b_DELTA: 34.30% of C3A leaf)
+(per-limb at c98b was NEVER measured - r152b had no C3C leg; R156's fold-base per-limb is the first per-limb split on the new tree class)
+## fold base 7e999546e (R156 fractions, this round)
+C3A_live   = 2,124,549 g  ACIR 609,966   wall 226.6s  peak 20.8 GiB
+C3B_full   = 1,395,432 g  ACIR 224,942   wall 216.3s  peak 18.7 GiB
+C3C_limb   = 1,567,484 g  ACIR 347,822   wall 219.7s  peak 19.5 GiB
+family_fold = 729,117 g (34.32% of leaf);  per-limb A-C = 557,065 g (26.22% of leaf; 76.40% of family);  flat C-B = 172,052 g (23.60% of family)
+identity: 557,065 + 172,052 = 729,117 = C3A-C3B  [confirmed from on-disk *_gates.json]
+## old d62e22e16 era (r147, document receipts in poc/r147/)
+C3A_d62e   = 2,966,353 g (C3A.r147)
+C3C_d62e   = 1,999,749 g (C3C.r147)
+C3B_d62e   = 1,827,697 g (C3B.r147)
+family_d62e = 1,138,656 g; per-limb_d62e = 966,604 g (84.9% of family); flat_d62e = 172,052 g (15.1%)
+[source: poc/r147/soundness.md L25-33, all RAN inputs, identity 966,604+172,052=1,138,656]
+## Cross-base deltas (RAN)
+C3A: c98b 2,125,396 -> fold 2,124,549 = -847 g  (ACIR identical 609,966 = gate-neutral; source: #1996 regen + I3 removed the raw-k1 push loop from the sponge (c02361b5d))
+C3B: c98b 1,396,286 -> fold 1,395,432 = -854 g
+family: c98b 729,110 -> fold 729,117 = +7 g
+flat slice: d62e 172,052 -> fold 172,052 = 0 (bit-exact; ACIR flat 224,942 at both c98b and fold)
+per-limb: d62e 966,604 (old era, 2,966,353 g leaf, pre-#1996) -> fold 557,065 = -409,539 g (-42.4%)
+  [differing locus era: not a same-shape invariant -- the drop is dominated by #1996 regeneration,
+   not a flat-shape change; the c98b-era per-limb was never RAN, so no per-limb invariant claim is made]
+## lead-gen tables (from r152f per-leaf table; table-value migration below)
+LOCUS identity check (c98b..current-HEAD, git rev-parse blob compare, RAN this round):
+  C0 pk.nr, C1 pk_generation.nr, C2a ct0.nr, C2b ct1.nr, C4 share_decryption.nr : byte IDENTICAL
+  C3 share_encryption.nr : moved (c98b blob 7de0123 -> fold blob a384312)
+=> only the C3 row migrates. DKG total 9,197,976 -> 9,197,129 (-847, all C3).
+   family pool 2,849,519 -> 2,849,526 (+7, 30.98% of new DKG total, from 30.98%; delta +0.0035 pt)
+CASE: NEW per-limb-vs-flat ratio at fold: 76.40/23.60 (vs old d62e era 84.9/15.1, different era).

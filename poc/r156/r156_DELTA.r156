@@ -1,0 +1,7 @@
+# r156 numbers - authoritative source: r156_delta_auth.r156 (re-derived from on-disk gates JSON)
+# This file was emitted by the leg script's mislabeled formula (printed the FLAT slice C-B
+# under the per-limb label, and editor-anchored a non-RAN raw 476,693). Left as-is for provenance.
+# Correct decomposition from the same JSON:
+#   C3A_live=2,124,549  C3B_full=1,395,432  C3C_limb=1,567,484
+#   family (A-B) = 729,117 g;  per-limb (A-C) = 557,065 g;  flat (C-B) = 172,052 g
+#   identity: 557,065 + 172,052 = 729,117 = A-B  [verified]
