@@ -625,8 +625,9 @@ ShareVerificationActor receives ShareVerificationDispatched(kind=ShareProofs)
     ├─ Re-verifies each late-share batch that, without its expelled dealers, holds every
     │  dealer of the saved batch that is not expelled, plus at least one more. An expelled
     │  dealer in the new batch is not growth. It publishes a new signed Ready list only
-    │  when the list keeps every dealer of the earlier one, so a Ready list never drops a
-    │  dealer, even an expelled one
+    │  when the list keeps every dealer of the earlier one that is not expelled and adds at
+    │  least one dealer that is not expelled, so a Ready list drops only expelled dealers
+    │  File: crates/keyshare/src/threshold_keyshare/effects/coordinate_roster.rs (ready_update)
     ├─ If fewer than H pass locally, stays outside C4 without failing the E3
     └─ Waits for one H-dealer roster before Step 7
 
@@ -635,9 +636,29 @@ dealer contributions. `AggregatorChanged` carries the active party ID, and thres
 persists that ID. A receiver keeps one authenticated roster per proposer. It can accept a roster
 from the active proposer or an earlier proposer whose failover budget has already elapsed locally.
 The proposer must have published a matching Ready list, the receiver's own Ready list must contain
-the roster, and every Ready list already held for a selected dealer must support it. Before C4
-starts, a roster from a lower party ID replaces a roster from a higher party ID. After C4 starts,
-the roster is fixed. A promoted aggregator re-proposes the accepted dealer list instead of deriving
+the roster, and every Ready list already held for a selected dealer must support it.
+
+A receiver applies a peer's Ready update with the same rule. It holds each refused update that adds
+a dealer but lacks a dealer of the held report, at most one per committee member for each reporter,
+in its saved recovery state: the reporter can have seen expulsions that the receiver has not seen
+yet, and the network resends the same events, which EventBus deduplication drops. After each
+expulsion, and when effects resume after a restart, the receiver applies the held updates that the
+expulsions now explain, one after another, and drops the ones that can no longer apply. It settles
+held updates only in the DKG phases, so a saved failure is redriven first. A roster
+that held Ready reports contradict stays held in the same way. Acceptance checks the roster's support
+again and that neither its proposer nor a selected dealer is expelled; a held roster with an
+expelled member is dropped. A later roster from the same proposer replaces a held roster that the
+local Ready state does not support. Before C4
+starts, a roster from a lower party ID replaces a roster from a higher party ID. An accepted
+roster is never dropped, so the commitment checker keeps its selection; until C4 starts, an
+expelled dealer is not an honest party, also when a restart restores the roster, and a fixed
+roster is restored with every dealer. C4 starts when the node sends its decryption-key
+calculation. It saves that fact with the selected parties. The logged calculation request saves
+the state again at its own position, also when the store refused the dispatch write as stale and
+memory already holds the fact, and replay delivers that request again, so a restart that loses the
+calculation keeps the roster fixed. A held
+roster with an expelled member gives way to a later roster of the same proposer. A promoted
+aggregator re-proposes the accepted dealer list instead of deriving
 a different list from its local delivery order.
 
 Once a node can derive a valid roster, or receives a supported roster that it cannot yet derive
