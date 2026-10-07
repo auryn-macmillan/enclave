@@ -1,0 +1,5 @@
+*.raw
+*stdout.log
+*timev.log
+*gates_err.log
+*_error.log

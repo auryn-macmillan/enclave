@@ -1,0 +1,35 @@
+[2026-10-07T14:23:29Z] WORKTREE-EXISTING-REUSE @ a3bf52007228b59f1580d96c24ad236af70f4ecf
+[2026-10-07T14:23:29Z] HEAD=a3bf52007228b59f1580d96c24ad236af70f4ecf
+[2026-10-07T14:23:29Z] PRE_PK=8e37436bdca8ff0c58bc4307e2ab9ace2ed40a0d6d5211e244818a23ef50436a
+[2026-10-07T14:24:40Z] r170A1_live rc=0 wall=71s
+[2026-10-07T14:24:42Z] LEG_A1_DONE
+[2026-10-07T14:25:51Z] r170E_eek_solo rc=0 wall=69s
+[2026-10-07T14:25:53Z] RESTORED rc=0
+[2026-10-07T14:25:53Z] LEG_E_DONE
+[2026-10-07T14:25:56Z] r170S_sk_solo rc=0 wall=3s
+[2026-10-07T14:25:56Z] RESTORED rc=0
+[2026-10-07T14:25:56Z] LEG_S_DONE
+R170_STATUS=OK
+[2026-10-07T14:26:29Z] WORKTREE-EXISTING-REUSE @ a3bf52007228b59f1580d96c24ad236af70f4ecf
+[2026-10-07T14:26:29Z] HEAD=a3bf52007228b59f1580d96c24ad236af70f4ecf
+[2026-10-07T14:26:29Z] PRE_PK=8e37436bdca8ff0c58bc4307e2ab9ace2ed40a0d6d5211e244818a23ef50436a
+[2026-10-07T14:27:39Z] r170A1_live rc=0 wall=70s
+[2026-10-07T14:27:41Z] LEG_A1_DONE
+[2026-10-07T14:28:48Z] r170E_eek_solo rc=0 wall=67s
+[2026-10-07T14:28:50Z] RESTORED rc=0
+[2026-10-07T14:28:50Z] LEG_E_DONE
+[2026-10-07T14:28:53Z] r170S_sk_solo rc=0 wall=3s
+[2026-10-07T14:28:53Z] RESTORED rc=0
+[2026-10-07T14:28:53Z] LEG_S_DONE
+R170_STATUS=OK
+
+[2026-10-07T14:38:53Z] CORRECTION (corrections-first): the first Sk leg (r170S_sk_solo, wall 3.1s)
+compiled at INCORRECT-BASIS insecure-512. Root cause: Leg E's restore() re-put DEF to
+insecure-512 after eek solo; Leg S then compiled without re-flipping. The 47,027 g /
+24,180 ACIR artifact is mangled (not a valid secure-8192 leg) and is preserved under the
+*_WRONGBASE_insecure512_* names above, NOT a citable number.
+FIX: flipped DEF to secure-8192 and re-ran the sk solo leg twice independently at base
+a3bf52007: r170S2_sk_solo and r170S2c (both wall 68s, both 1,597,853 g / 549,763 ACIR,
+digit-exact). The correct sk_solo = A1 - S2c = 36,869 g. r170_delta.r170 carries the
+corrected digits. DEF + PK restored to PRE_SHA (ed7af120->7f07de82 DEF / 17f092cc->8e37436b PK)
+and worktree pruned clean before this commit.

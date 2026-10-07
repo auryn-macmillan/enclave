@@ -1,0 +1,8 @@
+ROUND=r170  (C1 eek + sk solo legs; closes the r159 C1-flat remainder 76,483 g to direct RAN cells)
+A1 = 1634722 g  ACIR=582531   [digit-exact vs r157/r159 golden; base a3bf52007]
+E  = 1597858 g  ACIR=549763   [eek solo]
+S  = 1597853 g  ACIR=549763   [sk solo; S2 + S2c two independent nargo+bb runs digit-exact]
+eek_solo = A1-E = 36864 g   sk_solo = A1-S = 36869 g   ACIR delta both = 32768 (= 32768)
+eek+sk = 73733 g   vs r159 remainder 76,483 g   delta = -2750 g (-3.60%)
+C1 flat sum-to-cells: 127023 (r159 e_sm_lifted) + 36864 + 36869 = 200756 g  vs r157 flat 203506 g  -> non-additive residue 2750 g
+CROSS-LEAF: eek_solo 36864 g == r161 C3 e1_solo 36,864 (DIGIT-EXACT); sk_solo 36869 g = eek+5 g; r161 C3 u_solo 73,733 g ~= 2x eek (ratio 2.0001)
