@@ -1,0 +1,29 @@
+ROUND=r165  BASE=3dbb164cd  (fold tip = r164 receipt tip; circuit source byte-identical to r164 cb722eea2)
+
+== LEGS (RAN this round, gates / ACIR) ==
+  A   C2a unblunt               1,464,743   (golden r152d/r158 = 1,464,743 ; delta +0)
+  V1A C2a s1 solo (sk commit)   1,436,905 / ACIR 426,004  (ACIR matches r164 V1b)
+  V2A C2a s2 solo (consist)     1,440,167
+  E   C2b unblunt               2,586,563   (golden r164 E1b = 2,586,563 ; delta +0)
+
+== CROSS-LEAF invariance (the RAN signature result) ==
+  V1-solo leg  C2a (r165 V1A) = 1,436,905 g / ACIR 426,004   vs   C2b (r164 V1b) = 1,436,905 g / ACIR 426,004
+                 cross-leaf delta  dGates=+0  dACIR=+0  -> non-V1 machinery gate- AND opcode-identical across the twins
+
+== CELLS (leaf - solo leg) ==
+  C2a V1 cell = A - V1A = 1,464,743 - 1,436,905 = 27,838 g  (1x 1-bit sk commitment)
+  C2a V2 cell = A - V2A = 1,464,743 - 1,440,167 = 24,576 g  (= N x L = 8192 x 3 at BIT_SHARE=?)
+  C2b V1 cell = E1b - V1b = 2,586,563 - 1,436,905 = 1,149,658 g  (3x 57-bit e_sm limb commitments)
+  C2b V2 cell = E1b - V2b = 2,586,563 - 2,561,987 = 24,576 g
+
+== TWIN GAP decomposition ==
+  unblunt twin gap (E - A) = 2,586,563 - 1,464,743 = 1,121,820 g
+  dV1 = C2b V1 - C2a V1 = 1,149,658 - 27,838 = 1,121,820 g  (100.00% of the twin gap)
+  dV2 = C2b V2 - C2a V2 = 24,576 - 24,576 = 0 g  (0.00% of the twin gap)
+  (dV1 + dV2) = 1,121,820 g ; residual (twin_gap - (dV1+dV2)) = +0 g  (EXACT)
+
+VERDICT (RAN): the ENTIRE C2b-minus-C2a twin gap (1,121,820 g) is the V1 secret-commitment surface:
+3x 57-bit e_sm limb commitments (C2b, 1,149,658 g) vs 1x 1-bit sk commitment (C2a, 27,838 g); the V2
+consistency cell is gate-identical across twins (dV2 = 0, both = 24,576 = N x L). r164 estimated the twin
+gap as V1 over-explaining by +27,838 g (2.5%); that is exactly the C2a V1 cell measured here, so with C2a
+V1 now RAN-anchored the attribution is 100.00% (residual 0), the joint-lattice fringe collapses to zero.
