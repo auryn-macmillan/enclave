@@ -1,0 +1,15 @@
+ROUND=r157 C1 fold-base RAN legs (C re-run with corrected splice):
+  A1(unblunt)=1634722
+  B (range full NOP)=620203
+  C (per-limb loop only NOP)=823709
+  FAMILY(A1-B)=1014519 g = 62.06% of A1 leaf
+  PER-LIMB(A1-C)=811013 g = 49.61% of A1 leaf; 79.94% of family
+  FLAT(C-B)=203506 g = 12.45% of A1 leaf; 20.06% of family
+  identity: 811013+203506=1014519=1014519 (holds)
+vs c98b r152c:
+  A1=1634722 c98b=1634682 (delta +40)
+  B =620203 c98b=620203 (delta +0)
+  C =823709 c98b=823669 (delta +40)
+  FAMILY c98b=1014479 -> fold=1014519 (delta +40)
+  PER-LIMB c98b=811013 -> fold=811013 (delta +0)
+  FLAT c98b=203466  -> fold=203506 (delta +40)
