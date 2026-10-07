@@ -1,0 +1,17 @@
+r160 C3 message solo @ FOLD tip 733eb45ae
+  RAN this round:
+    M  message solo NOP (u/e0/e1 flat + 4 limb-steps stay) = 2063109 g
+  r156 fold-tip RAN (digit-carry, C3 locus blob a38431229 byte-frozen 7e999546e -> 733eb45ae):
+    A1 unblunt          = 2124549 g
+    B  check_range_bounds full NOP = 1395432 g
+    C  per-limb only NOP          = 1567484 g
+  Delta  RAN:
+    message solo cost        = 61440 g = 2.89% of leaf = 35.71% of C3 flat
+    flat remaining (u+e0+e1) = 110612 g = 5.21% of leaf = 64.29% of flat
+    identity                  = 61440 + 110612 = 172052  vs r156 flat 172052  delta +0
+  Reclassified C3 split (family = per-limb + flat; flat = message + u+e0+e1):
+    per-limb = 557065 g  (r156, byte-frozen)
+    message  = 61440 g  (this round, RAN)
+    u+e0+e1  = 110612 g  (this round, RAN by subtraction from r156 flat)
+    identity per-limb + message + u/e0/e1 = 557065 + 61440 + 110612 = 729117
+              vs r156-family 729117: delta +0
