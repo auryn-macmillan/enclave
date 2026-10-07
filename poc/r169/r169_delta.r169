@@ -1,0 +1,39 @@
+ROUND=r169  (C2b V1 sponge-absorb solo; test of R167 F2/DRAFT hypothesis)
+
+RAN digits (fresh this tick, on-disk *_gates.json):
+  E   (C2b unblunt re-anchor)  = 2,586,563 g  ACIR 854,722
+        == r168 E / r166 B0 / r152d B0 golden  (DELTA 0, digit-exact 3-deep)
+  S   (C2b e_sm commitment -> no-sponge wire)  = 2,379,010 g  ACIR 843,797
+  X   = E - S  = 207,553 g  ACIR 10,925  (density 18.9980 g/ACIR)
+
+Carried RAN (from committed receipts on disk, not re-burned this tick):
+  Jall (r166 all-3-limb-solo)      = 1,436,906 g  ACIR 426,005
+  r167 block (V1 - 3-limb-solo sum) = 138,420 g  ACIR 7,285  (density 19.0007)
+  r168 per-coeff assert (E-F)       =  96,255 g  ACIR 49,152  (density 1.9583)
+
+Identities (all hold exactly; re-derived in derive.py on disk):
+  V1 cell   = E - Jall       = 1,149,657 g   (= r167 V1, DELTA 0)
+  vS(no-spg)= S - Jall       =   942,104 g
+  V1 cell - vS  = 207,553 g  = X            (identity exact)
+
+Key comparisons:
+  X (207,553)   density 18.9980   ~ block (138,420) density 19.0007   [MATCH, delta 0.014%]
+  X (207,553)   vs assert (96,255) density 1.9583                     [10x off, NOT a match]
+  X - block     =  69,133 g  (5.0% of block)
+
+READING (authoritative; see plan.md for the full derivation):
+  The sponge wire X carries the SAME gate-per-ACIR density as the r167 block
+  (18.9980 vs 19.0007, delta 0.014%) and a DIFFERENT one from the per-coeff
+  assert (18.9980 vs 1.9583, 9.7x off; ACIR sig 10,925 vs 49,152, 4.5x off).
+  => the r167 shared block is on the sponge-compute_commitment line (F2 direction
+     confirmed at the density level), NOT the per-coeff assert (2nd RAN refutation
+     of the assert line after r168).
+  The sponge wire X (207,553) EXCEEDS the block (138,420) by 69,133 g: the block
+  is the portion of the sponge line that the 3-limb solos did not absorb; the
+  residual 69,133 g is the sponge segment the 3-solos touched. S is not a pure
+  sponge-only cut (it also reshapes the eq-tail lhs), so X is a combined
+  upper bound on "sponge + eq-tail", not sponge alone. Exact sponge-only
+  separation would need a 3rd leg (not the p1; moot because the C6-class
+  per-limb aggregate re-cut is owner-closed 2026-10-06 ~02:25Z items
+  (3)/(4)/(6)).
+  NO NEW LEVER. This is a measurement leg: 0 circuits/ + 0 crates/ source changed.

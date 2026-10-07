@@ -1,0 +1,10 @@
+# r169 large binary build captures (regenerable; not reviewed).
+# What we DO TRACK: .gitignore log.r169 plan.md derive.py *_gates.json (small, ~120 B)
+#   *_stdout.log *_timev.log (small, ~500 B) *_wall.raw r169_delta.r169
+#   r169E_live.r169 r169S_no_sponge.r169
+# What we EXCLUDE: r169_legs.sh  *_fresh.json  zz_*.nr.bak  zz_porc_preworktree.txt
+r169_legs.sh
+r169E_live_fresh.json
+r169S_no_sponge_fresh.json
+zz_*.nr.bak
+zz_porc_preworktree.txt
