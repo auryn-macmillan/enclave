@@ -1,0 +1,11 @@
+# r168 large binary build captures (regenerable; not reviewed): the big fresh ARITHMETIC
+# targets aren't here (leg script env-stores to /tmp/r168_env*).
+# What we DO TRACK: .gitignore log.r168 plan.md *_gates.json (small, ~120 B) *_stdout.log
+#   *_timev.log (small, ~500 B) r168_delta.r168 r168E_live.r168 r168F_nopassert.r168
+# What we EXCLUDE: r168_legs.sh r168_legF_finish.sh r168E_live_fresh.json
+#   r168F_nopassert_fresh.json  zz_*.nr.bak  (regenerable tooling)
+r168_legs.sh
+r168_legF_finish.sh
+r168E_live_fresh.json
+r168F_nopassert_fresh.json
+zz_*.nr.bak
