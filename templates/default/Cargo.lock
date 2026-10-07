@@ -1310,6 +1310,8 @@ dependencies = [
  "light-poseidon",
  "num-bigint 0.4.6",
  "num-traits",
+ "openvm-keccak256",
+ "rayon",
  "serde",
  "sha2",
  "sha3 0.10.8",
@@ -1332,6 +1334,27 @@ dependencies = [
  "rand_chacha 0.9.0",
  "serde",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "e3-openvm-host"
+version = "0.19.0-test.2"
+dependencies = [
+ "anyhow",
+ "e3-compute-provider",
+ "e3-openvm-types",
+ "libc",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "e3-openvm-types"
+version = "0.19.0-test.2"
+dependencies = [
+ "bincode",
+ "e3-compute-provider",
+ "serde",
 ]
 
 [[package]]
@@ -1366,6 +1389,7 @@ dependencies = [
  "e3-bfv-client",
  "e3-compute-provider",
  "e3-fhe-params",
+ "futures-util",
  "hex",
  "reqwest",
  "serde",
@@ -1380,7 +1404,6 @@ dependencies = [
  "ark-bn254 0.5.0",
  "ark-ff 0.5.0",
  "hex",
- "risc0-bigint2",
  "sha3 0.10.8",
  "taceo-poseidon2",
 ]
@@ -1391,6 +1414,17 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "e3-compute-provider",
+ "e3-program-server",
+ "e3-user-program",
+ "tokio",
+]
+
+[[package]]
+name = "e3-support-scripts-openvm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "e3-openvm-host",
  "e3-program-server",
  "e3-user-program",
  "tokio",
@@ -1580,7 +1614,7 @@ dependencies = [
 [[package]]
 name = "fhe"
 version = "0.4.1"
-source = "git+https://github.com/gnosisguild/fhe.rs?tag=v0.4.1#7a357b60e33820c27ddf4e43a3ebf2615f330836"
+source = "git+https://github.com/gnosisguild/fhe.rs?tag=v0.4.2#873dc69c07eae251f88c4b5cacf6c4453e2c365a"
 dependencies = [
  "bincode",
  "doc-comment",
@@ -1606,7 +1640,7 @@ dependencies = [
 [[package]]
 name = "fhe-math"
 version = "0.4.1"
-source = "git+https://github.com/gnosisguild/fhe.rs?tag=v0.4.1#7a357b60e33820c27ddf4e43a3ebf2615f330836"
+source = "git+https://github.com/gnosisguild/fhe.rs?tag=v0.4.2#873dc69c07eae251f88c4b5cacf6c4453e2c365a"
 dependencies = [
  "ethnum",
  "fhe-traits",
@@ -1630,7 +1664,7 @@ dependencies = [
 [[package]]
 name = "fhe-traits"
 version = "0.4.1"
-source = "git+https://github.com/gnosisguild/fhe.rs?tag=v0.4.1#7a357b60e33820c27ddf4e43a3ebf2615f330836"
+source = "git+https://github.com/gnosisguild/fhe.rs?tag=v0.4.2#873dc69c07eae251f88c4b5cacf6c4453e2c365a"
 dependencies = [
  "rand 0.9.5",
 ]
@@ -1638,7 +1672,7 @@ dependencies = [
 [[package]]
 name = "fhe-util"
 version = "0.4.1"
-source = "git+https://github.com/gnosisguild/fhe.rs?tag=v0.4.1#7a357b60e33820c27ddf4e43a3ebf2615f330836"
+source = "git+https://github.com/gnosisguild/fhe.rs?tag=v0.4.2#873dc69c07eae251f88c4b5cacf6c4453e2c365a"
 dependencies = [
  "num-bigint-dig",
  "num-traits",
@@ -1746,6 +1780,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7e3450815272ef58cec6d564423f6e755e25379b217b0bc688e295ba24df6b1d"
 
 [[package]]
+name = "futures-macro"
+version = "0.3.31"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "162ee34ebcb7c64a8abebc059ce0fee27c2262618d7b60ed8faf72fef13c3650"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "futures-sink"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1759,13 +1804,15 @@ checksum = "037711b3d59c33004d3856fbdc83b99d4ff37a24768fa1be9ce3538a1cde4393"
 
 [[package]]
 name = "futures-util"
-version = "0.3.32"
+version = "0.3.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "389ca41296e6190b48053de0321d02a77f32f8a5d2461dd38762c0593805c6d6"
+checksum = "9fa08315bb612088cc391249efdc3bc77536f16c91f6cf495e6fbe85b20a4a81"
 dependencies = [
  "futures-core",
+ "futures-macro",
  "futures-task",
  "pin-project-lite",
+ "pin-utils",
  "slab",
 ]
 
@@ -2206,12 +2253,6 @@ dependencies = [
  "quote",
  "syn 2.0.117",
 ]
-
-[[package]]
-name = "include_bytes_aligned"
-version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ee796ad498c8d9a1d68e477df8f754ed784ef875de1414ebdaf169f70a6a784"
 
 [[package]]
 name = "indexmap"
@@ -2727,6 +2768,52 @@ dependencies = [
 ]
 
 [[package]]
+name = "openvm-custom-insn"
+version = "2.0.2"
+source = "git+https://github.com/openvm-org/openvm.git?tag=v2.0.2#59a69b8b0cbee7011ac978e4cc07707ee3681944"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "openvm-keccak256"
+version = "2.0.2"
+source = "git+https://github.com/openvm-org/openvm.git?tag=v2.0.2#59a69b8b0cbee7011ac978e4cc07707ee3681944"
+dependencies = [
+ "openvm-keccak256-guest",
+ "spin",
+ "tiny-keccak",
+]
+
+[[package]]
+name = "openvm-keccak256-guest"
+version = "2.0.2"
+source = "git+https://github.com/openvm-org/openvm.git?tag=v2.0.2#59a69b8b0cbee7011ac978e4cc07707ee3681944"
+dependencies = [
+ "openvm-platform",
+]
+
+[[package]]
+name = "openvm-platform"
+version = "2.0.2"
+source = "git+https://github.com/openvm-org/openvm.git?tag=v2.0.2#59a69b8b0cbee7011ac978e4cc07707ee3681944"
+dependencies = [
+ "openvm-custom-insn",
+ "openvm-rv32im-guest",
+]
+
+[[package]]
+name = "openvm-rv32im-guest"
+version = "2.0.2"
+source = "git+https://github.com/openvm-org/openvm.git?tag=v2.0.2#59a69b8b0cbee7011ac978e4cc07707ee3681944"
+dependencies = [
+ "openvm-custom-insn",
+ "strum_macros",
+]
+
+[[package]]
 name = "parity-scale-codec"
 version = "3.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2815,6 +2902,12 @@ name = "pin-project-lite"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
+
+[[package]]
+name = "pin-utils"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13bee6c73da26345c729282832b60b0363cf3dd9f4bfd81d8551b7a1c889a113"
 
 [[package]]
 name = "pkcs8"
@@ -3316,16 +3409,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "risc0-bigint2"
-version = "1.4.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b87f5f7494a2242cead2750b7ce2b8522c1be83dee268479f1c12ed521eaf595"
-dependencies = [
- "include_bytes_aligned",
- "stability",
-]
-
-[[package]]
 name = "rlp"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3732,6 +3815,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "spin"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "023a211cb3138dbc438680b32560ad89f699977624c9f8dbb95a47d5b4c07dd3"
+
+[[package]]
 name = "spki"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3739,16 +3828,6 @@ checksum = "d91ed6c858b01f942cd56b37a94b3e0a1798290327d1236e4d9cf4eaca44d29d"
 dependencies = [
  "base64ct",
  "der",
-]
-
-[[package]]
-name = "stability"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d904e7009df136af5297832a3ace3370cd14ff1546a232f4f185036c2736fcac"
-dependencies = [
- "quote",
- "syn 2.0.117",
 ]
 
 [[package]]
@@ -3768,6 +3847,19 @@ name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
+
+[[package]]
+name = "strum_macros"
+version = "0.26.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4c6bee85a5a24955dc440386795aa378cd9cf82acd5f764469152d2270e581be"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "rustversion",
+ "syn 2.0.117",
+]
 
 [[package]]
 name = "subtle"
@@ -3882,15 +3974,15 @@ checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
 
 [[package]]
 name = "tempfile"
-version = "3.27.0"
+version = "3.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
+checksum = "e8a64e3985349f2441a1a9ef0b853f869006c3855f2cda6862a94d26ebb9d6a1"
 dependencies = [
  "fastrand",
- "getrandom 0.4.2",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

@@ -66,6 +66,8 @@ jobs:
       build_sdk: ${{ steps.jobs.outputs.build_sdk }}
       sdk_tests: ${{ steps.jobs.outputs.sdk_tests }}
       build_e3_support_dev: ${{ steps.jobs.outputs.build_e3_support_dev }}
+      openvm_worker: ${{ steps.jobs.outputs.openvm_worker }}
+      openvm_guest: ${{ steps.jobs.outputs.openvm_guest }}
       build_circuits: ${{ steps.jobs.outputs.build_circuits }}
       noir_checks: ${{ steps.jobs.outputs.noir_checks }}
       integration_prebuild: ${{ steps.jobs.outputs.integration_prebuild }}
@@ -90,6 +92,35 @@ jobs:
               - 'Cargo.toml'
               - 'Cargo.lock'
               - 'rust-toolchain.toml'
+              - '!**/*.md'
+              - '!**/*.mdx'
+            # The OpenVM worker is a cargo workspace of its own, built against the OpenVM SDK.
+            openvm_worker:
+              - 'crates/openvm-prover/**'
+              - '!**/*.md'
+              - '!**/*.mdx'
+            # What the OpenVM guests compile: each project's program and guest, and the crates they
+            # link, some of them under guest-only cfg flags.
+            openvm_guest:
+              - 'Cargo.toml'
+              - 'crates/bfv-client/**'
+              - 'crates/compute-provider/**'
+              - 'crates/fhe-params/**'
+              - 'crates/openvm-types/**'
+              - 'crates/parity-matrix/**'
+              - 'crates/polynomial/**'
+              - 'crates/safe/**'
+              - 'crates/zk-helpers/**'
+              # The programs inherit dependencies from their project workspace, and the native
+              # fixture builds in CRISP's.
+              - 'examples/CRISP/Cargo.toml'
+              - 'examples/CRISP/Cargo.lock'
+              - 'examples/CRISP/guest/**'
+              - 'examples/CRISP/program/**'
+              - 'templates/default/Cargo.toml'
+              - 'templates/default/guest/**'
+              - 'templates/default/program/**'
+              - 'scripts/run-openvm.sh'
               - '!**/*.md'
               - '!**/*.mdx'
             contracts:
@@ -117,8 +148,9 @@ jobs:
               - 'examples/CRISP/Cargo.toml'
               - 'examples/CRISP/Cargo.lock'
               - 'examples/CRISP/rust-toolchain.toml'
-              # A symlink to a member of the CRISP cargo workspace.
+              # Symlinks to members of the CRISP cargo workspace.
               - 'examples/CRISP/.interfold/support/dev'
+              - 'examples/CRISP/.interfold/support/openvm'
               - 'examples/CRISP/crates/**'
               - 'examples/CRISP/program/**'
               - 'examples/CRISP/server/**'
@@ -253,6 +285,8 @@ jobs:
           DOCKER="${{ steps.filter.outputs.docker }}"
           CI="${{ steps.filter.outputs.ci }}"
           TOOLING="${{ steps.filter.outputs.tooling }}"
+          OPENVM_WORKER="${{ steps.filter.outputs.openvm_worker }}"
+          OPENVM_GUEST="${{ steps.filter.outputs.openvm_guest }}"
           FORCE="${{ github.event_name == 'workflow_dispatch' || inputs.release_candidate }}"
 
           any() { for v in "$@"; do [ "$v" = "true" ] && echo "true" && return; done; echo "false"; }
@@ -289,7 +323,8 @@ jobs:
           echo "templates=$(any $FORCE $TEMPLATES $RUST $CONTRACTS $CIRCUITS $SDK $CI $TOOLING)" >> $GITHUB_OUTPUT
           echo "zk=$(any $FORCE $RUST $CIRCUITS $CI $TOOLING)" >> $GITHUB_OUTPUT
           echo "contracts=$(any $FORCE $CONTRACTS $CI $TOOLING)" >> $GITHUB_OUTPUT
-          echo "docker_support=$(any $FORCE $DOCKER $CI)" >> $GITHUB_OUTPUT
+          # The OpenVM service compiles repository-local Rust and CRISP program sources.
+          echo "docker_support=$(any $FORCE $DOCKER $RUST $CRISP_RUST $CI)" >> $GITHUB_OUTPUT
           # The rust jobs already compile the workspace, so the image build only
           # needs to run when the Dockerfiles or their build context change.
           echo "docker_ciphernode=$(any $FORCE $DOCKER $CI)" >> $GITHUB_OUTPUT
@@ -298,6 +333,8 @@ jobs:
           # Both feed template_integration, so each must cover every path that
           # triggers it — a skipped dependency silently skips the e2e job.
           echo "build_e3_support_dev=$(any $FORCE $TEMPLATES $RUST $CONTRACTS $CIRCUITS $SDK $CI $TOOLING)" >> $GITHUB_OUTPUT
+          echo "openvm_worker=$(any $FORCE $OPENVM_WORKER $CI)" >> $GITHUB_OUTPUT
+          echo "openvm_guest=$(any $FORCE $OPENVM_GUEST $CI)" >> $GITHUB_OUTPUT
           # build_circuits runs check:verifiers, so every input of the generated verifiers runs it.
           # CIRCUIT_BUILD adds the other files that the job runs or hashes.
           echo "build_circuits=$(any $FORCE $RUST $CIRCUITS $VERIFIERS $CIRCUIT_BUILD $CI $TOOLING)" >> $GITHUB_OUTPUT
@@ -414,9 +451,8 @@ jobs:
       # `parallel` is off by default, so the library tests compile the sequential fallback of
       # `recompute_commitments` and the rayon body of that function ships untested. This step is
       # what exercises it. Scoped with `-p` rather than `--all-features`: the feature is the one
-      # thing this crate needs enabled, and the zkVM guest is unaffected either way because it
-      # builds from `crates/support/methods/guest`, which takes this crate by git revision with
-      # default features.
+      # thing this crate needs enabled, and the OpenVM guest is unaffected either way because it
+      # builds this crate without the feature.
       - name: Run compute-provider Unit Tests with parallel batching
         if: matrix.suite == 'doc'
         run: 'cargo test -p e3-compute-provider --features parallel'
@@ -590,16 +626,15 @@ jobs:
           curl --fail --silent --head --retry 10 --retry-connrefused --retry-delay 1 "$E3_TEST_CIRCUITS_DOWNLOAD_URL" >/dev/null
           cargo test -p e3-zk-prover --features integration-tests --test integration_tests -- --nocapture
 
-  # Guards the RISC Zero guest artifact. The on-chain imageId is immutable, so a guest change
-  # that leaves ImageID.sol untouched ships a verifier that no longer matches this tree.
-  build_e3_support_risc0:
+  # Build the native OpenVM HTTP service. Proving artifacts are deployment-specific.
+  build_e3_support_openvm:
     needs: [detect_changes]
     if: needs.detect_changes.outputs.docker_support == 'true'
     timeout-minutes: 30
     runs-on:
       ${{ github.repository == 'theinterfold/interfold' && github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' ||
       github.ref == 'refs/heads/dev') && format('runs-on={0}-{1}-{2}/runner=4cpu-linux-x64/ram=16/spot=false', github.run_id,
-      github.run_attempt, 'build_e3_support_risc0') || 'ubuntu-latest' }}
+      github.run_attempt, 'build_e3_support_openvm') || 'ubuntu-latest' }}
     permissions:
       contents: read
       packages: write
@@ -630,7 +665,7 @@ jobs:
       - name: Build image
         uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
         with:
-          context: ./crates/support
+          context: .
           file: ${{ env.SUPPORT_DOCKERFILE_PATH }}
           push: ${{ github.ref == 'refs/heads/main' }}
           tags: ${{ steps.tags.outputs.tags }}
@@ -1573,8 +1608,6 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           submodules: recursive
-      - name: Test support image resolution
-        run: bash crates/support-scripts/tests/container.sh
       - name: Cache Rust dependencies
         uses: ./.github/actions/cache-dependencies
         with:
@@ -1586,8 +1619,14 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
       - name: Install protoc
         run: sudo apt-get update -y && sudo apt-get install -y protobuf-compiler
+      - name: Test program backend selection
+        run: cargo test --locked -p e3-support-scripts
       - name: Build support scripts
         run: cd templates/default && cargo build --locked --bin e3-support-scripts-dev
+      # The OpenVM proving service links the template program. Its guest needs cargo-openvm and a GPU
+      # host for proofs, so CI builds only the service.
+      - name: Build the OpenVM proving service
+        run: cd templates/default && cargo build --locked --bin e3-support-scripts-openvm
       - name: Verify build artifacts
         run: |
           echo "Checking for support scripts binary:"
@@ -1601,6 +1640,78 @@ jobs:
           path: templates/default/target/debug/e3-support-scripts-dev
           retention-days: 1
           if-no-files-found: error
+
+  # The CPU build of the OpenVM worker and its tests. Proofs and the CUDA build need a GPU host.
+  openvm_worker:
+    needs: [detect_changes]
+    if: needs.detect_changes.outputs.openvm_worker == 'true'
+    timeout-minutes: 45
+    runs-on:
+      ${{ github.repository == 'theinterfold/interfold' && github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' ||
+      github.ref == 'refs/heads/dev') && format('runs-on={0}-{1}-{2}/runner=4cpu-linux-x64/ram=16', github.run_id, github.run_attempt,
+      'openvm_worker') || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - name: Cache Rust dependencies
+        uses: ./.github/actions/cache-dependencies
+        with:
+          cargo-lock-path: crates/openvm-prover/Cargo.lock
+          rust-target-path: crates/openvm-prover/target/
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: Test the CPU worker
+        run: cargo test --locked --manifest-path crates/openvm-prover/Cargo.toml
+
+  # Builds both OpenVM guests, which compiles the guest-only code paths, then runs CRISP's guest on a
+  # fresh fixture without proving and compares the digest it reveals with the native journal.
+  openvm_guest:
+    needs: [detect_changes]
+    if: needs.detect_changes.outputs.openvm_guest == 'true'
+    timeout-minutes: 75
+    runs-on:
+      ${{ github.repository == 'theinterfold/interfold' && github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' ||
+      github.ref == 'refs/heads/dev') && format('runs-on={0}-{1}-{2}/runner=4cpu-linux-x64/ram=16', github.run_id, github.run_attempt,
+      'openvm_guest') || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - name: Cache Rust dependencies
+        uses: ./.github/actions/cache-dependencies
+        with:
+          cargo-lock-path: examples/CRISP/**/Cargo.lock
+          rust-target-path: target/openvm/
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: Install protoc
+        run: sudo apt-get update -y && sudo apt-get install -y protobuf-compiler
+      - name: Install the OpenVM guest toolchain
+        run: rustup toolchain install nightly-2026-01-18 --component rust-src
+      - name: Cache cargo-openvm
+        id: cargo_openvm
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cargo/bin/cargo-openvm
+          key: cargo-openvm-v2.0.2-${{ runner.os }}
+      - name: Install cargo-openvm
+        if: steps.cargo_openvm.outputs.cache-hit != 'true'
+        run: cargo install --locked --git https://github.com/openvm-org/openvm.git --tag v2.0.2 cargo-openvm
+      - name: Build the template guest
+        working-directory: templates/default/guest
+        env:
+          OPENVM_BUILD_LOCKED: '1'
+          RUSTFLAGS: --cfg crisp_openvm --cfg crisp_fhe_optimized
+        run: cargo openvm build --target-dir ../../../target/openvm/template-guest
+      # The guest replaces hashing, packing and commitments with accelerated versions that the host
+      # does not run. The secure fixture covers their secure-8192 widths.
+      - name: Run the CRISP guest against the native journal
+        run: |
+          bash scripts/run-openvm.sh fixture 3 "$RUNNER_TEMP/crisp-fixture" --insecure
+          bash scripts/run-openvm.sh guest-parity "$RUNNER_TEMP/crisp-fixture"
+          bash scripts/run-openvm.sh fixture 2 "$RUNNER_TEMP/crisp-fixture-secure"
+          bash scripts/run-openvm.sh guest-parity "$RUNNER_TEMP/crisp-fixture-secure"
 
   build_sdk:
     needs: [detect_changes]
@@ -1843,8 +1954,6 @@ jobs:
         run: |
           cd templates/default
           pnpm compile
-          chmod 755 .interfold/generated/contracts tests
-          chmod 644 .interfold/generated/contracts/ImageID.sol
           pnpm test:integration
 
   test_interfold_init:
