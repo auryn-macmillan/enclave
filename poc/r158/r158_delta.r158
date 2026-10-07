@@ -1,0 +1,16 @@
+ROUND=r158
+LEG A (C2a unblunt): A=1464743
+LEG B (C2a whole-fn-NOP): B=911778
+LEG C (C2a per-limb only): C=911778
+LEG E (C2b unblunt sanity): E=2586563
+
+C2a FAMILY = A-B = 552965 g = 37.75% of A leaf
+C2a PER-LIMB (spec-A) = A-C = 552965 g = 37.75% of A leaf; 100.00% of family
+C2a FLAT (outside for-mod) = C-B = 0 g
+
+VERDICT-KEY: (A-C)==(A-B) i.e. flat=0, C2a family is 100% per-limb (spec-A-able)
+
+CROSS-BASE (vs r152d c98b):
+  A C2a: fold-base=1464743 vs r152d=1464743 (delta 0)
+  B family: A-B=552965 r152d-golden=552965 
+  C2b sanity: fold-base=2586563 vs r152d=2586563 (delta 0)
