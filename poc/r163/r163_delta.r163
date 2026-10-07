@@ -1,0 +1,9 @@
+ROUND=r163 BASE=a5d5632499a (fold tip at r162: r161 9d4a86352 + 2 receipt commits)
+LEG E1 (C2b unblunt)  = 2586563
+LEG B  (C2b whole-fn-NOP) = 2033598
+LEG C  (C2b per-limb only) = 2033598
+C2b FAMILY  = E1-B  = 552965 g = 21.38% of E1 leaf (r152d golden 552,965; delta 0)
+C2b PER-LIMB (spec-A) = E1-C = 552965 g = 21.38% of leaf; 100.00% of family
+C2b FLAT (scaffold) = C-B = 0 g
+VERDICT-KEY: B==C? True  -> flat=0 => family 100% per-limb
+cross-base: E1 fold=2586563 vs r152d/r158-fold-golden 2586563 (delta 0)
