@@ -1,0 +1,7 @@
+=== r161 legs @ worktree 733eb45ae (detached; /tmp/r161, pruned after round) ===
+[2026-10-07T04:10:18Z] LEG r161U_u   (u  solo NOP, 1-bit)  GATES=2050816 ACIR=544430 WALL=216.4s PEAK_KB=20206380
+[2026-10-07T04:14:28Z] LEG r161E0_e0 (e0 solo NOP, 5-bit)  GATES=2050806 ACIR=544430 WALL=222.7s PEAK_KB=18860452
+[2026-10-07T04:18:26Z] LEG r161E1_e1 (e1 solo NOP, 5-bit)  GATES=2087685 ACIR=577198 WALL=223.8s PEAK_KB=19330180
+[2026-10-07T04:26:51Z] LEG r161A1    (unblunt re-anchor)   GATES=2124549 ACIR=609966 WALL=223.6s PEAK_KB=19591480
+[2026-10-07T04:31:49Z] LEG r161X     (u+e0+e1 ALL solo)    GATES=2013937 ACIR=511662 WALL=291.3s PEAK_KB=18110860
+R161_STATUS=OK (5 legs; SE restore re-pinned 308c8c5d after every leg; DEF left flipped (carry) between legs and restored to pre-flip 7f07de82 at end; PORC 0 after worktree restore + prune)
