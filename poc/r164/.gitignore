@@ -1,0 +1,6 @@
+# large compile intermediates retained on disk for provenance but not versioned (per r147/r158/r160/r161 convention)
+/*_fresh.json
+/*_gates_err.log
+/*_stdout.log
+/*_timev.log
+*.nr.bak

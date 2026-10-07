@@ -1,0 +1,16 @@
+ROUND=r164 BASE=cb722eea281 (fold tip; R163 receipt) CIRC=e_sm_share_computation
+SLICE E1 (C2b unblunt)   = 2586563 g   ACIR 854722
+SLICE V1 (s1 solo)       = 1436905 g   ACIR 426004
+SLICE V2 (s2 solo)       = 2561987 g   ACIR 830146
+SLICE V4 (parity solo)   = 2377667 g   ACIR 707266
+SLICE V5 (party solo)    = 1938913 g   ACIR 821943
+DERIVED (RAN):
+  E1 (unblunt)        = 2586563 g
+  family (R163 C2b)   = 552,965 g  (r163 digit-exact B==C==2033598 implies E1-B=552965)
+  NON-family (B leg)  = 2586563-552965 = 2033598 g  vs R163 B leg 2,033,598 (delta 0)
+  V1 solo cost        = E1-V1 = 1149658 g  (44.45% of leaf, 56.53% of B)
+  V2 solo cost        = E1-V2 = 24576 g   (0.95% of leaf, 1.21% of B)
+  V4 solo cost        = E1-V4 = 208896 g   (8.08% of leaf, 10.27% of B)
+  V5 solo cost        = E1-V5 = 647650 g   (25.04% of leaf, 31.85% of B)
+  sum(V1,V2,V4,V5)    = 2030780 g  vs B (2033598)  gap -2818 g  (r161-style lattice-joint sharing?)
+TWIN GAP read (RAN cross-row): C2b non-family 2033598 g + C2a non-family 911778 g (r158 RAN B leg) = 2945376 g total; twin difference C2b-C2a = 1121820 g.
