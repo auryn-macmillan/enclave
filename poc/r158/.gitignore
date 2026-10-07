@@ -1,0 +1,7 @@
+# large compile intermediates + raw sources retained for provenance but not versioned (per r147 convention)
+/*_fresh.json
+/*_gates_err.log
+/*_stdout.log
+/*_timev.log
+*.nr.bak
+run*.r158
