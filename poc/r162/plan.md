@@ -8,7 +8,7 @@ Method
 - Source: circuits/lib/src/math/polynomial.nr, lines 173-182 (range_check_2bounds body), lines 142-165 (doc).
 - Caller: circuits/lib/src/core/dkg/share_encryption.nr lines 442-444 (u, e0, e1 call sites), lines 129-136 (Polynomial<N> decl, all three same length).
 - Config: circuits/lib/src/configs/secure/dkg.nr lines 72-74 (BIT_U=1, BIT_E0=5, BIT_E1=5); circuits/bin/config/src/main.nr lines 199-209 (u_bound=1, e0_bound=20, e1_bound=20) — RAN grep in prior round, cited unchanged.
-- Generic pass: <let BIT: u32>, small style change, N=L=8192 3-way call site in one shadow-NOP shape per r161's main prehistory (A1 unblunt + U/E0/E1/X solo).
+- The three u/e0/e1 calls are a generic pass `<let BIT: u32>` (no value-generic), so the only per-call variation is the (BIT, lower_bound, upper_bound) tuple; N is the shared polynomial length for all three.
 
 **FINDING 1 (RAN, grep + read lines 173-182, 442-444):** `range_check_2bounds` is a *generic* function (no poly-id tag, no per-tag specialization, no tag-allocator). Its entire body is a loop over `0..self.coefficients.len()` with (per iter) one shift `self.coefficients[i] + lower_bound`, one constant `range_size - shifted`, and two `assert_max_bit_size::<BIT+1>` asserts (lines 179-180). The only per-call parameters are (BIT, lower_bound, upper_bound).
 
@@ -16,11 +16,11 @@ Method
 
 **FINDING 3 (RAN arithmetic on R161 digits):** If all three calls had equal per-cell cost, X would be ≈ 3 × 73.7k ≈ 221k. Measured (RAN, R161) X = 110,612 = 73,733 + 36,864 (u + e1 only; e0's cell is absorbed). So the three cells sum to 184,340 but X only removes 110,612 — one full cell (≈ e0-sized 73,743) of over-count. The interpretation "one cell is folded into a sibling" is DRAFT; the equality X = full + half is RAN.
 
-**FINDING 4 (RAN, line 72-74 + line 199-209):** From `circuits/lib/src/configs/secure/dkg.nr` L72-74 = `const BIT_U: u32 = 1`, `const BIT_E0: u32 = 5`, `const BIT_E1: u32 = 5`; and `circuits/bin/config/src/main.nr` L199-209 = `u_bound: 1`, `e0_bound: 20`, `e1_bound: 20`. So the binary-emitting calls see (1, BIT=1, (1,1)) vs (20, BIT=5, (20,20)) vs (20, BIT=5, (20,20)) — three different, one e0/e1 pair duplicate.
+**FINDING 4 (RAN, grep-verbatim of the config lines):** `circuits/lib/src/configs/secure/dkg.nr` L72-74 are `pub global SHARE_ENCRYPTION_BIT_U: u32 = 1;` / `pub global SHARE_ENCRYPTION_BIT_E0: u32 = 5;` / `pub global SHARE_ENCRYPTION_BIT_E1: u32 = 5;`. `circuits/bin/config/src/main.nr` L199-201 bind `let u_bound: u128 = SHARE_ENCRYPTION_U_BOUND as u128;` (+ the E0/E1 equivalents); L203/206/209 comments name u_bound as 1 (ternary) and e0/e1_bound as 20. So the three SE L442-444 call sites see (BIT=1,(1,1)) / (BIT=5,(20,20)) / (BIT=5,(20,20)).
 
 **VERDICT (RAN, source-read only, 0 compile, 0 rust touched):** DRAFT#4's "bound-key in the specializer" is REFUTED for the source level. There is no bound-key, no per-tag specialization in `range_check_2bounds`. The e1 = half-of-e0 and the 73,728 non-additive gap are CLEAN at the source boundary, meaning the fold happens strictly above the emitter (the solver's CSE, or Cranelift-equivalent recompile-reallocation that happens when Noir lowers asserts to gates). Any LEVER along the DKG narrow-flat should model the whole X slot (110,612 g), not the three cells (gap 73,728 g = one cell over-counted), consistent with R161's finding (5).
 
-**Next (optional, p2, not this round):** verify field-level behavior by tracing two adjacent calls and checking whether Noir's solver dedupes on same-BIT+same-bounds+alphabetic-gate-pair; a 1-leg HAI-Ran with e0 and e1 swapped (one of them marked as sibling-visible into one) would discriminate "solver-CSE" from "lowering-pattern-key", but the finding for the C3 narrow-flat is closed regardless of which of those two sub-mechanisms is responsible.
+**Next (p2, NOT this round):** To discriminate the two remaining backend sub-mechanisms (solver common-subexpression vs emit-time lowering pattern), the clean probe is a single 1-leg swap run: temporarily flip which of e0/e1 is emitted first at SE L443-444 (recompile only, no protocol change) and observe whether e1's half-cost tracks the *call order* (=> lowering/emit pattern) or tracks the *symbol e1* regardless of order (=> solver-level). Not run here (a fresh leg, ~3-4 min wall) so it is DRAFT. The narrow-flat verdict is closed either way: model X = 110,612 g, not the 3-cell sum.
 
 ## Verdict (RAN source-read, 0 compile, 0 rust / 0 .nr / 0 .rs touched)
 
