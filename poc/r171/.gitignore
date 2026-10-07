@@ -1,0 +1,7 @@
+### r171 (0-compile; no leg-side large captures in this round).
+### What we track: .gitignore plan.md log.r171 dkg_family_table.py r171_delta.r171
+### What we exclude (if any re-run produces them):
+*.raw
+*stdout.log
+*timev.log
+*_error.log

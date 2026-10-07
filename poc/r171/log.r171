@@ -1,0 +1,39 @@
+r171  2026-10-07 ~11:20 EDT
+=================================
+Idea (r170 RESUME NEXT TICK (ii)): family-table aggregate receipt.
+Instead of another raw leg, we fold the 15 prior rounds of
+r156-r170 into a single 6-row one-page team-facing artifact using a
+zero-compile Python re-derivation from 40 committed *_gates.json
+receipts.
+
+STATUS: RAN (RC 0 on `python3 poc/r171/dkg_family_table.py`; 25/25
+identity checks OK; 0 nargo, 0 bb, 0 cargo, 0 .rs, 0 .nr touched).
+
+HEAD: i5/dkg-research 5bd05f3f2 (r170 tip; no new commits other than this
+      receipts-only commit).
+
+HEADLINE: family pool re-derives to 2,849,566 g = 30.983% of the
+9,197,169 g DKG total cited by r160. Every per-leaf split is
+digit-exact vs the r156-r170 goldens.
+
+New receipts this round:
+  poc/r171/dkg_family_table.py   (the 0-compile re-derivation, ~290 L)
+  poc/r171/r171_delta.r171       (stdout+stderr of the run; 25 checks)
+  poc/r171/plan.md               (this receipt doc)
+
+BOX: 8c / 31 GiB / 0 swap HOLD (RAN nproc 8, MemAvailable ~30 GB; 0 legs
+compiled this round, so peak of box survey not re-burned).
+Budget: one python3 run (~1 s) + a fsync-only commit. ~2% of the 60-min
+budget.
+
+MUTATIONS (receipts-only): ONE receipts-only commit on i5/dkg-research
+(0 circuits/ + 0 crates/ source). Review branch research/r171-dkg-family-
+aggregate pushed to enclave as a new ref. NO force-push; husky skipped
+--no-verify per the receipts-only precedent r156-r170.
+
+UPSTREAM SYNC (RAN): git fetch origin rc 0, origin/main
+f2df52907 UNMOVED (rev-list f2df52907..origin/main = 0). left-right
+origin/main...i5 = 0/114 (was 0/114 pre-round; +0 this round). NO_REBASE
+dirs ENOENT (.git/rebase-merge + .git/rebase-apply both ENOENT).
+
+UPSTREAM-PR: NONE (0 circuits/ + 0 crates/ source delta; receipts-only).

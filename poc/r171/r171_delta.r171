@@ -1,0 +1,132 @@
+== r171 DKG family-table aggregate receipt (0-compile) ==
+
+LAYERS (gates) - per-leaf raw leg values (RAN from on-disk JSON):
+
+  C1_live                         1634722 g     582531 ACIR   (r157A1_live_gates.json)
+  C1_full                          620203 g      91011 ACIR   (r157B_full_gates.json)
+  C1_limbs                         823709 g     189315 ACIR   (r157C_limb_gates.json)
+  C1_esm_lifted_solo              1507699 g     549763 ACIR   (r159B_esm_lifted_solo_gates.json)
+  C1_eek_solo                     1597858 g     549763 ACIR   (r170E_eek_solo_gates.json)
+  C1_sk_solo                      1597853 g     549763 ACIR   (r170S2c_gates.json)
+  C1_a1_r170                      1634722 g     582531 ACIR   (r170A1_live_gates.json)
+  C2a_live                        1464743 g     442744 ACIR   (r158A_live_gates.json)
+  C2a_full                         911778 g     221560 ACIR   (r158B_full_gates.json)
+  C2a_limbs                        911778 g     221560 ACIR   (r158C_limb_gates.json)
+  C2a_v1a                         1436905 g     426004 ACIR   (r165V1A_c2a_secret_commit_gates.json)
+  C2a_v2a                         1440167 g     418168 ACIR   (r165V2A_c2a_secret_consistency_gates.json)
+  C2b_E_sanity_r165               2586563 g     854722 ACIR   (r165E_c2b_unblunt_sanity_gates.json)
+  C2b_live                        2586563 g     854722 ACIR   (r163E1_c2b_unblunt_gates.json)
+  C2b_full                        2033598 g     633538 ACIR   (r163B_full_gates.json)
+  C2b_limbs                       2033598 g     633538 ACIR   (r163C_limb_gates.json)
+  C2b_E1                          2586563 g     854722 ACIR   (r164E1_c2b_unblunt_gates.json)
+  C2b_V1                          1436905 g     426004 ACIR   (r164V1_c2b_s1_solo_gates.json)
+  C2b_V2                          2561987 g     830146 ACIR   (r164V2_c2b_s2_solo_gates.json)
+  C2b_V4                          2377667 g     707266 ACIR   (r164V4_c2b_parity_solo_gates.json)
+  C2b_V5                          1938913 g     821943 ACIR   (r164V5_c2b_party_solo_gates.json)
+  C2b_B0                          2586563 g     854722 ACIR   (B0_gates.json)
+  C2b_J0                          2203378 g     711818 ACIR   (J0_gates.json)
+  C2b_J1                          2272537 g     715458 ACIR   (J1_gates.json)
+  C2b_J2                          2272537 g     715458 ACIR   (J2_gates.json)
+  C2b_Jall                        1436906 g     426005 ACIR   (Jall_gates.json)
+  C2b_V1_sponge                   2586563 g     854722 ACIR   (r164E1_c2b_unblunt_gates.json)
+  C2b_V1_nosponge                 2379010 g     843797 ACIR   (r169S_no_sponge_gates.json)
+  C3_live                         2124549 g     609966 ACIR   (C3A_live_gates.json)
+  C3_full                         1395432 g     224942 ACIR   (C3B_full_gates.json)
+  C3_limbs                        1567484 g     347822 ACIR   (C3C_limb_gates.json)
+  C3_msg                          2063109 g     585390 ACIR   (r160M_msg_solo_gates.json)
+  C3_a1_r161                      2124549 g     609966 ACIR   (r161A1_gates.json)
+  C3_U                            2050816 g     544430 ACIR   (r161U_u_gates.json)
+  C3_E0                           2050806 g     544430 ACIR   (r161E0_e0_gates.json)
+  C3_E1                           2087685 g     577198 ACIR   (r161E1_e1_gates.json)
+  C3_X                            2013937 g     511662 ACIR   (r161X_gates.json)
+
+== FAMILY SPLIT (RAN re-derivation): family = live - full; per-limb = live - limbs; flat = limbs - full ==
+  C1 (r157)     family   1014519   per-limb    811013   flat    203506   per+flat 1014519
+  [OK ] C1 (r157) identity per+flat == family: got 1014519, expect 1014519, delta 0
+  C2a (r158)    family    552965   per-limb    552965   flat         0   per+flat 552965
+  [OK ] C2a (r158) identity per+flat == family: got 552965, expect 552965, delta 0
+  C2b (r163)    family    552965   per-limb    552965   flat         0   per+flat 552965
+  [OK ] C2b (r163) identity per+flat == family: got 552965, expect 552965, delta 0
+  C3 (r156)     family    729117   per-limb    557065   flat    172052   per+flat 729117
+  [OK ] C3 (r156) identity per+flat == family: got 729117, expect 729117, delta 0
+
+== CROSS-ROUND GOLDEN RE-ANCHOR (RAN spot validation of the digit-stable leg values) ==
+  [OK ] C1 live r157 == r170 A1: got 1634722, expect 1634722, delta 0
+  [OK ] C2b live r163 == r164 E1: got 2586563, expect 2586563, delta 0
+  [OK ] C2b live r163 == r165 E sanity: got 2586563, expect 2586563, delta 0
+  [OK ] C2b flat == 0 (r163 B==C): got 0, expect 0, delta 0
+  [OK ] C2a flat == 0 (r158 B==C): got 0, expect 0, delta 0
+
+== C1 flat decomposition (RAN) ==
+  e_sm_lifted solo = 127023 g
+  eek solo         = 36864 g
+  sk solo          = 36869 g
+  sum of 3 solos   = 200756 g
+  flat             = 203506 g  (r157 flat, golden)
+  [OK ] C1 e_sm_lifted == 127,023 (r159 golden): got 127023, expect 127023, delta 0
+  [OK ] C1 eek         == 36,864  (r170 golden): got 36864, expect 36864, delta 0
+  [OK ] C1 sk          == 36,869  (r170 golden): got 36869, expect 36869, delta 0
+  [OK ] C1 3-solo sum  <= flat: got 200756, expect 203506, delta -2750
+
+== C3 flat decomposition (RAN) ==
+  message solo     = 61440 g   (r160)
+  narrow X (u+e0+e1) = 110612 g  (r161)
+  cellar sum       = 172052 g  vs C3 flat 172052 g
+  [OK ] C3 message == 61,440 (r160 golden): got 61440, expect 61440, delta 0
+  [OK ] C3 narrow X == 110,612 (r161 golden): got 110612, expect 110612, delta 0
+  [OK ] C3 msg + narrow == flat: got 172052, expect 172052, delta 0
+  [OK ] C3 A1 r156 == r161 base: got 2124549, expect 2124549, delta 0
+
+== C3 narrow-flat non-additive cell note (RAN) ==
+  u  solo = 73733  e0 solo = 73743  e1 solo = 36864  3-solos = 184340
+  X (all three removed together) = 110612;  non-additive gap = 73728 g
+  [OK ] C3 3-solo excess = 73,728 (r161 golden): got 73728, expect 73728, delta 0
+
+== C2b V1 per-limb decomposition (r166 RAN) ==
+  V1 cell   = 1149657 g
+  limb-0   = 383185  limb-1 = 314026  limb-2 = 314026  sum 1011237
+  non-additive shared block = 138420 g
+  [OK ] C2b V1 cell == 1,149,657 (r166/r167 golden): got 1149657, expect 1149657, delta 0
+  [OK ] C2b limb-1 == limb-2 (r166 byte-golden): got 314026, expect 314026, delta 0
+  [OK ] C2b non-additive shared block = 138,420 (r167 golden): got 138420, expect 138420, delta 0
+
+== C2b V1 block: sponge/attributed cost (r168+r169 RAN) ==
+  X (E1 - no-sponge S) = 207553 g   vs r169 golden 207,553
+  [OK ] C2b X == 207,553 (r169 golden): got 207553, expect 207553, delta 0
+  -> X (207,553) EXCEEDS block (138,420) by 69133 g; density ratio X/block = 1.4994
+
+== C2b non-family 4-block split (r164 RAN) ==
+  non-family B = 2033598 g  (== r164 cited 2,033,598)
+  V1 cell = 1149658 g   V2 cell = 24576 g   V4 cell = 208896 g   V5 cell = 647650 g
+  sum(V1+V2+V4+V5) = 2030780 g  vs B 2033598 g
+  [OK ] C2b V1 r164 == 1,149,658 (r164 golden): got 1149658, expect 1149658, delta 0
+  [OK ] C2b V2 r164 == 24,576  (r164 golden, exactly N*L): got 24576, expect 24576, delta 0
+  [OK ] C2b V4 r164 == 208,896 (r164 golden): got 208896, expect 208896, delta 0
+  [OK ] C2b V5 r164 == 647,650 (r164 golden): got 647650, expect 647650, delta 0
+  [OK ] C2b B non-family == 2,033,598 (r164 golden): got 2033598, expect 2033598, delta 0
+
+== C2a non-family 2-slice (r165 RAN) ==
+  C2a V1A cell = 27838 g   V2A cell = 24576 g   sum 52414 g
+  [OK ] C2a V1A cell == 27,838 (r165 golden): got 27838, expect 27838, delta 0
+  [OK ] C2a V2A cell == 24,576 (r165 golden, exactly N*L): got 24576, expect 24576, delta 0
+  [OK ] C2a V1A solo == C2b V1 solo (r165 cross-leaf byte-identical): got 1436905, expect 1436905, delta 0
+
+== AGGREGATION ==
+  family pool = C0 0 + C1 1014519 + C2a 552965 + C2b 552965 + C3 729117 + C4 0 = 2849566 g
+  [OK ] family pool == 2,849,566 (r160 golden): got 2849566, expect 2849566, delta 0
+  4-leaf leaf gates sum = C1 1634722 + C2a 1464743 + C2b 2586563 + C3 2124549 = 7810577 g
+  residual C0+C4 = 9,197,169 (r160 golden DKG total) - 4-leaf sum 7810577 = 1386592 g (NOT re-burned this round; cited from r160 plan)
+  share of DKG total = 30.983% family, 69.017% non-family
+
+== FINAL TABLE (per-leaf, RAN re-derivation from 40 on-disk *_gates.json) ==
+
+row       live leaf      family    per-limb        flat                 cells-known
+C0  -           0           n/a         0         
+C1     1634722     1014519      811013      203506   e_sm_lifted / eek / sk 
+C2a     1464743      552965      552965           0   flat 0 
+C2b     2586563      552965      552965           0   flat 0 
+C3     2124549      729117      557065      172052   message + u/e0/e1 
+C4  -           0           n/a         0         
+POOL                 2849566                           (pool = 2,849,566 per r160) 
+
+PASS: all identity checks hold (RAN re-derivation digit-exact vs goldens)
