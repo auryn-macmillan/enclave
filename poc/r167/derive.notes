@@ -1,0 +1,39 @@
+# R167 delta (integer identity re-check)
+
+Non-additive shared block (gates)
+  V1 cell                1,149,657
+  - limb-0 cell          383,185
+    [minus limb 1 cell means we've subtracted 314,026 - limb 1]
+  - limb-1 cell          314,026
+  - limb-2 cell          314,026
+  = shared 138,420
+  DELTA vs r166 quote 138,420   = 0
+
+Non-additive shared block (ACIR)
+  428,717 - 142,904 - 139,264 - 139,264 = -5,715 if we naively subtract all 3,
+  but since the 3 limb cells overlap, the correct shared-ACIR residual is
+  428,717 - 421,432 (limb-ACIR sum) = 7,285. 7,285 is the ACIR that
+  "survives" the 3 solo legs. This equals Jall_ACIR - 419,720 (not
+  meaningful); the real claim is just that the limb cells overlap on ACIR
+  space the same way they do on gate space (not strictly; gate overlap is
+  1,011,237 vs 87.96% = 1,011,237 exactly. For ACIR: 421,432 / 428,717 =
+  98.30%, not 87.96%. So ACIR overlap is different from gate overlap.)
+
+Per-limb ACIR overlap = (B0A-J0A)+(B0A-J1A)+(B0A-J2A) = 421,432
+  421,432 / 428,717 = 98.30% of V1 ACIR cell
+  (gate overlap is 87.96%)
+  => per-ACIR the shared block is 1.70% of V1 ACIR, but per gate it is
+     12.04% of V1 gates.  The shared block consumes ~12.04% of the
+     circuit-size budget but only 1.70% of the ACIR-count budget.
+     19.001 gates/ACIR vs 2.400 gates/ACIR for the limbs.
+
+Per-N facts:
+  V1 cell      140.34 gates/coef    52.33 ACIR/coef
+  limb 0        46.78 gates/coef    17.44 ACIR/coef
+  limb 1/2      38.33 gates/coef    17.00 ACIR/coef
+  shared        16.90 gates/coef      0.89 ACIR/coef
+  (shared is NOT additive over the per-limb cells; overlap on gates
+   = 87.96% of V1 gates, on ACIR = 98.30% of V1 ACIR)
+
+RATIO = 19.0007 / 2.3995 = 7.9185x higher in shared block than in per-limb cells.
+Cross-check vs r166 quote 138,420 g: delta 0 (asserted in derive).

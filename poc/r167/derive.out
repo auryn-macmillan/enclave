@@ -1,0 +1,37 @@
+=== r166 on-disk legs (circuit_size / acir_opcodes) ===
+B0    2,586,563     854,722   C2b unblunt, secure-8192
+J0    2,203,378     711,818
+J1    2,272,537     715,458
+J2    2,272,537     715,458   [J1 == J2 digit-identical]
+Jall  1,436,906     426,005   [== r164 V1 solo 1,436,905 + 1g warm-cache]
+
+=== r165 committed captions ===
+A1    1,464,743     442,744   C2a unblunt
+V1A   1,436,905    426,004  C2a V1 solo
+
+=== Cells (leaf - solo) ===
+V1 cell     1,149,657     428,717
+limb-0 cell   383,185     142,904
+limb-1 cell   314,026     139,264
+limb-2 cell   314,026     139,264
+limb sum    1,011,237     421,432
+
+NON-ADDITIVE shared block =
+  gates 138,420   ACIR 7,285
+  per-N gates/coef = 16.8970   ACIR/coef = 0.8893
+  pct of V1 cell   = 12.0401%   ACIR: 1.6993%
+GATES/ACIR signature:
+  shared   = 2.6816 (non-additive ratio 19.0007)
+  limb sum avg = 2.3995
+  RATIO  = 7.9185x
+
+TWIN (r165 carries):
+  C2a V1A cell = A1G-V1AG = 1,464,743 - 1,436,905 = 27,838  g ; 16,740 ACIR
+  C2b V1 cell  = 1,149,657 g ; 428,717 ACIR
+  twin gate diff  (C2b V1 - C2a V1) = 1,121,819 g; ACIR diff = 411,977
+  twin gap floor      (per r164)    = 1,121,820 g
+
+Cross-leaf leaf diffs RAN r165/r166:
+  C2b leaf - C2a leaf = 1,121,820 g ; 411,978 ACIR
+
+IDENTITY-OK
