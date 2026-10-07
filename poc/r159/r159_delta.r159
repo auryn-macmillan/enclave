@@ -1,0 +1,22 @@
+r159 C1 e_sm_lifted solo @ FOLD tip f7c87dbb9, non-locus delta:
+  RAN legs:
+    A1 unblunt          = 1634722 g
+    B  e_sm_lifted solo = 1507699 g
+  r157 goldens (byte-identical C1 locus, RAN at c98b-r157 base 247298ad5):
+    A1 = 1634722 g   (delta vs here +0)
+    B  = 620203 g    (full range bullshit: eek+sk+e_sm_lifted+loop; r157 leg)
+    C  = 823709 g    (per-limb loop only NOP; eek+sk+e_sm_lifted kept)
+  base-stability check (A1 digits):  fold f7c87dbb9=1634722  vs c98b-r157=247298ad5:1634722
+                                     delta +0
+  RAN this round:
+    e_sm_lifted solo cost  = 127023 g  (7.77% of unblunt leaf)
+  Carry (RAN at base, by subtraction):
+    remaining flat (eek + sk)  = 76483 g  (4.68% of unblunt leaf)
+      identity check: 127023 + 76483 = 203506; r157-flat = 203506
+      identity delta:   +0
+  Reclassified C1 split (family = per-limb + flat; flat = e_sm_lifted + rem_flat):
+    per-limb   = 811013 g  (r157, byte-identical locus)
+    e_sm_lifted= 127023 g  (this round, RAN)
+    eek + sk   = 76483 g  (this round, RAN by subtraction from r157 flat)
+    identity   per-limb + e_sm_lifted + rem_flat = 811013 + 127023 + 76483 = 1014519
+             vs r157-family = 1014519: delta +0
