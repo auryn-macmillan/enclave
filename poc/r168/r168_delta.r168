@@ -1,0 +1,34 @@
+ROUND=r168  delta
+BASE=2a17cadce (i5/dkg-research; origin/main f2df52907 UNMOVED 0/111, 0 rebase)
+E = 2,586,563 g / 854,722 ACIR     (leg E: C2b unblunt, secure-8192, fresh this tick; digit-exact vs r166/r152d B0 golden)
+F = 2,490,308 g / 805,570 ACIR     (leg F: same leaf, per-coeff assert_max_bit_size::<64> in pack_checked comment-blocked at helpers.nr L88-89)
+DELTA (E - F) = 96,255 g / 49,152 ACIR
+  = 3.7213% of E leaf
+  = 3.9166 g / 2.0000 ACIR per 8192-coefficient limb (3 limbs x 8192 = 24,576 coefficients)
+  assert density = 1.9583 g/ACIR
+REFERENCE (from r167 shared block, on-disk poc/r167/derive.out):
+  V1 cell 1,149,657 g / 428,717 ACIR = B0 - Jall
+  3-limb-solo-sum 1,011,237 g / 421,432 ACIR
+  NON-ADDITIVE SHARED BLOCK = 138,420 g / 7,285 ACIR = 19.0007 g/ACIR
+  per-limb solo density 2.3995 g/ACIR (r166 carry)
+FINDING (RAN this tick; identity preserved):
+  (1) The single-line per-coefficient assert_max_bit_size::<64> at helpers.nr L89 in
+      pack_checked carries 96,255 g = 3.7213% of the full C2b leaf on unblunt basis.
+      Real, separate sum; the assert is NOT negligible.
+  (2) DENSITY-DISCRIMINATION: the r167 non-additive shared block is 19.0007 g/ACIR; the
+      per-coeff assert measured today is 1.9583 g/ACIR = 9.703x LESS dense. The ACIR
+      signature also differs: the r167 block has only 7,285 ACIR whereas this leg's
+      ACIR delta is 49,152 (2.0000 ACIR/coefficient across the pack tail, exactly).
+      => the per-coeff assert IS NOT the dominant cost of the 138,420 g shared block.
+  (3) R167 p1/c HYPOTHESIS CHECKED: "target the assert and leg to RAN-split the 138,420
+      g block into 'shared absorb' [SOLO] vs 'fixed pack loop' [residue]" is REFUTED by
+      this leg's density + ACIR-signature mismatch. The 96,255 g is the INSERTION COST OF
+      THE ASSERT itself (costed across the full-leaf E), NOT a cell of
+      the 138,420 shared block. In absolute g-amounts the 96,255 overlaps 69.5% of the
+      138,420 number, but the ACIR signature (49,152 vs 7,285) rules that overlap out.
+  (4) The F2/DRAFT attribution from r167 (sponge-absorb in compute_commitment/
+      compute_safe helpers.nr L245-252 + commitments.nr L122-124 as the 138,420 block's
+      residual still holds as the ONLY remaining open attribution path.
+EVERYTHING IS RAN this tick: leg E (fresh this tick) + leg F (fresh this tick), each
+independently re-read by a 2nd bb gates invocation. On-disk r166 carries (B0/J0/J1/J2/Jall)
+re-parsed this tick via python3. Every digit above is RAN-verified this turn; no memory.
