@@ -1,0 +1,29 @@
+[2026-10-07T14:23:29Z] WORKTREE-EXISTING-REUSE @ a3bf52007228b59f1580d96c24ad236af70f4ecf
+[2026-10-07T14:23:29Z] HEAD=a3bf52007228b59f1580d96c24ad236af70f4ecf
+[2026-10-07T14:23:29Z] PRE_PK=8e37436bdca8ff0c58bc4307e2ab9ace2ed40a0d6d5211e244818a23ef50436a
+FLIP_OK
+[2026-10-07T14:24:40Z] r170A1_live rc=0 wall=71s
+<stdin>:16: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+ROUND=r170 LEG=r170A1_live BASE=a3bf52007 DATE=2026-10-07T14:24:42Z GATES=1634722 ACIR=582531 WALL=71.0s PEAK_KB=19267492
+[2026-10-07T14:24:42Z] LEG_A1_DONE
+EEK_KITTED n=1
+[2026-10-07T14:25:51Z] r170E_eek_solo rc=0 wall=69s
+<stdin>:16: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+ROUND=r170 LEG=r170E_eek_solo BASE=a3bf52007 DATE=2026-10-07T14:25:53Z GATES=1597858 ACIR=549763 WALL=69.6s PEAK_KB=20611028
+[2026-10-07T14:25:53Z] RESTORED rc=0
+[2026-10-07T14:25:53Z] LEG_E_DONE
+SK_KITTED n=1
+[2026-10-07T14:25:56Z] r170S_sk_solo rc=0 wall=3s
+<stdin>:16: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+ROUND=r170 LEG=r170S_sk_solo BASE=a3bf52007 DATE=2026-10-07T14:25:56Z GATES=47027 ACIR=24180 WALL=3.1s PEAK_KB=1072876
+[2026-10-07T14:25:56Z] RESTORED rc=0
+[2026-10-07T14:25:56Z] LEG_S_DONE
+ROUND=r170  (C1 eek + sk solo legs; closes the r159 remainder 76,483 g to direct RAN cells)
+A1 = 1634722 g   ACIR=582531   (expect 1,634,722 r157/r159 golden delta 0)
+E  = 1597858 g   ACIR=549763
+Sk = 47027 g   ACIR=24180
+A1 r159 text-SHA256 pad: EXACT (applies)
+eek_solo=A1-E=36864 g   sk_solo=A1-S=1587695 g
+both=ee+ss=1624559 g   vs r159 remainder=76483 g   delta=1548076
+eek/sk ratio=0.0232
+R170_STATUS=OK
