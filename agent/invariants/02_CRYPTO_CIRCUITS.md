@@ -192,8 +192,8 @@ every section.
   rebuild the matching verifier artifacts before deploying a protocol-version-7 node. —
   `flow-trace/04`; `scripts/build-circuits.ts`
 - fhe.rs v0.4.1 passes plaintext-scaled ballot coefficients as non-centered residues. Both CRISP
-  vote circuits must check `Q_MOD_T`, rather than `Q_MOD_T_CENTERED`, against those coefficients. —
-  `examples/CRISP/circuits/bin/{crisp,crisp_onchain}/src/main.nr`
+  vote circuits decode each ballot weight against `Q_MOD_T`, rather than `Q_MOD_T_CENTERED`. —
+  `examples/CRISP/circuits/lib/src/utils.nr`
 - The C3 and user-data-encryption `k1` witnesses use non-centered residues in `[0, t - 1]`. Their
   Noir equations and asymmetric quotient bounds must match the Rust witnesses. —
   `circuits/lib/src/core/dkg/share_encryption.nr`; `crates/zk-helpers/src/circuits/`
@@ -368,15 +368,14 @@ every section.
   not create (the parent's and the ballot's ciphertexts) and keep plain `pack`: `verify_slot_update`
   checks a relation that is linear and aligned coefficient by coefficient across ciphertexts packed
   with the same `BIT_CT`, so an opening that keeps the carriers proves the same relation for the
-  committed coefficients. With the checked helper on the three commitments, the secure `crisp`
-  circuit measured 2,520,034 gates, above the browser ceiling. The exemption holds only for that
-  shape of relation, and only while every commitment in it has a bounded opening that something else
-  fixes: the ballot through the range checks of `user_data_encryption_ct0/ct1`, and the parent and
-  the published result because `chain_head_per_slot` takes an entry only when its bytes reproduce
-  its commitment and it extends the selected head. A check at one point over those commitments, or a
-  Secure Process that follows a parent by its stored commitment without its bytes, needs injective
-  openings: chained masks could then carry a coefficient past the radix and shift a plaintext
-  coefficient by a carry. — `flow-trace/04`
+  committed coefficients. The exemption holds only for that shape of relation, and only while every
+  commitment in it has a bounded opening that something else fixes: the ballot through the range
+  checks of `user_data_encryption_ct0/ct1`, and the parent and the published result because
+  `chain_head_per_slot` takes an entry only when its bytes reproduce its commitment and it extends
+  the selected head. A check at one point over those commitments, or a Secure Process that follows a
+  parent by its stored commitment without its bytes, needs injective openings: chained masks could
+  then carry a coefficient past the radix and shift a plaintext coefficient by a carry. —
+  `flow-trace/04`
 - A bound that is not tight enough for the slot is no bound for this purpose. C2b's `as u64` cast
   limited coefficients to `2^64` while the slot was `radix = 2^64` with `base = 2^60`, so a digit
   could still overflow. — `flow-trace/04`
@@ -570,21 +569,34 @@ every section.
   a change to either ballot circuit must regenerate those constants (`pnpm compute:vk-hash`, both
   presets) and the generated verifiers; a deployed `CRISPProgram` keeps the circuit its verifier was
   built from. — `flow-trace/04`
-- **A CRISP tally coefficient is exact only below the plaintext modulus.** Every ballot coefficient
-  is 0 or 1, and the tally adds one ballot per selected slot, so each decrypted coefficient counts
-  the ballots that set that bit of that option. The committee decrypts it modulo the plaintext
-  modulus `t` of the round's BFV parameters: 100 at insecure-512 and 17,000,000 at secure-8192.
-  Voting power does not change the bound, because a ballot adds at most 1 to each coefficient. A
-  tally format that is not one bit per coefficient per ballot needs a new bound. **Gap:**
-  `CRISPProgram` does not limit the slots of a round. When `t` or more ballots in one round set the
-  same bit, `decodeTally` reads the residue and the count is wrong with every proof valid. That
-  takes 100 ballots at insecure-512 and 17 million at secure-8192. — `flow-trace/04`
+- **CRISPProgram keeps every option total below the plaintext modulus.** A ballot holds one weight
+  for each option, so coefficient `o` of the decrypted tally is the total weight on option `o`, and
+  the committee decrypts it modulo the plaintext modulus `t` of the round's BFV parameters.
+  `CRISPProgram.validate` must read `t` from `e3ProgramParams`, not from a constant, and size the
+  round so that no total reaches `t`. A CONSTANT-credit round must refuse `credits >= t` and accept
+  at most `(t - 1) / credits` inputs, capped at `MAX_INPUTS_PER_ROUND`. Each input adds at most one
+  fresh ciphertext to the decrypted sum. A mask adds its ciphertext to the one already in the slot,
+  so the count follows the inputs, not the slots. Every secure preset must therefore be searched
+  with `SEARCH_Z` of at least `MAX_INPUTS_PER_ROUND`. A CUSTOM-credit round must record a divisor of
+  at least `getPastTotalSupply(snapshot) / t + 1`, which bounds the totals only while the past votes
+  of all accounts sum to at most the past supply. ERC20Votes meets this. `BondedVotes` with an
+  escrow votes source does not guarantee it (`01_PROTOCOL_ONCHAIN.md`). Every input counts toward
+  the limit, including updates and masks, on both `publishInput` and `validateInputProof`. A
+  census-tree round also relies on the coordinator writing `credits` or the scaled voting power at
+  the snapshot into each leaf. For a CUSTOM-credit round, the server reads that power at
+  `snapshotOf(e3Id)`, in the clock units of the token. If the server cannot read the power of a
+  voter, it posts no root until a retry pass reads every voter. A change to the tally format, the
+  credit modes, or the parameter sets needs a new bound. — `flow-trace/04`
 - **CRISP constrains every coefficient of the ballot plaintext, at the real BFV degree.** The
-  witness generator reverses the message over the full degree, so the payload starts at
-  `D - MAX_MSG_NON_ZERO_COEFFS + (MAX_MSG_NON_ZERO_COEFFS mod num_options)` with the options back to
-  front; `crisp_lib::utils::ballot_layout` derives that offset, both checkers use it, and no code
-  may hand-code it. Each coefficient inside an option segment encodes one bit as 0 or `q_mod_t`,
-  everything outside the ballot region must be zero, and a mask's plaintext must be zero everywhere.
+  witness generator reverses the message over the full degree, so option `o` is `k1[D - 1 - o]`.
+  `check_coefficient_values_with_balance` must decode each option weight from that coefficient,
+  require every other coefficient to be zero, and bound the sum of the weights by the slot's bound.
+  A mask's plaintext must be zero everywhere. `check_weight` must range-check the option
+  coefficient, the hinted weight, and the quotient to `[0, t)`. Then `k1 + t * r == Q_MOD_T * v`
+  holds over the integers, and `v` is the value that the coefficient decrypts to. The bound on the
+  coefficient also gives the packed `k1_commitment` one opening. Thus the fold's equality check
+  binds this `k1` to the plaintext that `user_data_encryption_ct0` encrypts. Without that bound, a
+  prover can open the commitment to shifted option coefficients that decode to other weights.
   Indexing as if the polynomial were the message width makes both checks read only padding: every
   vote passes any balance bound, and a mask — which needs no signature and may be written to any
   eligible slot — can carry an arbitrary payload into someone else's ballot. Tests must build `k1`
