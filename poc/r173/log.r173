@@ -1,0 +1,33 @@
+Preparing worktree (detached HEAD f4ee7b7a8)
+Updating files:  94% (3437/3643)Updating files:  95% (3461/3643)Updating files:  96% (3498/3643)Updating files:  97% (3534/3643)Updating files:  98% (3571/3643)Updating files:  99% (3607/3643)Updating files: 100% (3643/3643)Updating files: 100% (3643/3643), done.
+HEAD is now at f4ee7b7a8 r172: family-pool PAYOFF DRAFT (owner-armed lane (iii); 0-compile, 11 identity checks delta 0)
+[2026-10-18T19:37:36Z] HEAD=f4ee7b7a8af1adf0006308b13c15d9ea04bd8411 CIRB=e_sm_share_computation
+[2026-10-18T19:40:46Z] r173E1_c2b_unblunt rc=0 wall=190s
+[2026-10-18T19:40:46Z] E1_FAIL
+[2026-10-18T19:40:46Z] RESTORED rc=0
+R173_STATUS=E1_FAIL
+[2026-10-18T19:41:24Z] WORKTREE-EXISTING-REUSE @ f4ee7b7a8af1adf0006308b13c15d9ea04bd8411
+[2026-10-18T19:41:24Z] HEAD=f4ee7b7a8af1adf0006308b13c15d9ea04bd8411 CIRB=e_sm_share_computation
+[2026-10-18T19:44:36Z] r173E1_c2b_unblunt rc=0 wall=192s
+[2026-10-18T19:44:38Z] LEG_E1_DONE
+[2026-10-18T19:44:39Z] r173V4_c2b_parity_solo rc=1 wall=1s
+[2026-10-18T19:44:39Z] V4_FAIL
+[2026-10-18T19:44:39Z] RESTORED rc=0
+R173_STATUS=V4_FAIL
+[2026-10-18T19:45:37Z] WORKTREE-EXISTING-REUSE @ f4ee7b7a8af1adf0006308b13c15d9ea04bd8411
+[2026-10-18T19:45:37Z] HEAD=f4ee7b7a8af1adf0006308b13c15d9ea04bd8411 CIRB=e_sm_share_computation
+[2026-10-18T19:48:49Z] r173E1_c2b_unblunt rc=0 wall=192s
+[2026-10-18T19:48:51Z] LEG_E1_DONE
+[2026-10-18T19:48:52Z] r173V4_c2b_parity_solo rc=1 wall=1s
+[2026-10-18T19:48:52Z] V4_FAIL
+[2026-10-18T19:48:52Z] RESTORED rc=0
+R173_STATUS=V4_FAIL
+[2026-10-18T19:50:47Z] WORKTREE-EXISTING-REUSE @ f4ee7b7a8af1adf0006308b13c15d9ea04bd8411
+[2026-10-18T19:50:47Z] HEAD=f4ee7b7a8af1adf0006308b13c15d9ea04bd8411 CIRB=e_sm_share_computation
+[2026-10-18T19:54:00Z] r173E1_c2b_unblunt rc=0 wall=193s
+[2026-10-18T19:54:01Z] LEG_E1_DONE
+[2026-10-18T19:57:01Z] r173V4_c2b_parity_solo rc=0 wall=180s
+[2026-10-18T19:57:03Z] LEG_V4_DONE
+[2026-10-18T19:57:03Z] RESTORED rc=0
+[2026-10-18T19:57:03Z] RESTORE rc=0 after leg V4
+R173_STATUS=OK

@@ -1,0 +1,6 @@
+ROUND=r173 BASE=f4ee7b7a8af1adf0006308b13c15d9ea04bd8411 (post-#2195-fold tip; OM 51f90114f; secure-50-coeffs shape)
+LEG E1 (C2b unblunt, NEW shape)   = 2586565
+LEG V4 (parity solo NOP, NEW)     = 2377669
+V4 CELL (new shape) = E1-V4 = 208896 g   vs OLD r164 cell 208896 g (delta 0, ratio 1.0000)
+E1 SHAPE SHIFT: new 2586565 vs OLD golden 2586563 (delta 2, ratio 1.0000)
+V4 share of leaf: new 8.08% vs OLD 8.08% (208896/2586563)
