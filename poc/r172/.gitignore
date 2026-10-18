@@ -1,0 +1,6 @@
+### r172 (0-compile payoff DRAFT; owner lane (iii) armed 2026-10-18 13:35 EDT).
+### Track: .gitignore plan.md family_pool_payoff.py r172_delta.r172 log.r172
+*.raw
+*stdout.log
+*timev.log
+*_error.log

@@ -1,0 +1,36 @@
+== r172 family-pool payoff model (0-compile; RAN inputs from committed JSONs) ==
+
+  [OK ] family pool == 2,849,566 (r160/r171 golden): got 2849566, expect 2849566, delta 0
+  [OK ] per-limb pool == 2,474,008: got 2474008, expect 2474008, delta 0
+  [OK ] flat pool == 375,558: got 375558, expect 375558, delta 0
+  [OK ] C1 family == 1,014,519: got 1014519, expect 1014519, delta 0
+  [OK ] C3 family == 729,117: got 729117, expect 729117, delta 0
+
+  [OK ] V1 cell == 1,149,657 (r167): got 1149657, expect 1149657, delta 0
+  [OK ] 3-limb sum == 1,011,237 (r166): got 1011237, expect 1011237, delta 0
+  [OK ] shared block == 138,420 (r167): got 138420, expect 138420, delta 0
+
+== PAYOFF MODEL (per-leaf per-limb mass; payoff = per_limb - A) ==
+  per-limb pool      = 2474008 g  (26.90% of DKG total 9197169)
+  flat pool          = 375558 g  (NOT addressable by an aggregate-bound lever - no per-limb loop)
+  family pool        = 2849566 g  (30.98% of total; per-limb + flat)
+
+  SCENARIO 1 [DRAFT] optimistic ceiling A=0: payoff = 2474008 g = 26.90% of total
+  CALIBRATION [RAN r166, C2b V1 path]: limb cells [383185, 314026, 314026] sum 1011237; shared block 138420
+    shared-block ratio = 0.1369 (13.69%); per-limb-to-sum ratio = 0.8631
+  SCENARIO 2 [DRAFT] calibrated A = ratio x per-limb pool: payoff = 2135361 g = 23.22% of total
+  SCENARIO 3 [DRAFT] conservative A = full per-limb pool: payoff = 0 (lever redundant)
+
+  Per-leaf calibrated payoff [DRAFT scaling, same ratio]:
+    C1 per-limb 811013 -> payoff 700000 g
+    C2a per-limb 552965 -> payoff 477274 g
+    C2b per-limb 552965 -> payoff 477274 g
+    C3 per-limb 557065 -> payoff 480813 g
+    pool total: 2135361 g = 23.22% of DKG total
+
+  [OK ] C1 3-solo sum == 200,756: got 200756, expect 200756, delta 0
+  [OK ] C1 flat residual == 2,750: got 2750, expect 2750, delta 0
+
+  [OK ] V4-parity cell == 208,896 (r164; owner-quoted lane (i) cell): got 208896, expect 208896, delta 0
+
+PASS: all RAN identities hold; scenarios above are DRAFT-labeled.

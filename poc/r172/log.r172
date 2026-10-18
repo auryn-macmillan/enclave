@@ -1,0 +1,9 @@
+ROUND=r172 DATE=2026-10-18 BASE=2226ef62f449aff77368563bf99fb731185c615f (i5/dkg-research, post-LEAN-1215 fold tip)
+LANE=owner-armed (iii) family-pool PAYOFF DRAFT (owner decision 2026-10-18 ~13:35 EDT: DRAFT-ONLY, zero-compile, re-anchor leg NOT run)
+COMPILES=0 (nargo/bb/cargo: none). SOURCE DELTA=0 (0 circuits/, 0 crates/).
+INPUTS=40 committed *_gates.json under poc/ (r156-r170) re-read fresh this round.
+CHECKS=11 identity checks, ALL delta 0 (family pool 2,849,566; per-limb pool 2,474,008; flat pool 375,558; V1 cell 1,149,657; 3-limb sum 1,011,237; shared block 138,420; C1 3-solo 200,756; C1 resid 2,750; V4 cell 208,896; C1/C3 family).
+HEADLINE=payload band 2,135,361-2,474,008 g = 23.22-26.90% of DKG total 9,197,169 g (OLD pre-fold secure-8192 shape; scenario-2 ratio 13.69% RAN-calibrated from r166, scaling DRAFT).
+STALENESS=RAN blob-compare 4e37b277->HEAD: secure/threshold.nr QIS/PLAINTEXT_MODULUS 1000000->17000000/Q_MOD_T 964929->13178113/bit-widths E_SM 58->59 E_SM_LIFTED 147->144 QUOTIENT 89->85 PK 58->59 CT0_R 20->24 MOVED; L=3 UNCHANGED. Absolute pool gates STALE vs new base; ratio band more robust. Re-anchor = separate owner call, command in plan.md.
+UPSTREAM-PR=NONE (poc receipts only).
+R172_STATUS=OK
